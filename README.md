@@ -1,6 +1,6 @@
 # Hole Arcade
 
-A Godot 4.3 hole.io-style game. Steer with a floating joystick, swallow anything that fits, and level up before the two-minute timer ends.
+A Godot 4.3 hole.io-style game. Steer with a floating joystick, swallow what fits when the hole is under it, and clear 10 city maps. Coins, upgrades, and 15 hole skins are saved on the device. Ads and Remove Ads are placeholders.
 
 Play it at https://jp196400.github.io/hole-arcade/
 

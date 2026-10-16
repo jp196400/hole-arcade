@@ -35,19 +35,48 @@ void fragment() {
 		discard;
 	}
 	vec3 col = texture(albedo_tex, UV).rgb;
-	ALBEDO = col * vec3(1.08, 1.06, 1.02);
-	ROUGHNESS = 1.0;
+	col = pow(max(col, vec3(0.001)), vec3(0.9));
+	ALBEDO = col * vec3(1.14, 1.06, 0.96);
+	ROUGHNESS = 0.78;
 	METALLIC = 0.0;
+	SPECULAR = 0.35;
 }
 """
 const PIT_SHADER := """shader_type spatial;
 render_mode unshaded, cull_disabled;
+uniform vec3 rim_color : source_color = vec3(0.05, 0.86, 1.0);
+uniform vec3 rim_color_b : source_color = vec3(0.8, 0.98, 1.0);
+uniform int pattern = 0;
+uniform float glow = 0.9;
 varying vec4 vcol;
+varying vec2 local_xz;
 void vertex() {
 	vcol = COLOR;
+	local_xz = VERTEX.xz;
 }
 void fragment() {
-	ALBEDO = vcol.rgb;
+	if (vcol.a > 0.5) {
+		ALBEDO = vcol.rgb;
+		EMISSION = vec3(0.0);
+	} else {
+		float ang = atan(local_xz.x, local_xz.y);
+		float stripes = step(0.5, fract(ang / 6.2831853 * 8.0));
+		float checks = step(0.5, fract(ang / 6.2831853 * 6.0 + length(local_xz) * 3.5));
+		float wave = smoothstep(0.15, 0.85, sin(ang * 5.0) * 0.5 + 0.5);
+		float metal = pow(clamp(sin(ang * 3.0) * 0.5 + 0.62, 0.0, 1.0), 1.35);
+		vec3 rc = rim_color;
+		if (pattern == 1) {
+			rc = mix(rim_color, rim_color_b, stripes);
+		} else if (pattern == 2) {
+			rc = mix(rim_color, rim_color_b, checks);
+		} else if (pattern == 3) {
+			rc = mix(rim_color, rim_color_b, wave);
+		} else if (pattern == 4) {
+			rc = mix(rim_color, rim_color_b, metal);
+		}
+		ALBEDO = rc;
+		EMISSION = rc * glow;
+	}
 }
 """
 
@@ -109,19 +138,45 @@ var mat_suburban: StandardMaterial3D
 var mat_cars: StandardMaterial3D
 var mat_chars: StandardMaterial3D
 var mat_nature: StandardMaterial3D
+var sky_mat: ProceduralSkyMaterial
+var world_env: Environment
+var sun: DirectionalLight3D
+var pit_mat: ShaderMaterial
+var city_root: Node3D
+var prop_defs: Array = []
+var ground_meshes: Array = []
+var map: Dictionary = {}
+var map_index := 0
+var target_score := 80
+var mode := "menu"
+var round_cleared := false
+var coins_earned := 0
+var doubled := false
+var menu_layer: CanvasLayer
+var hud_layer: CanvasLayer
+var continue_btn: Button
+var next_btn: Button
+var double_btn: Button
+var menu_sha: Label
+const CatalogScript = preload("res://catalog.gd")
 
 func _ready() -> void:
 	randomize()
 	debug_on = _query_debug()
 	speed_scale = _query_speed()
 	body_mat = PhysicsMaterial.new()
-	body_mat.friction = 0.4
+	body_mat.friction = 0.55
 	body_mat.bounce = 0.0
 	_load_textures()
 	_build_world()
 	_build_ui()
 	_make_pool()
-	_spawn_city()
+	_ensure_models()
+	_build_menu_layer()
+	_show_screen("menu")
+	hole_mesh.visible = false
+	AdService.interstitial_closed.connect(_after_ad)
+	AdService.rewarded_done.connect(_after_reward)
 	_prewarm_shaders()
 
 func _short_sha() -> String:
@@ -182,47 +237,57 @@ func _load_textures() -> void:
 	mat_nature = StandardMaterial3D.new()
 	mat_nature.albedo_color = Color.WHITE
 	mat_nature.vertex_color_use_as_albedo = true
-	mat_nature.roughness = 1.0
+	mat_nature.roughness = 0.62
 	mat_nature.metallic = 0.0
+	mat_nature.metallic_specular = 0.28
 
 func _tex_mat(tex: Texture2D) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_texture = tex
-	m.albedo_color = Color(1.06, 1.04, 1.0)
+	m.albedo_color = Color(1.08, 1.02, 0.96)
 	m.vertex_color_use_as_albedo = true
-	m.roughness = 1.0
+	m.roughness = 0.55
 	m.metallic = 0.0
+	m.metallic_specular = 0.48
 	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	return m
 
 func _build_world() -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.28, 0.58, 1.0)
-	sky_mat.sky_horizon_color = Color(1.0, 0.78, 0.58)
-	sky_mat.ground_horizon_color = Color(0.95, 0.8, 0.62)
-	sky_mat.ground_bottom_color = Color(0.45, 0.72, 0.4)
-	sky_mat.sun_angle_max = 28.0
+	sky_mat = ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.22, 0.48, 0.98)
+	sky_mat.sky_horizon_color = Color(1.0, 0.72, 0.48)
+	sky_mat.ground_horizon_color = Color(0.95, 0.78, 0.55)
+	sky_mat.ground_bottom_color = Color(0.36, 0.58, 0.34)
+	sky_mat.sun_angle_max = 22.0
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 	e.background_mode = Environment.BG_SKY
 	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(1.0, 0.9, 0.78)
-	e.ambient_light_energy = 0.9
+	e.ambient_light_color = Color(0.48, 0.62, 0.92)
+	e.ambient_light_energy = 0.38
+	e.tonemap_mode = Environment.TONE_MAPPER_ACES
+	e.tonemap_exposure = 1.06
+	e.tonemap_white = 5.5
+	e.adjustment_enabled = true
+	e.adjustment_brightness = 1.02
+	e.adjustment_contrast = 1.14
+	e.adjustment_saturation = 1.16
 	e.fog_enabled = true
 	e.fog_mode = Environment.FOG_MODE_EXPONENTIAL
-	e.fog_light_color = Color(0.78, 0.88, 1.0)
-	e.fog_density = 0.018
-	e.fog_aerial_perspective = 0.35
-	e.fog_sky_affect = 0.45
+	e.fog_light_color = Color(0.72, 0.82, 1.0)
+	e.fog_density = 0.016
+	e.fog_aerial_perspective = 0.4
+	e.fog_sky_affect = 0.5
+	world_env = e
 	env.environment = e
 	add_child(env)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-48, 38, 0)
-	sun.light_color = Color(1.0, 0.9, 0.72)
-	sun.light_energy = 1.45
+	sun = DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-54, 32, 0)
+	sun.light_color = Color(1.0, 0.74, 0.46)
+	sun.light_energy = 2.05
 	sun.shadow_enabled = false
 	add_child(sun)
 	var floor := StaticBody3D.new()
@@ -247,9 +312,10 @@ func _build_world() -> void:
 	hole_mesh.mesh = _build_pit_mesh()
 	var pshader := Shader.new()
 	pshader.code = PIT_SHADER
-	var pmat := ShaderMaterial.new()
-	pmat.shader = pshader
-	hole_mesh.material_override = pmat
+	pit_mat = ShaderMaterial.new()
+	pit_mat.shader = pshader
+	hole_mesh.material_override = pit_mat
+	_apply_skin()
 	_no_shadow(hole_mesh)
 	hole_mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(hole_mesh)
@@ -336,8 +402,6 @@ func _build_pit_mesh() -> ArrayMesh:
 	var inner := 0.94
 	var outer := 1.16
 	var rim_y := 0.05
-	var rim := Color(0.05, 0.78, 1.0)
-	var rim_hi := Color(0.72, 0.97, 1.0)
 	for i in seg:
 		var a0 := TAU * float(i) / float(seg)
 		var a1 := TAU * float(i + 1) / float(seg)
@@ -345,12 +409,13 @@ func _build_pit_mesh() -> ArrayMesh:
 		var i1 := Vector3(cos(a1) * inner, rim_y, sin(a1) * inner)
 		var o0 := Vector3(cos(a0) * outer, rim_y, sin(a0) * outer)
 		var o1 := Vector3(cos(a1) * outer, rim_y, sin(a1) * outer)
-		st.set_color(rim); st.add_vertex(i0)
-		st.set_color(rim_hi); st.add_vertex(o0)
-		st.set_color(rim); st.add_vertex(i1)
-		st.set_color(rim); st.add_vertex(i1)
-		st.set_color(rim_hi); st.add_vertex(o0)
-		st.set_color(rim_hi); st.add_vertex(o1)
+		var rim_mark := Color(1, 1, 1, 0)
+		st.set_color(rim_mark); st.add_vertex(i0)
+		st.set_color(rim_mark); st.add_vertex(o0)
+		st.set_color(rim_mark); st.add_vertex(i1)
+		st.set_color(rim_mark); st.add_vertex(i1)
+		st.set_color(rim_mark); st.add_vertex(o0)
+		st.set_color(rim_mark); st.add_vertex(o1)
 	st.generate_normals()
 	return st.commit()
 
@@ -401,8 +466,31 @@ func _load_model(path: String) -> Dictionary:
 	st2.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for s in mesh.get_surface_count():
 		st2.append_from(mesh, s, Transform3D(Basis(), shift))
-	var planted := st2.commit()
+	var planted := _shade_mesh(st2.commit())
 	return {"mesh": planted, "size": planted.get_aabb().size}
+
+func _shade_mesh(mesh: Mesh) -> ArrayMesh:
+	var arrays: Array = mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var cols: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	if cols.is_empty():
+		cols.resize(verts.size())
+		cols.fill(Color.WHITE)
+	var aabb := mesh.get_aabb()
+	var h := maxf(aabb.size.y, 0.001)
+	var y0 := aabb.position.y
+	for i in verts.size():
+		var t := clampf((verts[i].y - y0) / h, 0.0, 1.0)
+		var ao := lerpf(0.55, 1.12, smoothstep(0.0, 0.62, t))
+		if i < norms.size():
+			ao *= lerpf(0.82, 1.0, clampf(norms[i].y, 0.0, 1.0))
+		var c: Color = cols[i]
+		cols[i] = Color(c.r * ao, c.g * ao, c.b * ao, 1.0)
+	arrays[Mesh.ARRAY_COLOR] = cols
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return out
 
 func _collect_mesh(n: Node, parent: Transform3D, st: SurfaceTool) -> void:
 	var xform := parent
@@ -443,11 +531,10 @@ func _append_surface(st: SurfaceTool, mesh: Mesh, surface: int, xform: Transform
 			st.set_uv(uvs[idx])
 		st.add_vertex(basis * verts[idx] + origin)
 
-func _spawn_city() -> void:
-	_spawn_ground()
-	# path, material, scale xz, scale y, points, role, mover, yaw_offset
-	# mover: 0 static, 1 person, 2 car. yaw_offset turns model nose onto the move direction.
-	var defs := [
+func _ensure_models() -> void:
+	if not prop_defs.is_empty():
+		return
+	prop_defs = [
 		["res://assets/kenney/roads/construction-cone.glb", mat_roads, 3.4, 3.4, 1, "small", 0, 0.0],
 		["res://assets/kenney/roads/construction-barrier.glb", mat_roads, 2.1, 2.1, 2, "small", 0, 0.0],
 		["res://assets/kenney/characters/character-male-a.glb", mat_chars, 0.62, 0.62, 2, "person", 1, 0.0],
@@ -475,23 +562,45 @@ func _spawn_city() -> void:
 		["res://assets/kenney/commercial/building-skyscraper-a.glb", mat_commercial, 2.2, 1.65, 70, "tower", 0, 0.0],
 		["res://assets/kenney/commercial/building-skyscraper-c.glb", mat_commercial, 2.05, 1.85, 70, "tower", 0, 0.0],
 	]
-	for d in defs:
+	for d in prop_defs:
 		var info := _load_model(str(d[0]))
 		kind_lists.append([])
 		kind_meshes.append(info.mesh)
 		kind_native.append(info.size)
 		kind_mats.append(d[1])
 		kind_multimeshes.append(null)
-	_place_props(defs)
+	ground_meshes = [
+		_load_model("res://assets/kenney/roads/road-straight.glb").mesh,
+		_load_model("res://assets/kenney/roads/road-crossing.glb").mesh,
+		_load_model("res://assets/kenney/roads/road-crossroad.glb").mesh,
+		_load_model("res://assets/kenney/roads/tile-low.glb").mesh,
+	]
+
+func _add_city(n: Node) -> void:
+	if city_root == null or not is_instance_valid(city_root):
+		city_root = Node3D.new()
+		city_root.name = "City"
+		add_child(city_root)
+	city_root.add_child(n)
+
+func _spawn_city() -> void:
+	seed(int(map.get("seed", 1)))
+	_ensure_models()
+	for list in kind_lists:
+		(list as Array).clear()
+	for i in kind_multimeshes.size():
+		kind_multimeshes[i] = null
+	_spawn_ground()
+	_place_props(prop_defs)
 	for ki in kind_meshes.size():
 		_build_kind_multimesh(ki)
 	_build_shadows()
 
 func _spawn_ground() -> void:
-	var straight: Mesh = _load_model("res://assets/kenney/roads/road-straight.glb").mesh
-	var crossing: Mesh = _load_model("res://assets/kenney/roads/road-crossing.glb").mesh
-	var cross: Mesh = _load_model("res://assets/kenney/roads/road-crossroad.glb").mesh
-	var grass: Mesh = _load_model("res://assets/kenney/roads/tile-low.glb").mesh
+	var straight: Mesh = ground_meshes[0]
+	var crossing: Mesh = ground_meshes[1]
+	var cross: Mesh = ground_meshes[2]
+	var grass: Mesh = ground_meshes[3]
 	var straights: Array = []
 	var crossings: Array = []
 	var crosses: Array = []
@@ -547,7 +656,7 @@ func _tile_multimesh(mesh: Mesh, items: Array, has_yaw: bool) -> void:
 	inst.material_override = ground_mat
 	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 2, -4, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, 20, CITY_HALF * 2 + 4))
 	_no_shadow(inst)
-	add_child(inst)
+	_add_city(inst)
 
 func _place_props(defs: Array) -> void:
 	var by_role := {}
@@ -566,16 +675,9 @@ func _place_props(defs: Array) -> void:
 		for b in range(lines.size() - 1):
 			var ix := (float(lines[a]) + float(lines[a + 1])) * 0.5
 			var iz := (float(lines[b]) + float(lines[b + 1])) * 0.5
-			var plaza := (a + b) % 3 == 0
-			var role := "tree" if plaza else "building"
-			if not plaza:
-				var pick := block_i % 7
-				if pick <= 1 and block_i % 5 == 0:
-					role = "tower"
-				elif pick == 2:
-					role = "wide"
-				elif pick == 3 or pick == 4:
-					role = "house"
+			var every := int(map.get("plaza", 3))
+			var plaza := (a + b + int(map.get("shift", 0))) % maxi(every, 2) == 0
+			var role := _block_role(block_i, plaza, str(map.get("bias", "downtown")))
 			var list: Array = by_role[role]
 			var cursor := int(role_cursor.get(role, 0))
 			role_cursor[role] = cursor + 1
@@ -583,12 +685,36 @@ func _place_props(defs: Array) -> void:
 			var yaw := randf() * TAU if plaza else (PI * 0.5) * float(block_i % 4)
 			_add_prop(ki, Vector3(ix, 0, iz), Vector3.ZERO, yaw, defs[ki])
 			block_i += 1
-	_scatter(by_role["small"], defs, 22, "grass")
-	_scatter(by_role["tree"], defs, 16, "grass")
-	_scatter(by_role["dumpster"], defs, 8, "grass")
-	_spawn_walkers(by_role["person"], defs)
-	_spawn_lamps(by_role["lamp"], defs)
-	_spawn_cars(by_role["car"], defs)
+	_scatter(by_role["small"], defs, int(map.get("small", 18)), "grass")
+	_scatter(by_role["tree"], defs, int(map.get("trees", 12)), "grass")
+	_scatter(by_role["dumpster"], defs, int(map.get("dumpsters", 6)), "grass")
+	_spawn_walkers(by_role["person"], defs, int(map.get("people", 22)))
+	_spawn_lamps(by_role["lamp"], defs, int(map.get("lamps", 14)))
+	_spawn_cars(by_role["car"], defs, int(map.get("cars", 14)))
+
+func _block_role(block_i: int, plaza: bool, bias: String) -> String:
+	if plaza:
+		return "tree"
+	var pick := block_i % 7
+	if bias == "suburb":
+		return "building" if pick == 0 else "house"
+	if bias == "industrial":
+		if pick <= 2:
+			return "wide"
+		return "tower" if pick == 3 else "building"
+	if bias == "towers" or bias == "skyline":
+		return "tower" if pick % 2 == 0 else "wide"
+	if bias == "park":
+		return "tree" if pick >= 4 else "house"
+	if bias == "market" or bias == "festival":
+		return "house" if pick <= 2 else "building"
+	if pick <= 1 and block_i % 5 == 0:
+		return "tower"
+	if pick == 2:
+		return "wide"
+	if pick == 3 or pick == 4:
+		return "house"
+	return "building"
 
 func _scatter(kinds: Array, defs: Array, count: int, _where: String) -> void:
 	var made := 0
@@ -609,14 +735,14 @@ func _scatter(kinds: Array, defs: Array, count: int, _where: String) -> void:
 		_add_prop(ki, p, Vector3.ZERO, randf() * TAU, defs[ki])
 		made += 1
 
-func _spawn_walkers(kinds: Array, defs: Array) -> void:
+func _spawn_walkers(kinds: Array, defs: Array, limit: int) -> void:
 	var made := 0
 	for i in range(GRID_MIN, GRID_MAX + 1):
 		if not _road_line(i):
 			continue
 		for axis in [0, 1]:
 			for side in [-1.0, 1.0]:
-				if made >= 28:
+				if made >= limit:
 					return
 				var along := randf_range(float(GRID_MIN) + 1.4, float(GRID_MAX) - 1.4)
 				var p := Vector3(along, 0, float(i) + 0.36 * side) if axis == 0 else Vector3(float(i) + 0.36 * side, 0, along)
@@ -629,14 +755,14 @@ func _spawn_walkers(kinds: Array, defs: Array) -> void:
 				_add_prop(ki, p, dir, 0.0, defs[ki])
 				made += 1
 
-func _spawn_lamps(kinds: Array, defs: Array) -> void:
+func _spawn_lamps(kinds: Array, defs: Array, limit: int) -> void:
 	var made := 0
 	for i in range(GRID_MIN, GRID_MAX + 1):
 		if not _road_line(i):
 			continue
 		var along := float(GRID_MIN + 2)
 		while along < float(GRID_MAX - 1):
-			if made >= 20:
+			if made >= limit:
 				return
 			if not _road_line(int(round(along))):
 				var p := Vector3(along, 0, float(i) + 0.48)
@@ -646,14 +772,14 @@ func _spawn_lamps(kinds: Array, defs: Array) -> void:
 					made += 1
 			along += 3.0
 
-func _spawn_cars(kinds: Array, defs: Array) -> void:
+func _spawn_cars(kinds: Array, defs: Array, limit: int) -> void:
 	var made := 0
 	for i in range(GRID_MIN, GRID_MAX + 1):
 		if not _road_line(i):
 			continue
 		for axis in [0, 1]:
 			for sgn in [-1.0, 1.0]:
-				if made >= 16:
+				if made >= limit:
 					return
 				var along := randf_range(GRID_MIN + 1.0, GRID_MAX - 1.0)
 				var p: Vector3
@@ -705,7 +831,7 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 	var role := str(spec[5])
 	if role in ["building", "wide", "house", "tower"]:
 		var palette := [Color(1, 0.45, 0.4), Color(0.35, 0.62, 1), Color(1, 0.82, 0.3), Color(0.45, 0.9, 0.55), Color(0.78, 0.48, 1), Color(1, 0.62, 0.25)]
-		tint = Color.WHITE.lerp(palette[randi() % palette.size()], 0.42)
+		tint = Color.WHITE.lerp(palette[randi() % palette.size()], 0.62)
 	var list: Array = kind_lists[ki]
 	var o := {
 		"kind": ki,
@@ -752,7 +878,7 @@ func _build_kind_multimesh(ki: int) -> void:
 	inst.material_override = kind_mats[ki]
 	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 2, -6, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, 24, CITY_HALF * 2 + 4))
 	_no_shadow(inst)
-	add_child(inst)
+	_add_city(inst)
 	kind_multimeshes[ki] = mm
 
 func _build_shadows() -> void:
@@ -761,7 +887,7 @@ func _build_shadows() -> void:
 		for x in 48:
 			var d := Vector2(float(x) - 23.5, float(y) - 23.5).length() / 23.5
 			var a := clampf(1.0 - smoothstep(0.15, 1.0, d), 0.0, 1.0)
-			img.set_pixel(x, y, Color(0, 0, 0, a * a * 0.42))
+			img.set_pixel(x, y, Color(0, 0, 0, a * a * 0.72))
 	var tex := ImageTexture.create_from_image(img)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -786,7 +912,7 @@ func _build_shadows() -> void:
 	inst.material_override = mat
 	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 2, -2, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, 8, CITY_HALF * 2 + 4))
 	_no_shadow(inst)
-	add_child(inst)
+	_add_city(inst)
 
 func _shadow_xform(o: Dictionary) -> Transform3D:
 	var p: Vector3 = o.pos
@@ -846,6 +972,8 @@ func _unmesh(o: Dictionary) -> void:
 
 func _build_ui() -> void:
 	var ui := CanvasLayer.new()
+	ui.layer = 2
+	hud_layer = ui
 	add_child(ui)
 	score_lbl = Label.new()
 	score_lbl.position = Vector2(18, 16)
@@ -874,7 +1002,7 @@ func _build_ui() -> void:
 	bar_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bar.add_child(bar_fill)
 	level_lbl = Label.new()
-	level_lbl.position = Vector2(278, 58)
+	level_lbl.position = Vector2(18, 96)
 	_style(level_lbl, 26)
 	ui.add_child(level_lbl)
 	sha_lbl = Label.new()
@@ -898,17 +1026,27 @@ func _build_ui() -> void:
 	over_panel = ColorRect.new()
 	(over_panel as ColorRect).color = Color(0, 0, 0, 0.62)
 	over_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	over_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	over_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	over_panel.visible = false
 	ui.add_child(over_panel)
 	over_lbl = Label.new()
-	over_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	over_lbl.position = Vector2(40, 220)
+	over_lbl.size = Vector2(640, 420)
 	over_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	over_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_style(over_lbl, 52)
+	over_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_style(over_lbl, 40)
 	over_panel.add_child(over_lbl)
+	double_btn = _make_button("Double coins", Vector2(150, 680), Vector2(420, 70), Color(0.95, 0.62, 0.15))
+	double_btn.pressed.connect(_on_double_coins)
+	over_panel.add_child(double_btn)
+	next_btn = _make_button("Next level", Vector2(150, 770), Vector2(420, 70), Color(0.18, 0.55, 0.42))
+	next_btn.pressed.connect(_on_next_level)
+	over_panel.add_child(next_btn)
+	continue_btn = _make_button("Menu", Vector2(150, 860), Vector2(420, 70), Color(0.18, 0.28, 0.48))
+	continue_btn.pressed.connect(_on_continue)
+	over_panel.add_child(continue_btn)
 	debug_lbl = Label.new()
-	debug_lbl.position = Vector2(16, 110)
+	debug_lbl.position = Vector2(16, 150)
 	_style(debug_lbl, 20)
 	debug_lbl.visible = debug_on
 	ui.add_child(debug_lbl)
@@ -920,10 +1058,7 @@ func _build_ui() -> void:
 	_refresh_hud()
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventScreenTouch and event.pressed and not playing:
-		get_tree().reload_current_scene()
-		return
-	if not playing:
+	if mode != "play" or not playing:
 		return
 	if event is InputEventScreenTouch:
 		if event.pressed:
@@ -946,11 +1081,14 @@ func _screen_vector_to_world(screen: Vector2) -> Vector3:
 	forward = forward.normalized() if forward.length_squared() > 0.0001 else Vector3(0, 0, -1)
 	return right * screen.x - forward * screen.y
 
+func _start_radius() -> float:
+	return Save.start_radius()
+
 func _move_speed() -> float:
 	var base := _cam_dist_for(LEVEL_RADIUS[0])
 	var dist := _cam_dist_for(shown_radius)
 	var factor := pow(maxf(dist, 0.001) / base, SPEED_SCREEN)
-	return BASE_SPEED * speed_scale * factor
+	return BASE_SPEED * speed_scale * Save.speed_mul() * factor
 
 func _stick_velocity() -> Vector3:
 	var offset := joy_finger - joy_anchor
@@ -1001,8 +1139,8 @@ func _smooth_camera(delta: float) -> void:
 func _fits(size: float) -> bool:
 	return size < hole_radius * FIT_RATIO
 
-func _over_opening(size: float, dist: float) -> bool:
-	return _fits(size) and dist + size * 0.45 < hole_radius
+func _mostly_over(size: float, dist: float) -> bool:
+	return dist + size * 0.35 < hole_radius
 
 func _sync_level() -> void:
 	var n := level
@@ -1010,24 +1148,20 @@ func _sync_level() -> void:
 		n += 1
 	if n != level:
 		level = n
-		hole_radius = LEVEL_RADIUS[level]
 		pop_t = POP_TIME
+	hole_radius = maxf(LEVEL_RADIUS[level], _start_radius())
 
-func _progress() -> float:
-	if level >= LEVEL_SCORE.size() - 1:
-		return 1.0
-	var a := int(LEVEL_SCORE[level])
-	var b := int(LEVEL_SCORE[level + 1])
-	return clampf(float(score - a) / float(b - a), 0.0, 1.0)
+func _map_progress() -> float:
+	return clampf(float(score) / float(maxi(target_score, 1)), 0.0, 1.0)
 
 func _refresh_hud() -> void:
-	score_lbl.text = "Score %d" % score
+	score_lbl.text = "%d / %d" % [score, target_score]
 	var sec := int(ceili(time_left))
 	var m := int(float(sec) / 60.0)
 	var s := sec % 60
 	timer_lbl.text = "%d:%02d" % [m, s]
-	level_lbl.text = "Lv %d" % (level + 1)
-	bar_fill.size = Vector2(244.0 * _progress(), 12.0)
+	level_lbl.text = "%s  Size %d" % [str(map.get("name", "")), level + 1]
+	bar_fill.size = Vector2(244.0 * _map_progress(), 12.0)
 	shown_score = score
 	shown_sec = sec
 	shown_level = level
@@ -1035,17 +1169,19 @@ func _refresh_hud() -> void:
 func _process(delta: float) -> void:
 	var frame_delta := delta
 	delta = minf(delta, 1.0 / 20.0)
+	if mode != "play" and mode != "results":
+		if debug_on:
+			_update_debug(frame_delta)
+		return
 	if playing:
 		time_left -= delta
 		if time_left <= 0.0:
-			time_left = 0.0
-			playing = false
-			joy_held = false
-			_refresh_joystick()
-			over_lbl.text = "Time's up!\nScore: %d\n\nTap to play again" % score
-			over_panel.visible = true
-		_move_hole(delta)
-		_tick_movers(delta)
+			_finish_round(false)
+		elif score >= target_score:
+			_finish_round(true)
+		else:
+			_move_hole(delta)
+			_tick_movers(delta)
 	shown_radius = lerpf(shown_radius, hole_radius, 1.0 - exp(-7.0 * delta))
 	var pop := 1.0
 	if pop_t > 0.0:
@@ -1145,9 +1281,7 @@ func _flat_dist(p: Vector3) -> float:
 
 func _wants_body(o: Dictionary, dist: float) -> bool:
 	var size := float(o.size)
-	if _fits(size):
-		return dist < hole_radius + size + 0.8
-	return dist < hole_radius + size * 0.2
+	return dist < hole_radius + size * 0.25
 
 func _activate_nearby() -> void:
 	var budget := 2
@@ -1228,20 +1362,22 @@ func _drive_body(o: Dictionary) -> void:
 	var inward := Vector3.ZERO
 	if dist > 0.04:
 		inward = Vector3(-dx / dist, 0.0, -dz / dist)
-	if _fits(size):
-		if _over_opening(size, dist) or committed:
-			b.collision_mask = 0
-			b.apply_central_force(inward * (14.0 * mass) + Vector3.DOWN * (26.0 * mass))
-		else:
-			b.collision_mask = 1
-			if dist < hole_radius + size * 1.9:
-				var axis := inward.cross(Vector3.UP)
-				b.apply_torque(axis * (9.0 * mass))
-				b.apply_central_force(inward * (16.0 * mass))
+	var over := _mostly_over(size, dist)
+	if _fits(size) and (over or committed):
+		b.collision_mask = 0
+	elif _fits(size) and dist < hole_radius + size * 0.15:
+		b.collision_mask = 1
+		if dist < hole_radius and dist > 0.04:
+			var axis := inward.cross(Vector3.UP)
+			var lean := clampf((hole_radius - dist) / maxf(hole_radius, 0.2), 0.0, 1.0)
+			b.apply_torque(axis * (4.0 * mass * lean))
 	else:
 		b.collision_mask = 1
-		if dist < maxf(hole_radius * 0.98, 0.2) and dist > 0.04:
-			b.apply_central_force(-inward * (22.0 * mass))
+		if not _fits(size) and dist < hole_radius:
+			var push := inward
+			if push.length_squared() < 0.01:
+				push = Vector3(1, 0, 0)
+			b.apply_central_force(-push * (48.0 * mass))
 	var v := b.linear_velocity
 	var hv := Vector2(v.x, v.z)
 	if hv.length() > 4.2:
@@ -1303,3 +1439,369 @@ func _release_body(o: Dictionary, p: Vector3) -> void:
 		var mm: MultiMesh = kind_multimeshes[int(o.kind)]
 		mm.set_instance_transform(int(o.index), xform)
 		_set_shadow(o)
+
+func _apply_theme(m: Dictionary) -> void:
+	sky_mat.sky_top_color = m.sky_top
+	sky_mat.sky_horizon_color = m.horizon
+	sky_mat.ground_horizon_color = m.horizon
+	sky_mat.ground_bottom_color = m.ground
+	world_env.fog_light_color = m.fog
+	world_env.adjustment_saturation = float(m.sat)
+	sun.light_color = m.sun
+	sun.rotation_degrees = Vector3(-54, float(m.sun_yaw), 0)
+
+func _apply_skin() -> void:
+	if pit_mat == null:
+		return
+	var skin: Dictionary = CatalogScript.skin_by_id(Save.skin_id)
+	pit_mat.set_shader_parameter("rim_color", skin.a)
+	pit_mat.set_shader_parameter("rim_color_b", skin.b)
+	pit_mat.set_shader_parameter("pattern", int(skin.pattern))
+	pit_mat.set_shader_parameter("glow", float(skin.glow))
+
+func _clear_city() -> void:
+	playing = false
+	joy_held = false
+	for o in active.duplicate():
+		if o.body != null:
+			_pool_body(o.body)
+			o.body = null
+		o.in_body = false
+	active.clear()
+	props.clear()
+	movers.clear()
+	for list in kind_lists:
+		(list as Array).clear()
+	for i in kind_multimeshes.size():
+		kind_multimeshes[i] = null
+	shadow_mm = null
+	shadow_owners.clear()
+	if city_root != null and is_instance_valid(city_root):
+		city_root.queue_free()
+	city_root = null
+
+func start_round(index: int) -> void:
+	_clear_city()
+	map_index = clampi(index, 0, CatalogScript.maps().size() - 1)
+	map = CatalogScript.maps()[map_index]
+	target_score = int(map.target)
+	_apply_theme(map)
+	_apply_skin()
+	score = 0
+	level = 0
+	pop_t = 0.0
+	hole_radius = _start_radius()
+	shown_radius = hole_radius
+	_sync_level()
+	hole_pos = Vector3.ZERO
+	velocity = Vector3.ZERO
+	joy_held = false
+	time_left = ROUND_TIME + Save.extra_time()
+	round_cleared = false
+	coins_earned = 0
+	doubled = false
+	shown_score = -1
+	shown_sec = -1
+	shown_level = -1
+	_spawn_city()
+	hole_mesh.visible = true
+	hole_mesh.position = hole_pos
+	cam_distance = _cam_dist_for(hole_radius)
+	cam_look = hole_pos
+	cam.position = hole_pos + _camera_offset(cam_distance)
+	cam.look_at(cam_look, Vector3.UP)
+	over_panel.visible = false
+	hud_layer.visible = true
+	menu_layer.visible = false
+	mode = "play"
+	playing = true
+	_refresh_hud()
+
+func _finish_round(cleared: bool) -> void:
+	if not playing:
+		return
+	playing = false
+	joy_held = false
+	_refresh_joystick()
+	round_cleared = cleared
+	mode = "results"
+	var bonus := 50 if cleared else 0
+	coins_earned = int(float(score) * 0.45) + bonus
+	doubled = false
+	if coins_earned > 0:
+		Save.add_coins(coins_earned)
+	if cleared:
+		Save.mark_cleared(map_index, score)
+	var headline := "Level clear!" if cleared else "Time's up"
+	var pct := int(_map_progress() * 100.0)
+	over_lbl.text = "%s\n%s\n%d / %d  (%d%%)\n+%d coins" % [headline, str(map.name), score, target_score, pct, coins_earned]
+	double_btn.visible = true
+	double_btn.disabled = false
+	double_btn.text = "Double coins"
+	next_btn.visible = cleared and map_index + 1 < CatalogScript.maps().size()
+	over_panel.visible = true
+
+func _on_double_coins() -> void:
+	if doubled:
+		return
+	AdService.show_rewarded()
+
+func _after_reward(granted: bool) -> void:
+	if not granted or doubled or mode != "results":
+		return
+	doubled = true
+	Save.add_coins(coins_earned)
+	coins_earned *= 2
+	double_btn.text = "Coins doubled"
+	double_btn.disabled = true
+	var pct := int(_map_progress() * 100.0)
+	var headline := "Level clear!" if round_cleared else "Time's up"
+	over_lbl.text = "%s\n%s\n%d / %d  (%d%%)\n+%d coins" % [headline, str(map.name), score, target_score, pct, coins_earned]
+
+func _on_next_level() -> void:
+	if map_index + 1 < CatalogScript.maps().size() and map_index + 1 <= Save.unlocked_level:
+		start_round(map_index + 1)
+
+func _on_continue() -> void:
+	AdService.show_interstitial()
+
+func _after_ad() -> void:
+	_clear_city()
+	hole_mesh.visible = false
+	over_panel.visible = false
+	hud_layer.visible = false
+	_show_screen("menu")
+
+func _build_menu_layer() -> void:
+	menu_layer = CanvasLayer.new()
+	menu_layer.layer = 4
+	add_child(menu_layer)
+
+func _show_screen(which: String) -> void:
+	mode = which
+	playing = false
+	hud_layer.visible = false
+	menu_layer.visible = true
+	for c in menu_layer.get_children():
+		c.queue_free()
+	var bg := ColorRect.new()
+	bg.color = Color(0.08, 0.12, 0.2)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP
+	menu_layer.add_child(bg)
+	if which == "menu":
+		_screen_menu()
+	elif which == "levels":
+		_screen_levels()
+	elif which == "skins":
+		_screen_skins()
+	elif which == "shop":
+		_screen_shop()
+	menu_sha = Label.new()
+	menu_sha.anchor_left = 1.0
+	menu_sha.anchor_right = 1.0
+	menu_sha.offset_left = -220
+	menu_sha.offset_right = -16
+	menu_sha.offset_top = 18
+	menu_sha.offset_bottom = 52
+	menu_sha.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_style(menu_sha, 18)
+	menu_sha.text = _short_sha()
+	menu_layer.add_child(menu_sha)
+
+func _screen_menu() -> void:
+	var title := _menu_label("Hole Arcade", Vector2(40, 160), 64)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.size = Vector2(640, 80)
+	menu_layer.add_child(title)
+	menu_layer.add_child(_menu_label("Coins %d" % Save.coins, Vector2(40, 260), 32))
+	var play := _make_button("Play", Vector2(150, 380), Vector2(420, 84), Color(0.16, 0.55, 0.85))
+	play.pressed.connect(_on_play)
+	menu_layer.add_child(play)
+	var levels := _make_button("Levels", Vector2(150, 490), Vector2(420, 76), Color(0.18, 0.32, 0.55))
+	levels.pressed.connect(_show_screen.bind("levels"))
+	menu_layer.add_child(levels)
+	var skins := _make_button("Skins", Vector2(150, 590), Vector2(420, 76), Color(0.42, 0.22, 0.62))
+	skins.pressed.connect(_show_screen.bind("skins"))
+	menu_layer.add_child(skins)
+	var shop := _make_button("Shop", Vector2(150, 690), Vector2(420, 76), Color(0.72, 0.42, 0.12))
+	shop.pressed.connect(_show_screen.bind("shop"))
+	menu_layer.add_child(shop)
+
+func _on_play() -> void:
+	var i := mini(Save.unlocked_level, CatalogScript.maps().size() - 1)
+	start_round(i)
+
+func _screen_levels() -> void:
+	menu_layer.add_child(_menu_label("Levels", Vector2(40, 24), 42))
+	var back := _make_button("Back", Vector2(500, 24), Vector2(180, 56), Color(0.2, 0.24, 0.34))
+	back.pressed.connect(_show_screen.bind("menu"))
+	menu_layer.add_child(back)
+	var scroll := ScrollContainer.new()
+	scroll.position = Vector2(36, 110)
+	scroll.size = Vector2(648, 1100)
+	menu_layer.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	box.custom_minimum_size = Vector2(620, 0)
+	scroll.add_child(box)
+	var maps: Array = CatalogScript.maps()
+	for i in maps.size():
+		var m: Dictionary = maps[i]
+		var locked := i > Save.unlocked_level
+		var best_score := int(Save.best[i]) if i < Save.best.size() else 0
+		var label := "%d  %s    %d pts" % [i + 1, str(m.name), int(m.target)]
+		if locked:
+			label += "    Locked"
+		elif best_score > 0:
+			label += "    best %d" % best_score
+		var b := _make_button(label, Vector2.ZERO, Vector2(600, 72), Color(0.16, 0.28, 0.42) if not locked else Color(0.14, 0.15, 0.18))
+		b.disabled = locked
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.pressed.connect(start_round.bind(i))
+		box.add_child(b)
+
+func _screen_skins() -> void:
+	menu_layer.add_child(_menu_label("Skins", Vector2(40, 24), 42))
+	menu_layer.add_child(_menu_label("Coins %d" % Save.coins, Vector2(220, 32), 24))
+	var back := _make_button("Back", Vector2(500, 24), Vector2(180, 56), Color(0.2, 0.24, 0.34))
+	back.pressed.connect(_show_screen.bind("menu"))
+	menu_layer.add_child(back)
+	var scroll := ScrollContainer.new()
+	scroll.position = Vector2(36, 110)
+	scroll.size = Vector2(648, 1100)
+	menu_layer.add_child(scroll)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	box.custom_minimum_size = Vector2(620, 0)
+	scroll.add_child(box)
+	for s in CatalogScript.skins():
+		var id := str(s.id)
+		var owned := Save.has_skin(id)
+		var status := "Equip"
+		if Save.skin_id == id:
+			status = "Equipped"
+		elif not owned:
+			status = _lock_text(str(s.unlock))
+		var b := _make_button("%s    %s" % [str(s.name), status], Vector2.ZERO, Vector2(600, 68), s.a)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.add_theme_color_override("font_color", Color.WHITE)
+		b.pressed.connect(_on_skin.bind(id))
+		box.add_child(b)
+
+func _lock_text(unlock: String) -> String:
+	if unlock.begins_with("coins:"):
+		return unlock.substr(6) + " coins"
+	if unlock.begins_with("level:"):
+		return "Clear level " + unlock.substr(6)
+	return "Locked"
+
+func _on_skin(id: String) -> void:
+	if Save.has_skin(id):
+		Save.equip(id)
+		_apply_skin()
+		_show_screen("skins")
+		return
+	var skin: Dictionary = CatalogScript.skin_by_id(id)
+	if Save.try_buy_skin(skin):
+		Save.equip(id)
+		_apply_skin()
+	_show_screen("skins")
+
+func _screen_shop() -> void:
+	menu_layer.add_child(_menu_label("Shop", Vector2(40, 24), 42))
+	menu_layer.add_child(_menu_label("Coins %d" % Save.coins, Vector2(200, 32), 24))
+	var back := _make_button("Back", Vector2(500, 24), Vector2(180, 56), Color(0.2, 0.24, 0.34))
+	back.pressed.connect(_show_screen.bind("menu"))
+	menu_layer.add_child(back)
+	_shop_row("Starting size", Save.size_rank, "size", 220)
+	_shop_row("Speed", Save.speed_rank, "speed", 360)
+	_shop_row("Round time", Save.time_rank, "time", 500)
+	var ads := "Ads removed" if IapService.no_ads else "Remove Ads"
+	var ads_btn := _make_button(ads, Vector2(80, 700), Vector2(560, 80), Color(0.45, 0.18, 0.22))
+	ads_btn.disabled = IapService.no_ads
+	ads_btn.pressed.connect(_confirm_remove_ads)
+	menu_layer.add_child(ads_btn)
+	menu_layer.add_child(_menu_label("Placeholder purchase. No payment in this build.", Vector2(60, 800), 22))
+
+func _shop_row(title: String, rank: int, which: String, y: float) -> void:
+	var cost := Save.next_cost(rank)
+	var detail := "%s  %d/5" % [title, rank + 1]
+	if cost < 0:
+		detail += "    Max"
+	else:
+		detail += "    %d coins" % cost
+	menu_layer.add_child(_menu_label(detail, Vector2(50, y), 28))
+	var b := _make_button("Buy", Vector2(500, y - 8), Vector2(170, 58), Color(0.2, 0.48, 0.32))
+	b.disabled = cost < 0 or Save.coins < cost
+	b.pressed.connect(_buy_upgrade.bind(which))
+	menu_layer.add_child(b)
+
+func _buy_upgrade(which: String) -> void:
+	Save.try_buy_upgrade(which)
+	_show_screen("shop")
+
+func _confirm_remove_ads() -> void:
+	for c in menu_layer.get_children():
+		c.queue_free()
+	var bg := ColorRect.new()
+	bg.color = Color(0.08, 0.1, 0.16, 0.96)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP
+	menu_layer.add_child(bg)
+	var msg := _menu_label("Remove ads?\nThis is a placeholder purchase.", Vector2(60, 420), 32)
+	msg.size = Vector2(600, 140)
+	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	menu_layer.add_child(msg)
+	var yes := _make_button("Confirm", Vector2(150, 640), Vector2(420, 74), Color(0.55, 0.2, 0.22))
+	yes.pressed.connect(_do_remove_ads)
+	menu_layer.add_child(yes)
+	var no := _make_button("Cancel", Vector2(150, 740), Vector2(420, 64), Color(0.2, 0.24, 0.34))
+	no.pressed.connect(_show_screen.bind("shop"))
+	menu_layer.add_child(no)
+
+func _do_remove_ads() -> void:
+	IapService.purchase_remove_ads()
+	_show_screen("shop")
+
+func _menu_label(text: String, pos: Vector2, size: int) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.position = pos
+	_style(l, size)
+	return l
+
+func _make_button(text: String, pos: Vector2, size: Vector2, color: Color) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.position = pos
+	b.size = size
+	b.custom_minimum_size = size
+	b.add_theme_font_size_override("font_size", 26)
+	b.add_theme_color_override("font_color", Color.WHITE)
+	b.add_theme_color_override("font_hover_color", Color.WHITE)
+	b.add_theme_color_override("font_pressed_color", Color(1, 0.95, 0.8))
+	var normal := _btn_box(color)
+	var hover := _btn_box(color.lightened(0.12))
+	var pressed := _btn_box(color.darkened(0.12))
+	var disabled := _btn_box(Color(0.16, 0.17, 0.2))
+	b.add_theme_stylebox_override("normal", normal)
+	b.add_theme_stylebox_override("hover", hover)
+	b.add_theme_stylebox_override("pressed", pressed)
+	b.add_theme_stylebox_override("disabled", disabled)
+	b.add_theme_stylebox_override("focus", normal)
+	return b
+
+func _btn_box(color: Color) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = color
+	s.corner_radius_top_left = 14
+	s.corner_radius_top_right = 14
+	s.corner_radius_bottom_left = 14
+	s.corner_radius_bottom_right = 14
+	s.content_margin_left = 16
+	s.content_margin_right = 16
+	s.content_margin_top = 8
+	s.content_margin_bottom = 8
+	return s

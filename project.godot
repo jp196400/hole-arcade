@@ -5,6 +5,11 @@ config/name="Hole Arcade"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
 
+[autoload]
+Save="*res://save_game.gd"
+IapService="*res://iap_service.gd"
+AdService="*res://ad_service.gd"
+
 [display]
 window/size/viewport_width=720
 window/size/viewport_height=1280
