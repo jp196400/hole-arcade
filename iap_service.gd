@@ -2,7 +2,12 @@ extends Node
 
 signal no_ads_changed(on: bool)
 
+const REMOVE_ADS_PRICE := 2.99
+
 var no_ads := false
+
+func price_text() -> String:
+	return "$" + String.num(REMOVE_ADS_PRICE, 2)
 
 func _ready() -> void:
 	no_ads = Save.no_ads

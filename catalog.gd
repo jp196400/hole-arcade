@@ -2,39 +2,35 @@ extends RefCounted
 
 static func maps() -> Array:
 	return [
-		_map("Downtown", 80, "downtown", 3, 0, 11, 18, 12, 6, 22, 14, 14, Color(0.28, 0.62, 1.0), Color(0.55, 0.86, 1.0), Color(0.35, 0.78, 0.28), Color(0.7, 0.9, 1.0), Color(1.0, 0.97, 0.9), 32.0, 1.4),
-		_map("Suburbs", 130, "suburb", 2, 1, 27, 12, 26, 3, 16, 10, 8, Color(0.36, 0.72, 1.0), Color(0.7, 0.92, 0.78), Color(0.32, 0.82, 0.26), Color(0.75, 0.95, 0.8), Color(1.0, 0.97, 0.9), 18.0, 1.4),
-		_map("Crosswalk", 180, "traffic", 4, 2, 41, 14, 8, 5, 28, 12, 20, Color(0.25, 0.58, 1.0), Color(0.95, 0.82, 0.62), Color(0.4, 0.75, 0.32), Color(0.95, 0.9, 0.75), Color(1.0, 0.96, 0.88), 48.0, 1.42),
-		_map("Park Rows", 240, "park", 2, 3, 63, 10, 30, 2, 18, 8, 8, Color(0.32, 0.74, 1.0), Color(0.62, 0.95, 0.62), Color(0.22, 0.75, 0.22), Color(0.7, 0.95, 0.7), Color(1.0, 0.98, 0.9), -12.0, 1.42),
-		_map("Yards", 300, "industrial", 5, 4, 88, 26, 6, 16, 12, 18, 12, Color(0.45, 0.7, 0.95), Color(0.9, 0.86, 0.78), Color(0.55, 0.62, 0.4), Color(0.9, 0.9, 0.82), Color(1.0, 0.96, 0.88), 70.0, 1.32),
-		_map("Lamp Mile", 370, "dusk", 3, 2, 104, 16, 14, 6, 20, 28, 12, Color(0.4, 0.62, 1.0), Color(1.0, 0.72, 0.48), Color(0.4, 0.7, 0.32), Color(1.0, 0.82, 0.6), Color(1.0, 0.9, 0.7), 8.0, 1.45),
-		_map("High Rise", 450, "towers", 4, 1, 130, 12, 8, 6, 18, 16, 14, Color(0.22, 0.52, 0.98), Color(0.7, 0.86, 1.0), Color(0.35, 0.6, 0.5), Color(0.75, 0.88, 1.0), Color(1.0, 0.97, 0.9), 40.0, 1.38),
-		_map("Market", 540, "market", 3, 5, 156, 28, 10, 8, 28, 14, 10, Color(0.3, 0.64, 1.0), Color(1.0, 0.78, 0.45), Color(0.55, 0.75, 0.25), Color(1.0, 0.86, 0.55), Color(1.0, 0.92, 0.7), 55.0, 1.48),
-		_map("Festival", 640, "festival", 2, 4, 188, 22, 18, 4, 26, 16, 16, Color(0.45, 0.55, 1.0), Color(1.0, 0.62, 0.78), Color(0.35, 0.75, 0.4), Color(1.0, 0.7, 0.85), Color(1.0, 0.85, 0.95), -28.0, 1.5),
-		_map("Skyline", 760, "skyline", 3, 6, 214, 14, 10, 8, 20, 18, 16, Color(0.18, 0.48, 0.98), Color(0.62, 0.8, 1.0), Color(0.3, 0.55, 0.5), Color(0.7, 0.85, 1.0), Color(1.0, 0.95, 0.85), 24.0, 1.4),
+		_map("Downtown", 80, "grid", 11, "Grid streets", Color(0.36, 0.62, 0.90), Color(0.68, 0.82, 0.94), Color(0.34, 0.62, 0.32), Color(1.0, 0.97, 0.92), 28.0, 1.16, Color(1, 1, 1), [Color(0.76, 0.36, 0.36), Color(0.84, 0.70, 0.34), Color(0.36, 0.60, 0.64), Color(0.78, 0.48, 0.52), Color(0.40, 0.50, 0.72)]),
+		_map("Suburbs", 130, "suburb", 27, "Yards and fences", Color(0.58, 0.78, 0.88), Color(0.74, 0.88, 0.72), Color(0.40, 0.68, 0.34), Color(1.0, 0.97, 0.90), 18.0, 1.12, Color(1.0, 1.0, 0.96), [Color(0.84, 0.76, 0.64), Color(0.55, 0.70, 0.76), Color(0.62, 0.74, 0.56), Color(0.86, 0.68, 0.56), Color(0.78, 0.76, 0.82)]),
+		_map("Park", 180, "park", 63, "Paths and ponds", Color(0.42, 0.70, 0.86), Color(0.58, 0.84, 0.58), Color(0.24, 0.58, 0.26), Color(0.95, 0.98, 0.90), -12.0, 1.14, Color(0.96, 1.0, 0.94), [Color(0.55, 0.68, 0.48), Color(0.72, 0.62, 0.46)]),
+		_map("Boardwalk", 240, "boardwalk", 41, "Sand and water", Color(0.42, 0.66, 0.88), Color(0.98, 0.74, 0.50), Color(0.84, 0.72, 0.46), Color(1.0, 0.94, 0.82), 48.0, 1.18, Color(1.0, 0.98, 0.92), [Color(0.86, 0.55, 0.42), Color(0.92, 0.78, 0.52), Color(0.45, 0.70, 0.74)]),
+		_map("Farm", 300, "farm", 88, "Fields and barns", Color(0.64, 0.78, 0.90), Color(0.92, 0.84, 0.54), Color(0.55, 0.62, 0.26), Color(1.0, 0.96, 0.84), 70.0, 1.10, Color(1.0, 0.98, 0.90), [Color(0.70, 0.32, 0.28), Color(0.78, 0.68, 0.40), Color(0.55, 0.58, 0.36)]),
+		_map("Harbor", 370, "harbor", 104, "Docks and crates", Color(0.34, 0.50, 0.64), Color(0.58, 0.70, 0.74), Color(0.30, 0.42, 0.48), Color(0.90, 0.94, 0.96), 8.0, 1.08, Color(0.90, 0.95, 0.98), [Color(0.38, 0.48, 0.58), Color(0.62, 0.40, 0.34), Color(0.42, 0.52, 0.48)]),
+		_map("Campus", 450, "campus", 130, "Plaza and field", Color(0.36, 0.55, 0.84), Color(0.78, 0.82, 0.70), Color(0.36, 0.60, 0.34), Color(0.96, 0.96, 0.90), 40.0, 1.12, Color(0.98, 0.99, 0.96), [Color(0.62, 0.42, 0.36), Color(0.78, 0.74, 0.64), Color(0.36, 0.44, 0.62)]),
+		_map("Fairground", 540, "fair", 156, "Rides and stalls", Color(0.40, 0.34, 0.68), Color(0.94, 0.50, 0.40), Color(0.42, 0.55, 0.34), Color(1.0, 0.86, 0.74), 55.0, 1.20, Color(1.0, 0.96, 0.92), [Color(0.78, 0.40, 0.48), Color(0.86, 0.62, 0.28), Color(0.48, 0.42, 0.70)]),
+		_map("Industrial", 640, "industrial", 188, "Tanks and pipes", Color(0.58, 0.62, 0.60), Color(0.74, 0.70, 0.58), Color(0.42, 0.46, 0.38), Color(0.94, 0.94, 0.90), -28.0, 1.05, Color(0.92, 0.94, 0.90), [Color(0.55, 0.56, 0.54), Color(0.62, 0.48, 0.32), Color(0.48, 0.54, 0.40), Color(0.78, 0.66, 0.28)]),
+		_map("Skyline", 760, "skyline", 214, "Dense towers", Color(0.12, 0.18, 0.38), Color(0.90, 0.50, 0.34), Color(0.20, 0.24, 0.34), Color(1.0, 0.90, 0.78), 24.0, 1.14, Color(1.0, 0.96, 0.92), [Color(0.45, 0.55, 0.68), Color(0.62, 0.50, 0.48), Color(0.40, 0.38, 0.55), Color(0.72, 0.62, 0.42)]),
 	]
 
-static func _map(map_name: String, target: int, bias: String, plaza: int, shift: int, seed_n: int, small_n: int, trees_n: int, dumps_n: int, people_n: int, lamps_n: int, cars_n: int, sky_top: Color, horizon: Color, ground: Color, fog: Color, sun: Color, sun_yaw: float, sat: float) -> Dictionary:
+static func _map(map_name: String, target: int, layout: String, seed_n: int, blurb: String, sky_top: Color, horizon: Color, ground: Color, sun: Color, sun_yaw: float, sat: float, tint: Color, palette: Array) -> Dictionary:
 	return {
 		"name": map_name,
 		"target": target,
-		"bias": bias,
-		"plaza": plaza,
-		"shift": shift,
+		"layout": layout,
+		"bias": layout,
 		"seed": seed_n,
-		"small": small_n,
-		"trees": trees_n,
-		"dumpsters": dumps_n,
-		"people": people_n,
-		"lamps": lamps_n,
-		"cars": cars_n,
+		"blurb": blurb,
 		"sky_top": sky_top,
 		"horizon": horizon,
 		"ground": ground,
-		"fog": fog,
+		"fog": horizon,
 		"sun": sun,
 		"sun_yaw": sun_yaw,
 		"sat": sat,
+		"tint": tint,
+		"palette": palette,
 	}
 
 static func skins() -> Array:

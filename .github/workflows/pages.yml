@@ -47,6 +47,8 @@ jobs:
           test -s build/web/index.js
           test -s build/web/index.wasm
           test -s build/web/index.pck
+          cp assets/music/loop.ogg build/web/music.ogg
+          test -s build/web/music.ogg
           # Query-string the shell after export. Do not put ?v= on the executable name:
           # Godot would request "index?v=SHA.wasm" and the pack would 404.
           sed -i "s/__BUILD_SHA__/${GITHUB_SHA}/g" build/web/index.html

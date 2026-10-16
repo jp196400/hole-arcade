@@ -6,6 +6,7 @@ const SIZE_RADIUS := [0.50, 0.62, 0.74, 0.88, 1.02]
 const SPEED_MUL := [1.0, 1.08, 1.16, 1.25, 1.34]
 const EXTRA_TIME := [0.0, 15.0, 30.0, 45.0, 60.0]
 const UPGRADE_COST := [150, 360, 700, 1200]
+const DAILY_COINS := 100
 
 var coins := 0
 var size_rank := 0
@@ -20,6 +21,17 @@ var eaten := 0
 var max_size := 1
 var rounds := 0
 var stars: Array = []
+var music_on := true
+var sfx_on := true
+var play_time := 0.0
+var first_ad_shown := false
+var last_ad_play := 0.0
+var next_interstitial_round := 2
+var interstitial_gap_two := false
+var trial_skin := ""
+var last_daily := ""
+var daily_doubled := false
+var _play_save_wait := 0.0
 
 func _ready() -> void:
 	best.resize(10)
@@ -44,6 +56,16 @@ func load_game() -> void:
 	eaten = maxi(0, int(cf.get_value("player", "eaten", 0)))
 	max_size = clampi(int(cf.get_value("player", "max_size", 1)), 1, 6)
 	rounds = maxi(0, int(cf.get_value("player", "rounds", 0)))
+	music_on = bool(cf.get_value("player", "music_on", true))
+	sfx_on = bool(cf.get_value("player", "sfx_on", true))
+	play_time = maxf(0.0, float(cf.get_value("player", "play_time", 0.0)))
+	first_ad_shown = bool(cf.get_value("player", "first_ad_shown", false))
+	last_ad_play = maxf(0.0, float(cf.get_value("player", "last_ad_play", 0.0)))
+	next_interstitial_round = maxi(2, int(cf.get_value("player", "next_interstitial_round", 2)))
+	interstitial_gap_two = bool(cf.get_value("player", "interstitial_gap_two", false))
+	trial_skin = str(cf.get_value("player", "trial_skin", ""))
+	last_daily = str(cf.get_value("player", "last_daily", ""))
+	daily_doubled = bool(cf.get_value("player", "daily_doubled", false))
 	var skin_csv := str(cf.get_value("player", "skins", "cyan"))
 	unlocked_skins = skin_csv.split(",", false)
 	if unlocked_skins.is_empty() or not unlocked_skins.has("cyan"):
@@ -71,6 +93,16 @@ func save_game() -> void:
 	cf.set_value("player", "eaten", eaten)
 	cf.set_value("player", "max_size", max_size)
 	cf.set_value("player", "rounds", rounds)
+	cf.set_value("player", "music_on", music_on)
+	cf.set_value("player", "sfx_on", sfx_on)
+	cf.set_value("player", "play_time", play_time)
+	cf.set_value("player", "first_ad_shown", first_ad_shown)
+	cf.set_value("player", "last_ad_play", last_ad_play)
+	cf.set_value("player", "next_interstitial_round", next_interstitial_round)
+	cf.set_value("player", "interstitial_gap_two", interstitial_gap_two)
+	cf.set_value("player", "trial_skin", trial_skin)
+	cf.set_value("player", "last_daily", last_daily)
+	cf.set_value("player", "daily_doubled", daily_doubled)
 	var star_bits: PackedStringArray = []
 	for i in stars.size():
 		star_bits.append(str(int(stars[i])))
@@ -94,9 +126,81 @@ func wipe() -> void:
 	eaten = 0
 	max_size = 1
 	rounds = 0
+	music_on = true
+	sfx_on = true
+	play_time = 0.0
+	first_ad_shown = false
+	last_ad_play = 0.0
+	next_interstitial_round = 2
+	interstitial_gap_two = false
+	trial_skin = ""
+	last_daily = ""
+	daily_doubled = false
 	for i in best.size():
 		best[i] = 0
 		stars[i] = 0
+	save_game()
+
+func add_play_time(dt: float) -> void:
+	if dt <= 0.0:
+		return
+	play_time += dt
+
+func note_ad(at: float) -> void:
+	last_ad_play = at
+	save_game()
+
+func mark_interstitial(at: float) -> void:
+	first_ad_shown = true
+	last_ad_play = at
+	save_game()
+
+func advance_interstitial_schedule() -> void:
+	var gap := 2 if interstitial_gap_two else 3
+	interstitial_gap_two = not interstitial_gap_two
+	next_interstitial_round = rounds + gap
+	save_game()
+
+func today_key() -> String:
+	var d := Time.get_date_dict_from_system()
+	return "%04d-%02d-%02d" % [int(d.year), int(d.month), int(d.day)]
+
+func daily_claimed() -> bool:
+	return last_daily == today_key()
+
+func claim_daily() -> int:
+	if daily_claimed():
+		return 0
+	last_daily = today_key()
+	daily_doubled = false
+	coins += DAILY_COINS
+	save_game()
+	return DAILY_COINS
+
+func grant_daily_double() -> bool:
+	if not daily_claimed() or daily_doubled:
+		return false
+	daily_doubled = true
+	coins += DAILY_COINS
+	save_game()
+	return true
+
+func set_trial(id: String) -> void:
+	trial_skin = id
+	save_game()
+
+func clear_trial() -> void:
+	if trial_skin == "":
+		return
+	trial_skin = ""
+	save_game()
+
+func set_music(on: bool) -> void:
+	music_on = on
+	save_game()
+
+func set_sfx(on: bool) -> void:
+	sfx_on = on
 	save_game()
 
 func start_radius() -> float:
