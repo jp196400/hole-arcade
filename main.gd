@@ -3,9 +3,9 @@ extends Node3D
 
 const ROUND_TIME := 90.0
 const CITY_HALF := 40.0
-const SPEED := 0.06  # world units per screen pixel dragged
-const FOLLOW_RATE := 18.0  # exponential catch-up toward the finger
-const MAX_SPEED := 72.0  # world units per second; stops a touch spike from teleporting
+const DRAG_SENSITIVITY := 0.027  # world units per screen pixel; 45% of the previous 0.06
+const MAX_SPEED := 36.0  # world units per second; half of the previous 72
+const FOLLOW_RATE := 18.0  # exponential catch-up toward the finger; unchanged
 
 var hole_pos := Vector3.ZERO
 var drag_target := Vector3.ZERO
@@ -30,6 +30,7 @@ var over_panel: Control
 var over_lbl: Label
 var debug_lbl: Label
 var debug_on := false
+var speed_scale := 1.0  # ?speed=0.5 multiplies sensitivity and the cap
 var lit_mat: StandardMaterial3D
 var shown_score := -1
 var shown_sec := -1
@@ -37,6 +38,7 @@ var shown_sec := -1
 func _ready() -> void:
 	randomize()
 	debug_on = _query_debug()
+	speed_scale = _query_speed()
 	lit_mat = _mat(Color.WHITE)
 	lit_mat.vertex_color_use_as_albedo = true
 	_build_world()
@@ -52,11 +54,28 @@ func _mat(c: Color) -> StandardMaterial3D:
 func _no_shadow(g: GeometryInstance3D) -> void:
 	g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-func _query_debug() -> bool:
+func _web_search() -> String:
 	if not OS.has_feature("web"):
-		return false
-	var search := str(JavaScriptBridge.eval("window.location.search", true))
-	return search.find("debug=1") != -1
+		return ""
+	return str(JavaScriptBridge.eval("window.location.search", true))
+
+func _query_debug() -> bool:
+	return _web_search().find("debug=1") != -1
+
+func _query_speed() -> float:
+	var search := _web_search()
+	var key := "speed="
+	var at := search.find(key)
+	if at == -1:
+		return 1.0
+	var rest := search.substr(at + key.length())
+	var amp := rest.find("&")
+	if amp != -1:
+		rest = rest.substr(0, amp)
+	var value := float(rest)
+	if value <= 0.0:
+		return 1.0
+	return clampf(value, 0.05, 3.0)
 
 func _with_color(src: Mesh, color: Color) -> ArrayMesh:
 	var arrays := src.surface_get_arrays(0)
@@ -273,7 +292,7 @@ func _build_ui() -> void:
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenDrag and playing:
 		# Relative drag moves the target. The hole eases toward it in _process.
-		var d: Vector2 = event.relative * SPEED * (0.8 + hole_radius * 0.2)
+		var d: Vector2 = event.relative * DRAG_SENSITIVITY * speed_scale * (0.8 + hole_radius * 0.2)
 		drag_target += Vector3(d.x, 0, d.y)
 		drag_target.x = clampf(drag_target.x, -CITY_HALF, CITY_HALF)
 		drag_target.z = clampf(drag_target.z, -CITY_HALF, CITY_HALF)
@@ -287,7 +306,7 @@ func _move_hole(delta: float) -> void:
 		return
 	var alpha := 1.0 - exp(-FOLLOW_RATE * delta)
 	var step := to * alpha
-	var max_step := MAX_SPEED * (0.8 + hole_radius * 0.2) * delta
+	var max_step := MAX_SPEED * speed_scale * (0.8 + hole_radius * 0.2) * delta
 	if step.length() > max_step:
 		step = to.normalized() * max_step
 	# Never step past the target (large delta would otherwise overshoot the cap math).
@@ -355,7 +374,7 @@ func _update_debug(delta: float) -> void:
 	var bodies := int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS))
 	var fps := Engine.get_frames_per_second()
 	var win := DisplayServer.window_get_size()
-	debug_lbl.text = "FPS %d\nframe %.1f ms\nphysics %.2f ms\ndraws %d\nbodies %d\nview %dx%d" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y]
+	debug_lbl.text = "FPS %d\nframe %.1f ms\nphysics %.2f ms\ndraws %d\nbodies %d\nview %dx%d\nspeed x%.2f" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y, speed_scale]
 	if OS.has_feature("web"):
 		JavaScriptBridge.eval("window.__godotStats={fps:%d,frameMs:%.2f,physMs:%.2f,draws:%d,bodies:%d,vw:%d,vh:%d}" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y], true)
 
