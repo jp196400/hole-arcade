@@ -17,7 +17,7 @@ window/stretch/mode="viewport"
 window/stretch/aspect="expand"
 window/stretch/scale_mode="fractional"
 window/handheld/orientation=1
-window/dpi/allow_hidpi=false
+window/dpi/allow_hidpi=true
 
 [input_devices]
 pointing/emulate_touch_from_mouse=true

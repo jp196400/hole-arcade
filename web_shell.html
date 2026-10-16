@@ -9,7 +9,7 @@
 		<title>$GODOT_PROJECT_NAME</title>
 		<!-- build __BUILD_SHA__ -->
 		<script>
-		// Safari: block scroll/pinch, cap devicePixelRatio, and cache-bust
+		// Safari: block scroll/pinch and cache-bust
 		// wasm/pck/js so a new Pages deploy cannot reuse an old build.
 		(function () {
 			var BUILD = '__BUILD_SHA__';
@@ -56,9 +56,6 @@
 			document.addEventListener('gesturestart', block, { passive: false });
 			document.addEventListener('gesturechange', block, { passive: false });
 			document.addEventListener('gestureend', block, { passive: false });
-			try {
-				Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: function () { return 1; } });
-			} catch (err) {}
 			document.addEventListener('DOMContentLoaded', function () {
 				var el = document.getElementById('build-sha');
 				if (el && BUILD.indexOf('__') !== 0) {

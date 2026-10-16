@@ -5,7 +5,7 @@ const PATH := "user://hole_save.cfg"
 const SIZE_RADIUS := [0.50, 0.62, 0.74, 0.88, 1.02]
 const SPEED_MUL := [1.0, 1.08, 1.16, 1.25, 1.34]
 const EXTRA_TIME := [0.0, 15.0, 30.0, 45.0, 60.0]
-const UPGRADE_COST := [150, 360, 700, 1200]
+const UPGRADE_COST := [450, 1080, 2100, 3600]
 const DAILY_COINS := 100
 
 var coins := 0
@@ -369,7 +369,7 @@ func note_stars(index: int, count: int) -> Array:
 
 func unlock_all() -> void:
 	unlocked_level = 10
-	eaten = maxi(eaten, 3000)
+	eaten = maxi(eaten, 14000)
 	max_size = maxi(max_size, 6)
 	rounds = maxi(rounds, 40)
 	for i in stars.size():

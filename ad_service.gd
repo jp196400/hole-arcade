@@ -62,7 +62,7 @@ func _open(mode: String) -> void:
 	title.position = Vector2(70, 340)
 	title.size = Vector2(580, 60)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 40)
+	title.add_theme_font_size_override("font_size", 56)
 	title.add_theme_color_override("font_color", Color.WHITE)
 	_layer.add_child(title)
 	var body := Label.new()
@@ -74,16 +74,16 @@ func _open(mode: String) -> void:
 	body.size = Vector2(580, 120)
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body.add_theme_font_size_override("font_size", 24)
+	body.add_theme_font_size_override("font_size", 36)
 	body.add_theme_color_override("font_color", Color(0.82, 0.86, 0.95))
 	_layer.add_child(body)
 	if mode == "interstitial":
 		var btn := Button.new()
 		btn.text = "Skip in %d" % int(ceili(_left))
 		btn.disabled = true
-		btn.position = Vector2(160, 620)
-		btn.size = Vector2(400, 78)
-		btn.add_theme_font_size_override("font_size", 28)
+		btn.position = Vector2(80, 640)
+		btn.size = Vector2(560, 96)
+		btn.add_theme_font_size_override("font_size", 40)
 		btn.pressed.connect(_on_skip)
 		_layer.add_child(btn)
 		_skip = btn
@@ -93,14 +93,14 @@ func _open(mode: String) -> void:
 		_status.position = Vector2(70, 580)
 		_status.size = Vector2(580, 50)
 		_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_status.add_theme_font_size_override("font_size", 28)
+		_status.add_theme_font_size_override("font_size", 40)
 		_status.add_theme_color_override("font_color", Color.WHITE)
 		_layer.add_child(_status)
 		var close_x := Button.new()
 		close_x.text = "X"
-		close_x.position = Vector2(616, 64)
-		close_x.size = Vector2(72, 72)
-		close_x.add_theme_font_size_override("font_size", 32)
+		close_x.position = Vector2(600, 48)
+		close_x.size = Vector2(88, 88)
+		close_x.add_theme_font_size_override("font_size", 44)
 		close_x.pressed.connect(_on_forfeit)
 		_layer.add_child(close_x)
 	add_child(_layer)
