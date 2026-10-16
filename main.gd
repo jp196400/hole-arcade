@@ -6,8 +6,6 @@ const CITY_HALF := 40.0
 const SPEED := 0.06  # world units per screen pixel dragged
 const FOLLOW_RATE := 18.0  # exponential catch-up toward the finger
 const MAX_SPEED := 72.0  # world units per second; stops a touch spike from teleporting
-const PHYSICS_ON := 11.0
-const PHYSICS_OFF := 15.0
 
 var hole_pos := Vector3.ZERO
 var drag_target := Vector3.ZERO
@@ -30,12 +28,21 @@ var score_lbl: Label
 var timer_lbl: Label
 var over_panel: Control
 var over_lbl: Label
+var debug_lbl: Label
+var debug_on := false
+var lit_mat: StandardMaterial3D
+var shown_score := -1
+var shown_sec := -1
 
 func _ready() -> void:
 	randomize()
+	debug_on = _query_debug()
+	lit_mat = _mat(Color.WHITE)
+	lit_mat.vertex_color_use_as_albedo = true
 	_build_world()
 	_build_ui()
 	_spawn_city()
+	_prewarm_shaders()
 
 func _mat(c: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -44,6 +51,29 @@ func _mat(c: Color) -> StandardMaterial3D:
 
 func _no_shadow(g: GeometryInstance3D) -> void:
 	g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+func _query_debug() -> bool:
+	if not OS.has_feature("web"):
+		return false
+	var search := str(JavaScriptBridge.eval("window.location.search", true))
+	return search.find("debug=1") != -1
+
+func _with_color(src: Mesh, color: Color) -> ArrayMesh:
+	var arrays := src.surface_get_arrays(0)
+	var count := (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var cols := PackedColorArray()
+	cols.resize(count)
+	cols.fill(color)
+	arrays[Mesh.ARRAY_COLOR] = cols
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return out
+
+func _prewarm_shaders() -> void:
+	# Safari compiles WebGL2 programs on first draw. Draw once during load.
+	if DisplayServer.get_name() == "headless":
+		return
+	RenderingServer.force_draw(false)
 
 func _build_world() -> void:
 	var env := WorldEnvironment.new()
@@ -61,21 +91,13 @@ func _build_world() -> void:
 	var ground := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
 	pm.size = Vector2(CITY_HALF * 2 + 10, CITY_HALF * 2 + 10)
-	ground.mesh = pm
-	ground.material_override = _mat(Color(0.45, 0.5, 0.45))
+	ground.mesh = _with_color(pm, Color(0.45, 0.5, 0.45))
+	ground.material_override = lit_mat
 	_no_shadow(ground)
 	add_child(ground)
-	var floor_body := StaticBody3D.new()
-	var floor_shape := BoxShape3D.new()
-	floor_shape.size = Vector3(CITY_HALF * 2 + 10, 1.0, CITY_HALF * 2 + 10)
-	var floor_col := CollisionShape3D.new()
-	floor_col.shape = floor_shape
-	floor_col.position = Vector3(0, -0.5, 0)
-	floor_body.add_child(floor_col)
-	add_child(floor_body)
 	var roads := MeshInstance3D.new()
-	roads.mesh = _merged_roads()
-	roads.material_override = _mat(Color(0.25, 0.25, 0.28))
+	roads.mesh = _with_color(_merged_roads(), Color(0.25, 0.25, 0.28))
+	roads.material_override = lit_mat
 	_no_shadow(roads)
 	add_child(roads)
 	hole_mesh = MeshInstance3D.new()
@@ -89,8 +111,8 @@ func _build_world() -> void:
 	add_child(hole_mesh)
 	rim_mesh = MeshInstance3D.new()
 	var tm := TorusMesh.new(); tm.inner_radius = 0.95; tm.outer_radius = 1.08
-	rim_mesh.mesh = tm
-	rim_mesh.material_override = _mat(Color(0.2, 0.6, 1.0))
+	rim_mesh.mesh = _with_color(tm, Color(0.2, 0.6, 1.0))
+	rim_mesh.material_override = lit_mat
 	_no_shadow(rim_mesh)
 	rim_mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(rim_mesh)
@@ -180,13 +202,11 @@ func _spawn_city() -> void:
 			"height": height,
 			"points": k[3],
 			"color": col,
-			"body": null,
 		}
 		list.append(obj)
 		objects.append(obj)
 	for ki in kinds.size():
 		_build_kind_multimesh(ki)
-	_update_nearby_physics()
 
 func _build_kind_multimesh(ki: int) -> void:
 	var list: Array = kind_lists[ki]
@@ -203,16 +223,13 @@ func _build_kind_multimesh(ki: int) -> void:
 		mm.set_instance_color(obj.index, obj.color)
 	var inst := MultiMeshInstance3D.new()
 	inst.multimesh = mm
-	var mat := _mat(Color.WHITE)
-	mat.vertex_color_use_as_albedo = true
-	inst.material_override = mat
+	inst.material_override = lit_mat
 	inst.custom_aabb = AABB(Vector3(-CITY_HALF, -2, -CITY_HALF), Vector3(CITY_HALF * 2, 40, CITY_HALF * 2))
 	_no_shadow(inst)
 	add_child(inst)
 	kind_multimeshes[ki] = mm
 
 func _remove_prop(o: Dictionary) -> void:
-	_disable_body(o)
 	var list: Array = kind_lists[o.kind]
 	var mm: MultiMesh = kind_multimeshes[o.kind]
 	var i: int = o.index
@@ -226,46 +243,6 @@ func _remove_prop(o: Dictionary) -> void:
 	list.pop_back()
 	mm.visible_instance_count = list.size()
 	objects.erase(o)
-
-func _enable_body(o: Dictionary) -> void:
-	if o.body != null:
-		return
-	var body := StaticBody3D.new()
-	body.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_ON
-	body.transform = o.xform
-	var col := CollisionShape3D.new()
-	var size: float = o.size
-	var height: float = o.height
-	if size >= 3.0 or size == 1.1 or size == 1.8:
-		var box := BoxShape3D.new()
-		box.size = Vector3(size * 1.4, height, size * (1.4 if size >= 3.0 else 0.8))
-		col.shape = box
-	else:
-		var cyl := CylinderShape3D.new()
-		cyl.radius = size
-		cyl.height = height
-		col.shape = cyl
-	body.add_child(col)
-	add_child(body)
-	o.body = body
-
-func _disable_body(o: Dictionary) -> void:
-	var body: StaticBody3D = o.body
-	if body == null:
-		return
-	body.queue_free()
-	o.body = null
-
-func _update_nearby_physics() -> void:
-	var on_r := PHYSICS_ON + hole_radius
-	var off_r := PHYSICS_OFF + hole_radius
-	for o in objects:
-		var d := Vector2(o.pos.x - hole_pos.x, o.pos.z - hole_pos.z).length()
-		if o.body == null:
-			if d <= on_r:
-				_enable_body(o)
-		elif d >= off_r:
-			_disable_body(o)
 
 func _build_ui() -> void:
 	var ui := CanvasLayer.new(); add_child(ui)
@@ -286,6 +263,12 @@ func _build_ui() -> void:
 	over_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	over_lbl.add_theme_font_size_override("font_size", 56)
 	over_panel.add_child(over_lbl)
+	debug_lbl = Label.new()
+	debug_lbl.position = Vector2(16, 78)
+	debug_lbl.add_theme_font_size_override("font_size", 22)
+	debug_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	debug_lbl.visible = debug_on
+	ui.add_child(debug_lbl)
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenDrag and playing:
@@ -332,7 +315,6 @@ func _process(delta: float) -> void:
 			over_lbl.text = "Time's up!\nScore: %d\n\nTap to play again" % score
 			over_panel.visible = true
 		_move_hole(delta)
-		_update_nearby_physics()
 		_check_swallow()
 	var target := 1.0 + sqrt(float(score)) * 0.35
 	hole_radius = lerpf(hole_radius, target, 1.0 - exp(-3.0 * delta))
@@ -341,7 +323,9 @@ func _process(delta: float) -> void:
 	rim_mesh.position = hole_pos + Vector3(0, 0.03, 0)
 	rim_mesh.scale = Vector3(hole_radius, 0.3, hole_radius)
 	var fall_pull := 1.0 - exp(-6.0 * delta)
-	for f in falling.duplicate():
+	var fi := falling.size() - 1
+	while fi >= 0:
+		var f: Dictionary = falling[fi]
 		f.t += delta
 		var n: MeshInstance3D = f.node
 		n.position.x = lerpf(n.position.x, hole_pos.x, fall_pull)
@@ -350,22 +334,45 @@ func _process(delta: float) -> void:
 		n.rotation.x += delta * 3.0
 		n.scale = Vector3.ONE * maxf(0.05, 1.0 - f.t * 1.2)
 		if f.t > 0.8:
-			n.queue_free(); falling.erase(f)
+			n.queue_free()
+			falling.remove_at(fi)
+		fi -= 1
 	_smooth_camera(delta)
-	score_lbl.text = "Score: %d" % score
-	timer_lbl.text = "%d s" % ceili(time_left)
+	if score != shown_score:
+		shown_score = score
+		score_lbl.text = "Score: %d" % score
+	var sec := ceili(time_left)
+	if sec != shown_sec:
+		shown_sec = sec
+		timer_lbl.text = "%d s" % sec
+	if debug_on:
+		_update_debug(delta)
+
+func _update_debug(delta: float) -> void:
+	var frame_ms := delta * 1000.0
+	var phys_ms := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+	var draws := int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
+	var bodies := int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS))
+	var fps := Engine.get_frames_per_second()
+	var win := DisplayServer.window_get_size()
+	debug_lbl.text = "FPS %d\nframe %.1f ms\nphysics %.2f ms\ndraws %d\nbodies %d\nview %dx%d" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y]
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("window.__godotStats={fps:%d,frameMs:%.2f,physMs:%.2f,draws:%d,bodies:%d,vw:%d,vh:%d}" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y], true)
 
 func _check_swallow() -> void:
-	for o in objects.duplicate():
+	var i := objects.size() - 1
+	while i >= 0:
+		var o: Dictionary = objects[i]
 		var d := Vector2(o.pos.x - hole_pos.x, o.pos.z - hole_pos.z).length()
 		if o.size < hole_radius * 0.9 and d < hole_radius - o.size * 0.5:
 			var n := MeshInstance3D.new()
-			n.mesh = kind_meshes[o.kind]
-			n.material_override = _mat(o.color)
+			n.mesh = _with_color(kind_meshes[o.kind], o.color)
+			n.material_override = lit_mat
 			n.transform = o.xform
 			n.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 			_no_shadow(n)
 			add_child(n)
 			_remove_prop(o)
 			falling.append({"node": n, "t": 0.0})
-			score += o.points
+			score += int(o.points)
+		i -= 1
