@@ -20,6 +20,10 @@ var no_ads := false
 var eaten := 0
 var max_size := 1
 var rounds := 0
+var clears := 0
+var clean_clears := 0
+var sweeps := 0
+var rival_eats := 0
 var stars: Array = []
 var music_on := true
 var sfx_on := true
@@ -56,6 +60,13 @@ func load_game() -> void:
 	eaten = maxi(0, int(cf.get_value("player", "eaten", 0)))
 	max_size = clampi(int(cf.get_value("player", "max_size", 1)), 1, 6)
 	rounds = maxi(0, int(cf.get_value("player", "rounds", 0)))
+	if cf.has_section_key("player", "clears"):
+		clears = maxi(0, int(cf.get_value("player", "clears", 0)))
+	else:
+		clears = unlocked_level * 3
+	clean_clears = maxi(0, int(cf.get_value("player", "clean", 0)))
+	sweeps = maxi(0, int(cf.get_value("player", "sweeps", 0)))
+	rival_eats = maxi(0, int(cf.get_value("player", "rival_eats", 0)))
 	music_on = bool(cf.get_value("player", "music_on", true))
 	sfx_on = bool(cf.get_value("player", "sfx_on", true))
 	play_time = maxf(0.0, float(cf.get_value("player", "play_time", 0.0)))
@@ -93,6 +104,10 @@ func save_game() -> void:
 	cf.set_value("player", "eaten", eaten)
 	cf.set_value("player", "max_size", max_size)
 	cf.set_value("player", "rounds", rounds)
+	cf.set_value("player", "clears", clears)
+	cf.set_value("player", "clean", clean_clears)
+	cf.set_value("player", "sweeps", sweeps)
+	cf.set_value("player", "rival_eats", rival_eats)
 	cf.set_value("player", "music_on", music_on)
 	cf.set_value("player", "sfx_on", sfx_on)
 	cf.set_value("player", "play_time", play_time)
@@ -126,6 +141,10 @@ func wipe() -> void:
 	eaten = 0
 	max_size = 1
 	rounds = 0
+	clears = 0
+	clean_clears = 0
+	sweeps = 0
+	rival_eats = 0
 	music_on = true
 	sfx_on = true
 	play_time = 0.0
@@ -263,6 +282,18 @@ func progress_for(unlock: String) -> Dictionary:
 		need = int(unlock.substr(5))
 		cur = max_size
 		unit = "size"
+	elif unlock.begins_with("clean:"):
+		need = int(unlock.substr(6))
+		cur = clean_clears
+		unit = "clean"
+	elif unlock.begins_with("sweep:"):
+		need = int(unlock.substr(6))
+		cur = sweeps
+		unit = "sweeps"
+	elif unlock.begins_with("rivals:"):
+		need = int(unlock.substr(7))
+		cur = rival_eats
+		unit = "rivals"
 	need = maxi(need, 1)
 	return {
 		"cur": cur,
@@ -363,15 +394,50 @@ func note_stars(index: int, count: int) -> Array:
 	if n <= int(stars[index]):
 		return []
 	stars[index] = n
+	_refresh_unlocks()
 	var fresh := grant_play_skins()
 	save_game()
 	return fresh
 
+func note_rival_eat() -> Array:
+	rival_eats += 1
+	var fresh := grant_play_skins()
+	save_game()
+	return fresh
+
+func note_clear(clean: bool, sweep: bool) -> Array:
+	clears += 1
+	if clean:
+		clean_clears += 1
+	if sweep:
+		sweeps += 1
+	_refresh_unlocks()
+	var fresh := grant_play_skins()
+	save_game()
+	return fresh
+
+func _refresh_unlocks() -> void:
+	var earned := unlocked_level
+	var i := unlocked_level + 1
+	while i <= 10:
+		var prev := i - 1
+		var prev_stars := int(stars[prev]) if prev >= 0 and prev < stars.size() else 0
+		if prev_stars >= 3 and clears >= i * 3:
+			earned = i
+			i += 1
+		else:
+			break
+	unlocked_level = mini(earned, 10)
+
 func unlock_all() -> void:
 	unlocked_level = 10
-	eaten = maxi(eaten, 14000)
+	eaten = maxi(eaten, 20000)
 	max_size = maxi(max_size, 6)
 	rounds = maxi(rounds, 40)
+	clears = maxi(clears, 40)
+	clean_clears = maxi(clean_clears, 20)
+	sweeps = maxi(sweeps, 6)
+	rival_eats = maxi(rival_eats, 40)
 	for i in stars.size():
 		stars[i] = 3
 	for s in CatalogSafe.skins():
@@ -383,8 +449,6 @@ func unlock_all() -> void:
 func mark_cleared(index: int, score: int) -> Array:
 	if index >= 0 and index < best.size() and score > int(best[index]):
 		best[index] = score
-	if index + 1 > unlocked_level:
-		unlocked_level = mini(index + 1, 10)
 	var fresh := grant_play_skins()
 	save_game()
 	return fresh

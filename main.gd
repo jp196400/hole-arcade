@@ -1,9 +1,13 @@
 extends Node3D
 
 const ROUND_TIME := 120.0
-const CITY_HALF := 15.4
-const GRID_MIN := -15
-const GRID_MAX := 15
+const CITY_HALF := 24.6
+const GRID_MIN := -24
+const GRID_MAX := 24
+const PROP_CAP := 1500
+const CHUNK_N := 3
+const STATIC_CHUNKS := 9
+const SLOT_COUNT := 10
 const ROAD_STEP := 5
 const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?speed= multiplies this
 const JOY_DEADZONE := 14.0
@@ -329,6 +333,8 @@ var ad_hold := false
 var reward_intent := ""
 var reward_skin := ""
 var continue_used := false
+var rivals_bitten := {}
+var fadeables: Array = []
 var eaten_name := ""
 var round_eaten := ""
 var round_trial := ""
@@ -1260,7 +1266,7 @@ func _stage_showcase() -> void:
 		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
 		var xform := Transform3D(basis, p)
 		o.xform = xform
-		var mm: MultiMesh = kind_multimeshes[ki]
+		var mm := _mm_of(o)
 		if mm:
 			mm.set_instance_transform(int(o.index), xform)
 		_set_shadow(o)
@@ -1312,7 +1318,7 @@ func _ensure_models() -> void:
 			info.mesh = dressed
 			info.size = dressed.get_aabb().size
 			info.base = base
-		kind_lists.append([])
+		kind_lists.append(_empty_slots())
 		kind_meshes.append(info.mesh)
 		kind_native.append(info.size)
 		kind_base.append(float(info.base))
@@ -1323,7 +1329,7 @@ func _ensure_models() -> void:
 	for item in PropKitScript.defs():
 		var spec := ["", kit_mat, 1.0, 1.0, int(item.points), str(item.role), int(item.mover), 0.0]
 		prop_defs.append(spec)
-		kind_lists.append([])
+		kind_lists.append(_empty_slots())
 		kind_meshes.append(item.mesh)
 		kind_native.append(item.size)
 		kind_base.append(float(item.base))
@@ -1347,10 +1353,12 @@ func _add_city(n: Node) -> void:
 func _spawn_city() -> void:
 	seed(int(map.get("seed", 1)))
 	_ensure_models()
-	for list in kind_lists:
-		(list as Array).clear()
+	for slots in kind_lists:
+		for list in slots:
+			(list as Array).clear()
 	for i in kind_multimeshes.size():
 		kind_multimeshes[i] = null
+	fadeables.clear()
 	buckets.clear()
 	prop_seq = 0
 	_spawn_ground()
@@ -1409,22 +1417,26 @@ func _surface_at(layout: String, x: int, z: int) -> int:
 	if layout == "suburb":
 		return SURF_ROAD if x % 10 == 0 or z % 10 == 0 else SURF_GRASS
 	if layout == "park":
-		var path := absf(float(x) - sin(float(z) * 0.42) * 7.0)
+		var path := absf(float(x) - sin(float(z) * 0.22) * 11.0)
 		if path < 1.15:
 			return SURF_DIRT
-		var px := float(x) - 3.0
-		var pz := float(z) - 2.0
-		if px * px + pz * pz < 18.0 and path > 1.45:
+		var px := float(x) - 6.0
+		var pz := float(z) - 4.0
+		if px * px + pz * pz < 22.0 and path > 1.45:
 			return SURF_WATER
-		var qx := float(x) + 8.0
-		var qz := float(z) + 6.0
-		if qx * qx * 0.4 + qz * qz < 12.0 and path > 1.45:
+		var qx := float(x) + 14.0
+		var qz := float(z) + 10.0
+		if qx * qx * 0.35 + qz * qz < 16.0 and path > 1.45:
+			return SURF_WATER
+		var rx := float(x) + 4.0
+		var rz := float(z) - 16.0
+		if rx * rx + rz * rz < 14.0 and path > 1.45:
 			return SURF_WATER
 		return SURF_GRASS
 	if layout == "boardwalk":
-		if z >= 9:
+		if z >= 15:
 			return SURF_WATER
-		if z >= 5 and z <= 7:
+		if z >= 11 and z <= 13:
 			return SURF_WOOD
 		return SURF_SAND
 	if layout == "farm":
@@ -1434,31 +1446,31 @@ func _surface_at(layout: String, x: int, z: int) -> int:
 			return SURF_FIELD
 		return SURF_GRASS
 	if layout == "harbor":
-		var dock := absi(x) % 7 == 0 and z >= 1 and z <= 13
+		var dock := absi(x) % 7 == 0 and z >= 1 and z <= 18
 		if dock:
-			return SURF_DOCK if z >= 5 else SURF_CONCRETE
-		if z >= 6:
+			return SURF_DOCK if z >= 8 else SURF_CONCRETE
+		if z >= 10:
 			return SURF_WATER
 		return SURF_CONCRETE
 	if layout == "campus":
-		if absi(x) <= 4 and absi(z) <= 4:
+		if absi(x) <= 6 and absi(z) <= 6:
 			return SURF_CONCRETE
-		if x >= 6 and z <= -5:
-			var fx := float(x) - 10.5
-			var fz := float(z) + 10.0
+		if x >= 10 and z <= -8:
+			var fx := float(x) - 16.0
+			var fz := float(z) + 15.5
 			var ring := sqrt(fx * fx + fz * fz)
-			if ring > 3.1 and ring < 4.7:
+			if ring > 5.0 and ring < 7.4:
 				return SURF_TRACK
-			if ring <= 3.1:
+			if ring <= 5.0:
 				return SURF_GRASS
 		if absi(x) <= 1 or absi(z) <= 1:
 			return SURF_ROAD
 		return SURF_GRASS
 	if layout == "fair":
 		var radial := sqrt(float(x * x + z * z))
-		if radial > 6.2 and radial < 8.6:
+		if radial > 10.0 and radial < 13.8:
 			return SURF_DIRT
-		if absi(x) <= 2 and absi(z) <= 2:
+		if absi(x) <= 3 and absi(z) <= 3:
 			return SURF_CONCRETE
 		return SURF_GRASS
 	if layout == "industrial":
@@ -1481,141 +1493,161 @@ func _surf_f(x: float, z: float) -> int:
 func _tile_multimesh(mesh: Mesh, items: Array, has_yaw: bool, mat: Material) -> void:
 	if items.is_empty() or mat == null:
 		return
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = mesh
-	mm.instance_count = items.size()
+	var bins: Array = []
+	bins.resize(STATIC_CHUNKS)
+	for c in STATIC_CHUNKS:
+		bins[c] = []
 	for n in items.size():
-		var pos: Vector3
-		var yaw := 0.0
+		var pos := Vector3.ZERO
 		if has_yaw:
-			var item: Dictionary = items[n]
-			pos = item.at
-			yaw = float(item.yaw)
+			pos = (items[n] as Dictionary).at
 		else:
 			pos = items[n]
-		mm.set_instance_transform(n, Transform3D(Basis(Vector3.UP, yaw), pos))
-	var inst := MultiMeshInstance3D.new()
-	inst.multimesh = mm
-	inst.material_override = mat
-	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 2, -4, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, 20, CITY_HALF * 2 + 4))
-	_no_shadow(inst)
-	_add_city(inst)
+		(bins[_static_chunk(pos)] as Array).append(n)
+	for c in STATIC_CHUNKS:
+		var bin: Array = bins[c]
+		if bin.is_empty():
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = mesh
+		mm.instance_count = bin.size()
+		for n in bin.size():
+			var src: int = bin[n]
+			var pos: Vector3
+			var yaw := 0.0
+			if has_yaw:
+				var item: Dictionary = items[src]
+				pos = item.at
+				yaw = float(item.yaw)
+			else:
+				pos = items[src]
+			mm.set_instance_transform(n, Transform3D(Basis(Vector3.UP, yaw), pos))
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		inst.material_override = mat
+		inst.custom_aabb = _chunk_aabb(c, -4.0, 20.0)
+		_no_shadow(inst)
+		_add_city(inst)
 
 func _populate() -> void:
 	var layout := str(map.get("layout", "grid"))
 	if layout == "grid":
 		_fill_blocks(5, ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "tower_a", "tower_c"], 0.92, 1.55)
-		_scatter_on(["tree_small", "tree_large", "tree_simple"], 28, [SURF_GRASS], 1.0)
-		_scatter_on(["dumpster"], 14, [SURF_GRASS], 1.0)
-		_scatter_on(["bush", "planter"], 36, [SURF_GRASS], 1.0)
-		_edge_props(["hydrant", "bin", "cone", "sign", "mailbox", "crate", "barrier", "bike"], 2, 180)
-		_lamps(36)
-		_traffic(26, 30)
-		_crowd(78)
-		_scatter_on(["stall"], 8, [SURF_GRASS], 1.15)
-		_scatter_on(["truck"], 4, [SURF_GRASS], 1.0)
+		_scatter_on(["tree_small", "tree_large", "tree_simple"], 120, [SURF_GRASS], 1.0)
+		_scatter_on(["dumpster"], 48, [SURF_GRASS], 1.0)
+		_scatter_on(["bush", "planter"], 160, [SURF_GRASS], 1.0)
+		_scatter_on(["cone", "bin", "crate", "hydrant", "sign"], 160, [SURF_GRASS], 1.0)
+		_edge_props(["hydrant", "bin", "cone", "sign", "mailbox", "crate", "barrier", "bike"], 2, 400)
+		_lamps(64)
+		_traffic(36, 70)
+		_crowd(110)
+		_scatter_on(["stall"], 18, [SURF_GRASS], 1.15)
+		_scatter_on(["truck"], 10, [SURF_GRASS], 1.0)
 		_place_id("barn", Vector3(8.5, 0, -8.5), Vector3.ZERO, 0.4, 0.72, Color.WHITE, 40)
 	elif layout == "suburb":
-		_grid_ids(["house_a", "house_b", "house_c"], 3, [SURF_GRASS], 34, 1.0, true)
-		_scatter_on(["house_a"], 4, [SURF_GRASS], 1.65)
-		_scatter_on(["house_b"], 2, [SURF_GRASS], 2.05)
-		_scatter_on(["fence"], 56, [SURF_GRASS], 1.0)
-		_scatter_on(["mailbox"], 28, [SURF_GRASS], 1.0)
-		_scatter_on(["tree_small", "tree_large", "bush"], 48, [SURF_GRASS], 1.0)
-		_scatter_on(["planter"], 22, [SURF_GRASS], 1.0)
-		_scatter_on(["bike"], 18, [SURF_GRASS], 1.0)
-		_traffic(8, 22)
-		_crowd(34)
-		_lamps(16)
+		_grid_ids(["house_a", "house_b", "house_c"], 3, [SURF_GRASS], 110, 1.0, true)
+		_scatter_on(["house_a"], 12, [SURF_GRASS], 1.65)
+		_scatter_on(["house_b"], 6, [SURF_GRASS], 2.05)
+		_scatter_on(["fence"], 200, [SURF_GRASS], 1.0)
+		_scatter_on(["mailbox"], 90, [SURF_GRASS], 1.0)
+		_scatter_on(["tree_small", "tree_large", "bush"], 180, [SURF_GRASS], 1.0)
+		_scatter_on(["planter"], 80, [SURF_GRASS], 1.0)
+		_scatter_on(["bike"], 70, [SURF_GRASS], 1.0)
+		_traffic(12, 40)
+		_crowd(60)
+		_lamps(28)
 	elif layout == "park":
-		var barn_spots: Array = [Vector3(-9.0, 0, 8.0), Vector3(-11.0, 0, 3.5), Vector3(10.0, 0, -6.0), Vector3(5.5, 0, 10.0), Vector3(-4.0, 0, -11.0)]
+		var barn_spots: Array = [Vector3(-9.0, 0, 8.0), Vector3(-11.0, 0, 3.5), Vector3(10.0, 0, -6.0), Vector3(5.5, 0, 10.0), Vector3(-4.0, 0, -11.0), Vector3(16.0, 0, 12.0), Vector3(-16.0, 0, -8.0)]
 		for spot in barn_spots:
 			if _place_id("barn", spot, Vector3.ZERO, 0.6, 1.12, Color.WHITE, 52):
 				break
-		_scatter_on(["tree_small", "tree_large", "tree_simple"], 90, [SURF_GRASS], 1.0)
-		_scatter_on(["bush"], 56, [SURF_GRASS], 1.0)
-		_scatter_on(["bench"], 36, [SURF_GRASS, SURF_DIRT], 1.0)
-		_scatter_on(["picnic"], 28, [SURF_GRASS], 1.0)
-		_scatter_on(["bike"], 28, [SURF_GRASS, SURF_DIRT], 1.0)
-		_scatter_on(["bin", "sign"], 24, [SURF_DIRT], 1.0)
-		_scatter_on(["stall"], 8, [SURF_GRASS], 1.0)
-		_scatter_on(["stall"], 3, [SURF_GRASS], 1.55)
-		_scatter_on(["stall"], 2, [SURF_GRASS], 2.15)
-		_crowd(72)
-		_lamps(18)
+		_scatter_on(["tree_small", "tree_large", "tree_simple"], 260, [SURF_GRASS], 1.0)
+		_scatter_on(["bush"], 200, [SURF_GRASS], 1.0)
+		_scatter_on(["bench"], 110, [SURF_GRASS, SURF_DIRT], 1.0)
+		_scatter_on(["picnic"], 80, [SURF_GRASS], 1.0)
+		_scatter_on(["bike"], 60, [SURF_GRASS, SURF_DIRT], 1.0)
+		_scatter_on(["bin", "sign"], 50, [SURF_DIRT], 1.0)
+		_scatter_on(["stall"], 16, [SURF_GRASS], 1.0)
+		_scatter_on(["stall"], 6, [SURF_GRASS], 1.55)
+		_scatter_on(["stall"], 4, [SURF_GRASS], 2.15)
+		_crowd(100)
+		_lamps(32)
 	elif layout == "boardwalk":
-		_edge_props(["palm", "bin", "bike"], 2, 70)
-		_scatter_on(["umbrella"], 42, [SURF_SAND], 1.0)
-		_scatter_on(["chair"], 64, [SURF_SAND], 1.0)
-		_scatter_on(["surf"], 24, [SURF_SAND], 1.0)
-		_scatter_on(["stall"], 14, [SURF_WOOD, SURF_SAND], 1.0)
-		_scatter_on(["truck"], 5, [SURF_SAND], 1.0)
-		_scatter_on(["truck"], 2, [SURF_SAND], 1.4)
-		_scatter_on(["truck"], 1, [SURF_SAND], 1.75)
-		_scatter_on(["palm"], 28, [SURF_SAND], 1.0)
-		_crowd(62)
+		_edge_props(["palm", "bin", "bike"], 2, 180)
+		_scatter_on(["umbrella"], 140, [SURF_SAND], 1.0)
+		_scatter_on(["chair"], 200, [SURF_SAND], 1.0)
+		_scatter_on(["surf"], 80, [SURF_SAND], 1.0)
+		_scatter_on(["stall"], 40, [SURF_WOOD, SURF_SAND], 1.0)
+		_scatter_on(["truck"], 12, [SURF_SAND], 1.0)
+		_scatter_on(["truck"], 4, [SURF_SAND], 1.4)
+		_scatter_on(["truck"], 2, [SURF_SAND], 1.75)
+		_scatter_on(["palm"], 90, [SURF_SAND], 1.0)
+		_scatter_on(["bin", "bike", "sign"], 80, [SURF_SAND], 1.0)
+		_crowd(90)
 	elif layout == "farm":
-		_scatter_on(["barn"], 6, [SURF_GRASS, SURF_FIELD], 1.0)
-		_scatter_on(["barn"], 2, [SURF_FIELD], 1.28)
-		_scatter_on(["hay"], 64, [SURF_FIELD, SURF_GRASS], 1.0)
-		_scatter_on(["hay"], 16, [SURF_FIELD], 1.55)
-		_scatter_on(["animal"], 40, [SURF_GRASS, SURF_FIELD], 1.0, Color(0.92, 0.90, 0.86))
-		_scatter_on(["fence"], 60, [SURF_GRASS, SURF_FIELD], 1.0)
-		_scatter_on(["tractor"], 10, [SURF_DIRT, SURF_GRASS], 1.0)
-		_scatter_on(["tractor"], 3, [SURF_FIELD], 1.45)
-		_scatter_on(["tree_large"], 10, [SURF_GRASS], 1.0)
-		_crowd(18)
+		_scatter_on(["barn"], 16, [SURF_GRASS, SURF_FIELD], 1.0)
+		_scatter_on(["barn"], 6, [SURF_FIELD], 1.28)
+		_scatter_on(["hay"], 240, [SURF_FIELD, SURF_GRASS], 1.0)
+		_scatter_on(["hay"], 50, [SURF_FIELD], 1.55)
+		_scatter_on(["animal"], 160, [SURF_GRASS, SURF_FIELD], 1.0, Color(0.92, 0.90, 0.86))
+		_scatter_on(["fence"], 220, [SURF_GRASS, SURF_FIELD], 1.0)
+		_scatter_on(["tractor"], 28, [SURF_DIRT, SURF_GRASS], 1.0)
+		_scatter_on(["tractor"], 8, [SURF_FIELD], 1.45)
+		_scatter_on(["tree_large"], 48, [SURF_GRASS], 1.0)
+		_crowd(48)
 	elif layout == "harbor":
-		_scatter_on(["crate"], 48, [SURF_CONCRETE, SURF_DOCK], 1.0)
-		_scatter_on(["crate"], 26, [SURF_CONCRETE], 2.3, Color(0.35, 0.48, 0.68))
-		_scatter_on(["forklift"], 14, [SURF_CONCRETE, SURF_DOCK], 1.0)
-		_scatter_on(["tank"], 6, [SURF_CONCRETE], 1.0)
-		_scatter_on(["tank"], 2, [SURF_CONCRETE], 1.45)
-		_scatter_on(["tank"], 1, [SURF_CONCRETE], 1.8)
+		_scatter_on(["crate"], 180, [SURF_CONCRETE, SURF_DOCK], 1.0)
+		_scatter_on(["crate"], 80, [SURF_CONCRETE], 2.3, Color(0.35, 0.48, 0.68))
+		_scatter_on(["forklift"], 40, [SURF_CONCRETE, SURF_DOCK], 1.0)
+		_scatter_on(["tank"], 16, [SURF_CONCRETE], 1.0)
+		_scatter_on(["tank"], 5, [SURF_CONCRETE], 1.45)
+		_scatter_on(["tank"], 2, [SURF_CONCRETE], 1.8)
 		_boats()
-		_scatter_on(["pipe"], 22, [SURF_CONCRETE], 1.0)
-		_scatter_on(["crate", "bin", "cone", "barrier", "hydrant"], 70, [SURF_CONCRETE, SURF_DOCK], 1.0)
-		_crowd(40)
-		_lamps(16)
+		_scatter_on(["pipe"], 80, [SURF_CONCRETE], 1.0)
+		_scatter_on(["crate", "bin", "cone", "barrier", "hydrant"], 240, [SURF_CONCRETE, SURF_DOCK], 1.0)
+		_crowd(70)
+		_lamps(28)
 	elif layout == "campus":
 		_fill_blocks(8, ["wide", "bld_a", "bld_d", "house_a"], 1.0, 1.35)
-		_scatter_on(["bus"], 6, [SURF_ROAD, SURF_CONCRETE], 1.0)
-		_scatter_on(["bus"], 1, [SURF_CONCRETE], 1.35)
-		_scatter_on(["bus"], 1, [SURF_CONCRETE], 1.65)
-		_grid_ids(["locker"], 2, [SURF_CONCRETE, SURF_GRASS], 26, 1.0, false)
-		_scatter_on(["bench"], 20, [SURF_GRASS, SURF_CONCRETE], 1.0)
-		_scatter_on(["tree_small", "tree_large"], 26, [SURF_GRASS], 1.0)
-		_scatter_on(["bike"], 20, [SURF_GRASS, SURF_CONCRETE], 1.0)
-		_scatter_on(["bin", "cone", "sign", "bike"], 36, [SURF_CONCRETE, SURF_GRASS], 1.0)
-		_crowd(84)
-		_lamps(16)
+		_scatter_on(["bus"], 10, [SURF_ROAD, SURF_CONCRETE], 1.0)
+		_scatter_on(["bus"], 2, [SURF_CONCRETE], 1.35)
+		_scatter_on(["bus"], 2, [SURF_CONCRETE], 1.65)
+		_grid_ids(["locker"], 2, [SURF_CONCRETE, SURF_GRASS], 50, 1.0, false)
+		_scatter_on(["bench"], 80, [SURF_GRASS, SURF_CONCRETE], 1.0)
+		_scatter_on(["tree_small", "tree_large"], 140, [SURF_GRASS], 1.0)
+		_scatter_on(["bush", "planter"], 90, [SURF_GRASS], 1.0)
+		_scatter_on(["bike"], 60, [SURF_GRASS, SURF_CONCRETE], 1.0)
+		_scatter_on(["bin", "cone", "sign", "bike", "crate"], 200, [SURF_CONCRETE, SURF_GRASS], 1.0)
+		_crowd(110)
+		_lamps(28)
 	elif layout == "fair":
-		_scatter_on(["stall"], 40, [SURF_DIRT, SURF_GRASS], 1.0)
-		_scatter_on(["ride"], 6, [SURF_GRASS, SURF_CONCRETE], 1.0)
-		_scatter_on(["ride"], 2, [SURF_GRASS], 1.28)
-		_scatter_on(["bench", "bin", "sign"], 40, [SURF_GRASS, SURF_DIRT], 1.0)
-		_scatter_on(["cone"], 24, [SURF_DIRT], 1.0)
-		_crowd(100)
+		_scatter_on(["stall"], 160, [SURF_DIRT, SURF_GRASS], 1.0)
+		_scatter_on(["ride"], 18, [SURF_GRASS, SURF_CONCRETE], 1.0)
+		_scatter_on(["ride"], 6, [SURF_GRASS], 1.28)
+		_scatter_on(["bench", "bin", "sign"], 160, [SURF_GRASS, SURF_DIRT], 1.0)
+		_scatter_on(["cone"], 90, [SURF_DIRT], 1.0)
+		_scatter_on(["bike", "crate", "hydrant", "planter"], 160, [SURF_GRASS], 1.0)
+		_crowd(140)
 	elif layout == "industrial":
 		_fill_blocks(6, ["wide", "bld_b", "bld_c", "dumpster"], 1.0, 1.25)
-		_scatter_on(["tank"], 14, [SURF_CONCRETE], 1.0)
-		_scatter_on(["tank"], 3, [SURF_CONCRETE], 1.4)
-		_scatter_on(["tank"], 2, [SURF_CONCRETE], 1.75)
-		_scatter_on(["pipe"], 42, [SURF_CONCRETE], 1.0)
-		_scatter_on(["crate"], 22, [SURF_CONCRETE], 2.1, Color(0.55, 0.42, 0.28))
-		_scatter_on(["cone", "barrier", "crate", "bin", "hydrant"], 80, [SURF_CONCRETE, SURF_ROAD], 1.0)
-		_traffic(12, 18)
-		_crowd(36)
-		_lamps(18)
+		_scatter_on(["tank"], 36, [SURF_CONCRETE], 1.0)
+		_scatter_on(["tank"], 8, [SURF_CONCRETE], 1.4)
+		_scatter_on(["tank"], 4, [SURF_CONCRETE], 1.75)
+		_scatter_on(["pipe"], 140, [SURF_CONCRETE], 1.0)
+		_scatter_on(["crate"], 70, [SURF_CONCRETE], 2.1, Color(0.55, 0.42, 0.28))
+		_scatter_on(["cone", "barrier", "crate", "bin", "hydrant"], 240, [SURF_CONCRETE, SURF_ROAD], 1.0)
+		_traffic(16, 28)
+		_crowd(60)
+		_lamps(32)
 	else:
 		_fill_blocks(4, ["tower_a", "tower_c", "tower_a", "wide"], 1.05, 1.7)
-		_scatter_on(["tree_small"], 16, [SURF_CONCRETE], 1.0)
-		_scatter_on(["hydrant", "bin", "cone", "sign", "crate", "bike", "barrier", "mailbox"], 150, [SURF_CONCRETE], 1.0)
-		_edge_props(["hydrant", "bin", "cone", "sign", "crate"], 2, 80)
-		_lamps(28)
-		_traffic(22, 20)
-		_crowd(70)
+		_scatter_on(["tree_small"], 60, [SURF_CONCRETE], 1.0)
+		_scatter_on(["hydrant", "bin", "cone", "sign", "crate", "bike", "barrier", "mailbox"], 400, [SURF_CONCRETE], 1.0)
+		_edge_props(["hydrant", "bin", "cone", "sign", "crate"], 2, 200)
+		_lamps(48)
+		_traffic(32, 40)
+		_crowd(100)
 	_tint_animals()
 
 func _fill_blocks(step: int, ids: Array, grow_min: float, grow_max: float) -> void:
@@ -1640,9 +1672,10 @@ func _scatter_on(ids: Array, count: int, surfs: Array, grow: float, tint: Color 
 	var made := 0
 	var tries := 0
 	var limit := count * 28
-	while made < count and tries < limit and props.size() < 470:
+	while made < count and tries < limit and props.size() < PROP_CAP:
 		tries += 1
-		var p := Vector3(randf_range(-14.2, 14.2), 0, randf_range(-14.2, 14.2))
+		var span := CITY_HALF - 1.2
+		var p := Vector3(randf_range(-span, span), 0, randf_range(-span, span))
 		if not _surf_ok(p, surfs):
 			continue
 		if _layout_blocked(p):
@@ -1655,9 +1688,9 @@ func _scatter_on(ids: Array, count: int, surfs: Array, grow: float, tint: Color 
 func _grid_ids(ids: Array, step: int, surfs: Array, cap: int, grow: float, with_mail: bool) -> void:
 	var made := 0
 	var x := GRID_MIN + 2
-	while x < GRID_MAX - 1 and made < cap and props.size() < 470:
+	while x < GRID_MAX - 1 and made < cap and props.size() < PROP_CAP:
 		var z := GRID_MIN + 2
-		while z < GRID_MAX - 1 and made < cap and props.size() < 470:
+		while z < GRID_MAX - 1 and made < cap and props.size() < PROP_CAP:
 			var p := Vector3(float(x), 0, float(z))
 			if _surf_ok(p, surfs) and not _layout_blocked(p) and not _near_road(x, z):
 				var id := str(ids[absi(x + z) % ids.size()])
@@ -1674,7 +1707,7 @@ func _edge_props(ids: Array, step: int, cap: int) -> void:
 	var n := GRID_MAX - GRID_MIN + 1
 	for j in range(1, n - 1):
 		for i in range(1, n - 1):
-			if made >= cap or props.size() >= 470:
+			if made >= cap or props.size() >= PROP_CAP:
 				return
 			if (i + j * 3) % step != 0:
 				continue
@@ -1697,9 +1730,10 @@ func _crowd(count: int) -> void:
 	var ids := ["person_a", "person_b", "person_c"]
 	var made := 0
 	var tries := 0
-	while made < count and tries < count * 24 and props.size() < 470:
+	while made < count and tries < count * 24 and props.size() < PROP_CAP:
 		tries += 1
-		var p := Vector3(randf_range(-14.0, 14.0), 0, randf_range(-14.0, 14.0))
+		var span := CITY_HALF - 1.4
+		var p := Vector3(randf_range(-span, span), 0, randf_range(-span, span))
 		var surf := _surf_f(p.x, p.z)
 		if surf == SURF_WATER or surf == SURF_ROAD or _layout_blocked(p):
 			continue
@@ -1721,7 +1755,7 @@ func _traffic(moving: int, parked: int) -> void:
 	spots.shuffle()
 	var made := 0
 	for spot in spots:
-		if made >= moving + parked or props.size() >= 470:
+		if made >= moving + parked or props.size() >= PROP_CAP:
 			return
 		var p: Vector3 = spot
 		var along_x := _surf_f(p.x + 1.0, p.z) == SURF_ROAD
@@ -1800,9 +1834,9 @@ func _near_road(x: int, z: int) -> bool:
 func _layout_blocked(p: Vector3) -> bool:
 	var layout := str(map.get("layout", ""))
 	if layout == "campus":
-		var fx := p.x - 10.5
-		var fz := p.z + 10.0
-		if fx * fx + fz * fz < 10.0:
+		var fx := p.x - 16.0
+		var fz := p.z + 15.5
+		if fx * fx + fz * fz < 30.0:
 			return true
 	return false
 
@@ -1814,7 +1848,7 @@ func _overlap_foot(ki: int, sxz: float) -> float:
 	return maxf(native.x, native.z) * sxz * 0.45
 
 func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float = -1.0, grow: float = 1.0, tint: Color = Color.WHITE, points: int = -1, mover: int = -1) -> bool:
-	if props.size() >= 480 or not kind_by_id.has(id):
+	if props.size() >= PROP_CAP or not kind_by_id.has(id):
 		return false
 	if p.length() < 2.15:
 		return false
@@ -1842,13 +1876,23 @@ func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float =
 	return true
 
 func _overlaps(p: Vector3, foot: float, ignore_roles: Array = []) -> bool:
-	for o in props:
-		if str(o.role) in ignore_roles:
-			continue
-		var op: Vector3 = o.pos
-		var pad := 0.16 if foot >= 0.4 else 0.05
-		if Vector2(op.x - p.x, op.z - p.z).length() < float(o.size) * 0.72 + foot + pad:
-			return true
+	var reach := foot + 5.5
+	var x0 := int(floor((p.x - reach) / 4.0))
+	var x1 := int(floor((p.x + reach) / 4.0))
+	var z0 := int(floor((p.z - reach) / 4.0))
+	var z1 := int(floor((p.z + reach) / 4.0))
+	for gx in range(x0, x1 + 1):
+		for gz in range(z0, z1 + 1):
+			var key := gx * 128 + gz + 8192
+			if not buckets.has(key):
+				continue
+			for o in buckets[key]:
+				if str(o.role) in ignore_roles:
+					continue
+				var op: Vector3 = o.pos
+				var pad := 0.16 if foot >= 0.4 else 0.05
+				if Vector2(op.x - p.x, op.z - p.z).length() < float(o.size) * 0.72 + foot + pad:
+					return true
 	return false
 
 func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) -> void:
@@ -1881,9 +1925,11 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 		if palette.is_empty():
 			palette = [Color(0.76, 0.36, 0.36), Color(0.84, 0.70, 0.34), Color(0.36, 0.60, 0.64), Color(0.78, 0.48, 0.52), Color(0.40, 0.50, 0.72)]
 		tint = palette[randi() % palette.size()]
-	var list: Array = kind_lists[ki]
+	var chunk := _chunk_for(p, mover)
+	var list: Array = (kind_lists[ki] as Array)[chunk]
 	var o := {
 		"kind": ki,
+		"chunk": chunk,
 		"index": list.size(),
 		"shadow": -1,
 		"pos": p,
@@ -1913,29 +1959,78 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 	list.append(o)
 	props.append(o)
 	_bucket_add(o)
+	if bool(o.fadeable):
+		fadeables.append(o)
 	if mover != 0:
 		movers.append(o)
 
+func _empty_slots() -> Array:
+	var slots: Array = []
+	slots.resize(SLOT_COUNT)
+	for i in SLOT_COUNT:
+		slots[i] = []
+	return slots
+
+func _static_chunk(pos: Vector3) -> int:
+	var cell := (CITY_HALF * 2.0) / float(CHUNK_N)
+	var ix := clampi(int(floor((pos.x + CITY_HALF) / cell)), 0, CHUNK_N - 1)
+	var iz := clampi(int(floor((pos.z + CITY_HALF) / cell)), 0, CHUNK_N - 1)
+	return iz * CHUNK_N + ix
+
+func _chunk_for(pos: Vector3, mover: int) -> int:
+	if mover != 0:
+		return STATIC_CHUNKS
+	return _static_chunk(pos)
+
+func _chunk_aabb(c: int, y0: float, height: float) -> AABB:
+	if c >= STATIC_CHUNKS:
+		return AABB(Vector3(-CITY_HALF - 2, y0, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, height, CITY_HALF * 2 + 4))
+	var cell := (CITY_HALF * 2.0) / float(CHUNK_N)
+	var ix := c % CHUNK_N
+	var iz := int(c / CHUNK_N)
+	var margin := 4.0
+	var x0 := -CITY_HALF + float(ix) * cell - margin
+	var z0 := -CITY_HALF + float(iz) * cell - margin
+	return AABB(Vector3(x0, y0, z0), Vector3(cell + margin * 2.0, height, cell + margin * 2.0))
+
+func _mm_of(o: Dictionary) -> MultiMesh:
+	var slots = kind_multimeshes[int(o.kind)]
+	if slots == null or not (slots is Array):
+		return null
+	var chunk := int(o.get("chunk", 0))
+	var arr: Array = slots
+	if chunk < 0 or chunk >= arr.size():
+		return null
+	return arr[chunk] as MultiMesh
+
 func _build_kind_multimesh(ki: int) -> void:
-	var list: Array = kind_lists[ki]
-	if list.is_empty():
-		return
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = kind_meshes[ki]
-	mm.instance_count = list.size()
-	mm.visible_instance_count = list.size()
-	for obj in list:
-		mm.set_instance_transform(obj.index, obj.xform)
-		mm.set_instance_color(obj.index, obj.color)
-	var inst := MultiMeshInstance3D.new()
-	inst.multimesh = mm
-	inst.material_override = kind_mats[ki]
-	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 2, -6, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, 24, CITY_HALF * 2 + 4))
-	_no_shadow(inst)
-	_add_city(inst)
-	kind_multimeshes[ki] = mm
+	var slots: Array = kind_lists[ki]
+	var mms: Array = []
+	mms.resize(SLOT_COUNT)
+	var any := false
+	for c in SLOT_COUNT:
+		var list: Array = slots[c]
+		if list.is_empty():
+			mms[c] = null
+			continue
+		any = true
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = kind_meshes[ki]
+		mm.instance_count = list.size()
+		mm.visible_instance_count = list.size()
+		for obj in list:
+			mm.set_instance_transform(obj.index, obj.xform)
+			mm.set_instance_color(obj.index, obj.color)
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		inst.material_override = kind_mats[ki]
+		inst.custom_aabb = _chunk_aabb(c, -6.0, 36.0)
+		_no_shadow(inst)
+		_add_city(inst)
+		mms[c] = mm
+	kind_multimeshes[ki] = mms if any else null
 
 func _build_shadows() -> void:
 	var img := Image.create(48, 48, false, Image.FORMAT_RGBA8)
@@ -2012,19 +2107,21 @@ func _drop_shadow(o: Dictionary) -> void:
 func _unmesh(o: Dictionary) -> void:
 	if not bool(o.in_mesh):
 		return
-	var list: Array = kind_lists[int(o.kind)]
-	var mm: MultiMesh = kind_multimeshes[int(o.kind)]
+	var list: Array = (kind_lists[int(o.kind)] as Array)[int(o.chunk)]
+	var mm := _mm_of(o)
 	var i := int(o.index)
 	var last := list.size() - 1
 	if i != last:
 		var swapped: Dictionary = list[last]
 		swapped.index = i
 		list[i] = swapped
-		mm.set_instance_transform(i, swapped.xform)
-		mm.set_instance_color(i, swapped.color)
+		if mm:
+			mm.set_instance_transform(i, swapped.xform)
+			mm.set_instance_color(i, swapped.color)
 		swapped.faded = false
 	list.pop_back()
-	mm.visible_instance_count = list.size()
+	if mm:
+		mm.visible_instance_count = list.size()
 	o.in_mesh = false
 	_drop_shadow(o)
 
@@ -2749,16 +2846,25 @@ func _rival_aim(i: int) -> Vector3:
 	var food := Vector3.ZERO
 	var found := false
 	var food_d := 4.8
-	for o in props:
-		if not bool(o.alive) or bool(o.in_body):
-			continue
-		if not _fits_r(float(o.base), radius):
-			continue
-		var fd := _xz_dist(pos, o.pos)
-		if fd < food_d:
-			food_d = fd
-			food = o.pos
-			found = true
+	var x0 := int(floor((pos.x - food_d) / 4.0))
+	var x1 := int(floor((pos.x + food_d) / 4.0))
+	var z0 := int(floor((pos.z - food_d) / 4.0))
+	var z1 := int(floor((pos.z + food_d) / 4.0))
+	for gx in range(x0, x1 + 1):
+		for gz in range(z0, z1 + 1):
+			var key := gx * 128 + gz + 8192
+			if not buckets.has(key):
+				continue
+			for o in buckets[key]:
+				if not bool(o.alive) or bool(o.in_body):
+					continue
+				if not _fits_r(float(o.base), radius):
+					continue
+				var fd := _xz_dist(pos, o.pos)
+				if fd < food_d:
+					food_d = fd
+					food = o.pos
+					found = true
 	if found:
 		var bite := food - pos
 		if bite.length_squared() > 0.0001:
@@ -2836,6 +2942,8 @@ func _player_eats_rival(rival: Dictionary) -> void:
 	_burst(rival.pos, bonus, rival.color)
 	_feel(bonus, true, false)
 	_sfx("sting_win", 1.0, true)
+	rivals_bitten[str(rival.name)] = true
+	_announce_skins(Save.note_rival_eat())
 	_refresh_hud()
 	_kill_rival(rival)
 
@@ -2941,9 +3049,7 @@ func _fade_blockers() -> void:
 	var ab_len2 := ab.length_squared()
 	if ab_len2 < 0.04:
 		return
-	for o in props:
-		if not bool(o.get("fadeable", false)):
-			continue
+	for o in fadeables:
 		if not bool(o.in_mesh) or not bool(o.alive):
 			continue
 		var p: Vector3 = o.pos
@@ -2956,7 +3062,7 @@ func _fade_blockers() -> void:
 		if bool(o.faded) == block:
 			continue
 		o.faded = block
-		var mm: MultiMesh = kind_multimeshes[int(o.kind)]
+		var mm := _mm_of(o)
 		if mm == null:
 			continue
 		var tint: Color = o.color
@@ -3078,8 +3184,9 @@ func _tick_movers(delta: float) -> void:
 		var xform := Transform3D(basis, p)
 		o.xform = xform
 		if bool(o.in_mesh):
-			var mm: MultiMesh = kind_multimeshes[int(o.kind)]
-			mm.set_instance_transform(int(o.index), xform)
+			var mm := _mm_of(o)
+			if mm:
+				mm.set_instance_transform(int(o.index), xform)
 			_set_shadow(o)
 		_bucket_move(o)
 
@@ -3281,10 +3388,11 @@ func _drive_body(o: Dictionary) -> void:
 		_release_body(o, p)
 		return
 	if bool(o.in_mesh):
-		var mm: MultiMesh = kind_multimeshes[int(o.kind)]
+		var mm := _mm_of(o)
 		var xf := _visual_from_body(o, b)
 		o.xform = xf
-		mm.set_instance_transform(int(o.index), xf)
+		if mm:
+			mm.set_instance_transform(int(o.index), xf)
 		_set_shadow(o)
 
 func _burst(at: Vector3, points: int, tint: Color) -> void:
@@ -3348,8 +3456,9 @@ func _release_body(o: Dictionary, p: Vector3) -> void:
 		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
 		var xform := Transform3D(basis, grounded)
 		o.xform = xform
-		var mm: MultiMesh = kind_multimeshes[int(o.kind)]
-		mm.set_instance_transform(int(o.index), xform)
+		var mm := _mm_of(o)
+		if mm:
+			mm.set_instance_transform(int(o.index), xform)
 		_set_shadow(o)
 
 func _apply_theme(m: Dictionary) -> void:
@@ -3391,8 +3500,10 @@ func _clear_city() -> void:
 	active.clear()
 	props.clear()
 	movers.clear()
-	for list in kind_lists:
-		(list as Array).clear()
+	fadeables.clear()
+	for slots in kind_lists:
+		for list in slots:
+			(list as Array).clear()
 	for i in kind_multimeshes.size():
 		kind_multimeshes[i] = null
 	shadow_mm = null
@@ -3434,6 +3545,7 @@ func start_round(index: int) -> void:
 	_sync_level()
 	player_invuln = 2.8
 	continue_used = false
+	rivals_bitten = {}
 	round_eaten = ""
 	_arm_trial()
 	_close_continue_layer()
@@ -3521,6 +3633,7 @@ func _begin_play() -> void:
 	round_settled = false
 	player_invuln = 2.8
 	continue_used = false
+	rivals_bitten = {}
 	round_eaten = ""
 	_arm_trial()
 	_tally_clear()
@@ -3617,6 +3730,10 @@ func _finish_round(cleared: bool, eaten_by: String = "") -> void:
 	if cleared:
 		_announce_skins(Save.mark_cleared(map_index, score))
 	_announce_skins(Save.note_stars(map_index, round_stars))
+	if cleared:
+		var clean := not continue_used
+		var sweep := rivals_bitten.size() >= RIVAL_NAMES.size()
+		_announce_skins(Save.note_clear(clean, sweep))
 	over_lbl.text = "%s\n%s   +%d coins" % [_round_headline(), str(map.name), coins_earned]
 	_fill_result_bars()
 	result_anim = 0.0
@@ -3628,7 +3745,8 @@ func _finish_round(cleared: bool, eaten_by: String = "") -> void:
 	double_btn.visible = true
 	double_btn.disabled = false
 	double_btn.text = "Watch ad for 2x coins"
-	next_btn.visible = cleared and map_index + 1 < CatalogScript.maps().size()
+	var nxt_open := map_index + 1 < CatalogScript.maps().size() and map_index + 1 <= Save.unlocked_level
+	next_btn.visible = cleared and nxt_open
 	_set_chrome(false)
 	_set_match_hud(false)
 	over_panel.visible = true
@@ -4263,6 +4381,12 @@ func _lock_text(unlock: String) -> String:
 		return "Lock — %d/%d stars" % [cur, need]
 	if unlock.begins_with("size:"):
 		return "Lock — Reach size %d" % need
+	if unlock.begins_with("clean:"):
+		return "Lock — Untouched clears %d/%d" % [cur, need]
+	if unlock.begins_with("sweep:"):
+		return "Lock — Eat every rival %d/%d" % [cur, need]
+	if unlock.begins_with("rivals:"):
+		return "Lock — Rivals eaten %d/%d" % [cur, need]
 	return "Lock"
 
 func _on_try_skin(id: String) -> void:
@@ -4472,7 +4596,7 @@ func _level_card(index: int, m: Dictionary) -> Control:
 		color = color.lerp(Color(0.42, 0.48, 0.58), 0.28)
 		color.v = minf(color.v, 0.72)
 	var card := Button.new()
-	card.custom_minimum_size = Vector2(316, 240)
+	card.custom_minimum_size = Vector2(316, 292)
 	card.text = ""
 	card.disabled = locked
 	var box := _btn_box(color)
@@ -4508,12 +4632,32 @@ func _level_card(index: int, m: Dictionary) -> Control:
 	stars.draw.connect(_draw_star_row.bind(stars))
 	card.add_child(stars)
 	var sub := Label.new()
-	sub.position = Vector2(16, 192)
-	sub.size = Vector2(284, 40)
-	_style(sub, 26)
+	sub.position = Vector2(16, 188)
+	sub.size = Vector2(284, 64)
+	_style(sub, 24)
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if locked:
-		sub.text = "Lock — Clear level %d" % index
+	var gate := locked and index > 0 and index == Save.unlocked_level + 1
+	if gate:
+		var prev := int(Save.stars[index - 1]) if index - 1 < Save.stars.size() else 0
+		var need := index * 3
+		var have := mini(Save.clears, need)
+		sub.text = "3-star previous (%d/3)\nClears %d/%d" % [prev, have, need]
+		var ratio := minf(float(prev) / 3.0, float(Save.clears) / float(need))
+		var track := ColorRect.new()
+		track.position = Vector2(16, 258)
+		track.size = Vector2(284, 16)
+		track.color = Color(1, 1, 1, 0.35)
+		track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card.add_child(track)
+		var fill := ColorRect.new()
+		fill.position = Vector2(2, 2)
+		fill.size = Vector2(280.0 * clampf(ratio, 0.0, 1.0), 12)
+		fill.color = Color(1, 0.95, 0.55)
+		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		track.add_child(fill)
+	elif locked:
+		sub.text = "Locked"
 	else:
 		sub.text = str(m.get("blurb", ""))
 	card.add_child(sub)
