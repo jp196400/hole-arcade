@@ -27,17 +27,21 @@ const LEVEL_RADIUS := [0.50, 0.78, 1.05, 1.42, 1.9, 2.5]
 const GROUND_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_back;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform vec3 hole_center = vec3(0.0);
-uniform float hole_radius = 0.0;
+uniform vec3 openings[8];
+uniform float opening_r[8];
 uniform float paint_grass = 0.0;
 varying vec3 world_pos;
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 void fragment() {
-	vec2 d = world_pos.xz - hole_center.xz;
-	if (hole_radius > 0.0 && dot(d, d) < hole_radius * hole_radius) {
-		discard;
+	for (int i = 0; i < 8; i++) {
+		if (opening_r[i] > 0.0) {
+			vec2 d = world_pos.xz - openings[i].xz;
+			if (dot(d, d) < opening_r[i] * opening_r[i]) {
+				discard;
+			}
+		}
 	}
 	vec3 col = texture(albedo_tex, UV).rgb;
 	float luma = dot(col, vec3(0.299, 0.587, 0.114));
@@ -78,6 +82,12 @@ void fragment() {
 	ALBEDO = mix(tex, candy, 0.84);
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.0;
+	if (COLOR.a < 0.98) {
+		float dots = fract(sin(dot(floor(FRAGCOORD.xy * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
+		if (dots > COLOR.a) {
+			discard;
+		}
+	}
 }
 """
 const PIT_SHADER := """shader_type spatial;
@@ -156,6 +166,16 @@ var next_fill: ColorRect
 var combo_lbl: Label
 var size_lbl: Label
 var round_stars := 0
+var rivals: Array = []
+var rival_mm: MultiMesh
+var rival_labels: Array = []
+var rival_rings: Array = []
+var player_invuln := 0.0
+var shake_t := 0.0
+var shake_mag := 0.0
+var rim_pulse := 0.0
+var opening_centers := PackedVector3Array()
+var opening_radii := PackedFloat32Array()
 var kind_multimeshes: Array = []
 var kind_mats: Array = []
 var pool: Array = []
@@ -224,6 +244,31 @@ var unlock_body: Label
 var unlock_ok: Button
 var unlock_queue: Array = []
 const PLAYER_NAME := "You"
+const RIVAL_NAMES := ["Midge", "Puddle", "Niblet", "Scoot", "Bramble", "Tumble"]
+const RIVAL_COLORS := [
+	Color(1.0, 0.32, 0.38), Color(0.25, 0.75, 0.95), Color(0.95, 0.72, 0.18),
+	Color(0.35, 0.9, 0.42), Color(0.62, 0.38, 0.95), Color(1.0, 0.48, 0.18),
+]
+const RIVAL_RADIUS := [0.40, 0.58, 0.36, 0.78, 0.46, 0.66]
+const RIVAL_SPEED := [2.55, 2.7, 2.9, 2.4, 2.65, 2.5]
+const RIVAL_PIT_SHADER := """shader_type spatial;
+render_mode unshaded, cull_disabled;
+varying vec4 vcol;
+varying float rimness;
+void vertex() {
+	vcol = COLOR;
+	rimness = VERTEX.y > 0.0 ? 1.0 : 0.0;
+}
+void fragment() {
+	if (rimness > 0.5) {
+		ALBEDO = vcol.rgb;
+		EMISSION = vcol.rgb * 0.55;
+	} else {
+		ALBEDO = vec3(0.015, 0.016, 0.02);
+		EMISSION = vec3(0.0);
+	}
+}
+"""
 const CatalogScript = preload("res://catalog.gd")
 
 func _ready() -> void:
@@ -410,15 +455,13 @@ func _build_world() -> void:
 	ground_mat = ShaderMaterial.new()
 	ground_mat.shader = gshader
 	ground_mat.set_shader_parameter("albedo_tex", tex_roads)
-	ground_mat.set_shader_parameter("hole_center", Vector3.ZERO)
-	ground_mat.set_shader_parameter("hole_radius", hole_radius)
 	ground_mat.set_shader_parameter("paint_grass", 0.0)
 	grass_mat = ShaderMaterial.new()
 	grass_mat.shader = gshader
 	grass_mat.set_shader_parameter("albedo_tex", tex_roads)
-	grass_mat.set_shader_parameter("hole_center", Vector3.ZERO)
-	grass_mat.set_shader_parameter("hole_radius", hole_radius)
 	grass_mat.set_shader_parameter("paint_grass", 1.0)
+	opening_centers.resize(8)
+	opening_radii.resize(8)
 	hole_mesh = MeshInstance3D.new()
 	hole_mesh.mesh = _build_pit_mesh()
 	var pshader := Shader.new()
@@ -430,6 +473,7 @@ func _build_world() -> void:
 	_no_shadow(hole_mesh)
 	hole_mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(hole_mesh)
+	_build_rival_view()
 	_build_pop_fx()
 	cam = Camera3D.new()
 	cam.fov = CAM_FOV
@@ -537,13 +581,46 @@ func _camera_offset(dist: float) -> Vector3:
 func _cam_dist_for(radius: float) -> float:
 	return CAM_BASE + radius * CAM_PER_RADIUS
 
+func _build_rival_view() -> void:
+	var sh := Shader.new()
+	sh.code = RIVAL_PIT_SHADER
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	rival_mm = MultiMesh.new()
+	rival_mm.transform_format = MultiMesh.TRANSFORM_3D
+	rival_mm.use_colors = true
+	rival_mm.mesh = hole_mesh.mesh
+	rival_mm.instance_count = RIVAL_NAMES.size()
+	var inst := MultiMeshInstance3D.new()
+	inst.multimesh = rival_mm
+	inst.material_override = mat
+	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 4, -6, -CITY_HALF - 4), Vector3(CITY_HALF * 2 + 8, 16, CITY_HALF * 2 + 8))
+	_no_shadow(inst)
+	add_child(inst)
+	for i in RIVAL_NAMES.size():
+		rival_mm.set_instance_transform(i, Transform3D(Basis(), Vector3(0, -30, 0)))
+		rival_mm.set_instance_color(i, RIVAL_COLORS[i])
+
 func _build_rim() -> void:
-	rim_root = Node3D.new()
-	rim_root.name = "Rim"
-	add_child(rim_root)
+	var made := _make_ring("Rim")
+	rim_root = made.root
+	rim_bodies = made.bodies
+	rim_radius = -1.0
+	_layout_ring(rim_bodies, 0.5)
+	rim_radius = 0.5
+	for i in RIVAL_NAMES.size():
+		var ring := _make_ring("RivalRim%d" % i)
+		ring.radius = -1.0
+		rival_rings.append(ring)
+
+func _make_ring(ring_name: String) -> Dictionary:
+	var root := Node3D.new()
+	root.name = ring_name
+	add_child(root)
 	var mat := PhysicsMaterial.new()
 	mat.friction = 0.45
 	mat.bounce = 0.0
+	var bodies: Array = []
 	for _i in RIM_COUNT:
 		var body := StaticBody3D.new()
 		body.collision_layer = RIM_MASK
@@ -552,38 +629,49 @@ func _build_rim() -> void:
 		var cs := CollisionShape3D.new()
 		cs.shape = BoxShape3D.new()
 		body.add_child(cs)
-		rim_root.add_child(body)
-		rim_bodies.append(body)
-	_layout_rim(0.5)
+		root.add_child(body)
+		bodies.append(body)
+	return {"root": root, "bodies": bodies, "radius": -1.0}
 
-func _layout_rim(radius: float) -> void:
+func _layout_ring(bodies: Array, radius: float) -> void:
 	# Thin ground shelf around the opening. The inner edge is the fulcrum;
 	# there is no tall wall, so a body tips over the rim and tumbles in.
 	var reach := maxf(1.8, radius * 1.5)
 	var height := 0.14
 	var mid := radius + reach * 0.5
 	var chord := maxf(TAU * radius / float(RIM_COUNT) * 1.32, 0.16)
-	for i in RIM_COUNT:
+	for i in bodies.size():
 		var ang := TAU * float(i) / float(RIM_COUNT)
-		var body: StaticBody3D = rim_bodies[i]
+		var body: StaticBody3D = bodies[i]
 		var cs := body.get_child(0) as CollisionShape3D
 		var box := cs.shape as BoxShape3D
 		box.size = Vector3(reach, height, chord)
 		var outward := Vector3(cos(ang), 0.0, sin(ang))
 		var tangent := Vector3(-sin(ang), 0.0, cos(ang))
 		body.transform = Transform3D(Basis(outward, Vector3.UP, tangent), outward * mid + Vector3(0, -height * 0.5, 0))
-	rim_radius = radius
+
+func _place_ring(ring: Dictionary, radius: float, at: Vector3, enabled: bool) -> void:
+	var root: Node3D = ring.root
+	if not enabled or radius < 0.05:
+		root.position = Vector3(0, -40, 0)
+		return
+	root.global_position = Vector3(at.x, 0.0, at.z)
+	if absf(radius - float(ring.radius)) > 0.015:
+		_layout_ring(ring.bodies, radius)
+		ring.radius = radius
 
 func _sync_rim() -> void:
 	if rim_root == null:
 		return
-	if not playing:
-		rim_root.position = Vector3(0, -40, 0)
-		return
-	var r := hole_open if hole_open > 0.05 else hole_radius
-	rim_root.global_position = Vector3(hole_pos.x, 0.0, hole_pos.z)
-	if absf(r - rim_radius) > 0.015:
-		_layout_rim(r)
+	var player_ring := {"root": rim_root, "bodies": rim_bodies, "radius": rim_radius}
+	var show_player := playing and hole_open > 0.05
+	_place_ring(player_ring, hole_open, hole_pos, show_player)
+	rim_radius = float(player_ring.radius)
+	for i in rival_rings.size():
+		var alive := playing and i < rivals.size() and bool(rivals[i].alive)
+		var rad := float(rivals[i].shown) if alive else 0.0
+		var at: Vector3 = rivals[i].pos if alive else Vector3.ZERO
+		_place_ring(rival_rings[i], rad, at, alive and rad > 0.05)
 
 func _make_pool() -> void:
 	for _i in POOL:
@@ -1044,6 +1132,8 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 		"in_body": false,
 		"alive": true,
 		"body": null,
+		"sink": -1,
+		"faded": false,
 	}
 	list.append(o)
 	props.append(o)
@@ -1155,6 +1245,7 @@ func _unmesh(o: Dictionary) -> void:
 		list[i] = swapped
 		mm.set_instance_transform(i, swapped.xform)
 		mm.set_instance_color(i, swapped.color)
+		swapped.faded = false
 	list.pop_back()
 	mm.visible_instance_count = list.size()
 	o.in_mesh = false
@@ -1226,6 +1317,15 @@ func _build_ui() -> void:
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_style(name_lbl, 22)
 	ui.add_child(name_lbl)
+	for i in RIVAL_NAMES.size():
+		var tag := Label.new()
+		tag.visible = false
+		tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		tag.size = Vector2(180, 40)
+		_style(tag, 26)
+		tag.modulate = RIVAL_COLORS[i]
+		ui.add_child(tag)
+		rival_labels.append(tag)
 	sha_lbl = Label.new()
 	sha_lbl.anchor_left = 1.0
 	sha_lbl.anchor_right = 1.0
@@ -1497,6 +1597,11 @@ func _smooth_camera(delta: float) -> void:
 	cam.position = cam.position.lerp(want_pos, 1.0 - exp(-5.0 * delta))
 	cam_look = cam_look.lerp(hole_pos, 1.0 - exp(-6.0 * delta))
 	cam.look_at(cam_look, Vector3.UP)
+	if shake_t > 0.0:
+		shake_t = maxf(0.0, shake_t - delta)
+		var kick := shake_mag * clampf(shake_t / 0.32, 0.0, 1.0)
+		cam.position += cam.basis.x * sin(shake_t * 74.0) * kick
+		cam.position += cam.basis.y * cos(shake_t * 61.0) * kick * 0.55
 
 func _fits(size: float) -> bool:
 	return size < hole_radius * FIT_RATIO
@@ -1513,6 +1618,9 @@ func _sync_level() -> void:
 		level = n
 		pop_t = POP_TIME
 		size_banner_t = 1.15
+		rim_pulse = 0.2
+		if size_lbl:
+			size_lbl.text = "SIZE UP!"
 	hole_radius = maxf(LEVEL_RADIUS[level], _start_radius())
 	hole_open = maxf(hole_open, hole_radius)
 	if grew:
@@ -1588,6 +1696,347 @@ func _tick_feedback(delta: float) -> void:
 					close = true
 			so_close_lbl.visible = close and eased > 0.72
 
+func _spawn_rivals() -> void:
+	rivals.clear()
+	var spots: Array = [
+		Vector3(1.1, 0.0, -3.2), Vector3(-1.5, 0.0, -4.4), Vector3(2.6, 0.0, -1.8),
+		Vector3(-3.4, 0.0, 2.2), Vector3(4.8, 0.0, 0.6), Vector3(-0.6, 0.0, 6.4),
+	]
+	for i in RIVAL_NAMES.size():
+		var ang := TAU * float(i) / float(RIVAL_NAMES.size()) + 0.35
+		var spot: Vector3 = spots[i]
+		rivals.append({
+			"name": RIVAL_NAMES[i],
+			"color": RIVAL_COLORS[i],
+			"pos": spot,
+			"radius": RIVAL_RADIUS[i],
+			"shown": RIVAL_RADIUS[i],
+			"speed": RIVAL_SPEED[i],
+			"score": 0,
+			"alive": true,
+			"respawn": 0.0,
+			"wander": ang + 1.7,
+			"aim": Vector3(cos(ang + 2.0), 0.0, sin(ang + 2.0)),
+			"think": randf() * 0.15,
+			"pulse": 0.0,
+		})
+
+func _tick_rivals(delta: float) -> void:
+	if not playing:
+		return
+	for i in rivals.size():
+		var rival: Dictionary = rivals[i]
+		if not bool(rival.alive):
+			rival.respawn = float(rival.respawn) - delta
+			if float(rival.respawn) <= 0.0:
+				_respawn_rival(rival)
+			continue
+		rival.think = float(rival.think) - delta
+		if float(rival.think) <= 0.0:
+			rival.think = 0.22
+			rival.aim = _rival_aim(i)
+		var aim: Vector3 = rival.aim
+		if aim.length_squared() < 0.0001:
+			aim = Vector3(1.0, 0.0, 0.0)
+		var pos: Vector3 = rival.pos
+		pos += aim.normalized() * float(rival.speed) * delta
+		pos = _separate_hole(pos, float(rival.radius), i)
+		var lim := CITY_HALF - 1.3
+		pos.x = clampf(pos.x, -lim, lim)
+		pos.z = clampf(pos.z, -lim, lim)
+		rival.pos = pos
+		rival.shown = lerpf(float(rival.shown), float(rival.radius), 1.0 - exp(-6.0 * delta))
+		if float(rival.pulse) > 0.0:
+			rival.pulse = maxf(0.0, float(rival.pulse) - delta)
+	_resolve_eats()
+
+func _rival_aim(i: int) -> Vector3:
+	var rival: Dictionary = rivals[i]
+	var pos: Vector3 = rival.pos
+	var radius := float(rival.radius)
+	var flee_from := Vector3.ZERO
+	var fleeing := false
+	var flee_d := 999.0
+	if hole_radius > radius * 1.12:
+		var d := _xz_dist(pos, hole_pos)
+		if d < hole_radius + 3.4 and d < flee_d:
+			flee_d = d
+			flee_from = hole_pos
+			fleeing = true
+	for j in rivals.size():
+		if j == i or not bool(rivals[j].alive):
+			continue
+		var other: Dictionary = rivals[j]
+		if float(other.radius) <= radius * 1.12:
+			continue
+		var od := _xz_dist(pos, other.pos)
+		if od < float(other.radius) + 3.4 and od < flee_d:
+			flee_d = od
+			flee_from = other.pos
+			fleeing = true
+	if fleeing:
+		var away := pos - flee_from
+		if away.length_squared() < 0.01:
+			away = Vector3(1.0, 0.0, 0.0)
+		return away.normalized()
+	var chase_at := Vector3.ZERO
+	var chasing := false
+	var chase_d := 999.0
+	if player_invuln <= 0.0 and radius > hole_radius * 1.15:
+		var pd := _xz_dist(pos, hole_pos)
+		if pd < 6.8 and pd < chase_d:
+			chase_d = pd
+			chase_at = hole_pos
+			chasing = true
+	for j in rivals.size():
+		if j == i or not bool(rivals[j].alive):
+			continue
+		var other2: Dictionary = rivals[j]
+		if radius <= float(other2.radius) * 1.15:
+			continue
+		var cd := _xz_dist(pos, other2.pos)
+		if cd < 6.8 and cd < chase_d:
+			chase_d = cd
+			chase_at = other2.pos
+			chasing = true
+	if chasing:
+		var toward := chase_at - pos
+		if toward.length_squared() > 0.0001:
+			return toward.normalized()
+	var food := Vector3.ZERO
+	var found := false
+	var food_d := 8.5
+	for o in props:
+		if not bool(o.alive) or bool(o.in_body):
+			continue
+		if not _fits_r(float(o.base), radius):
+			continue
+		var fd := _xz_dist(pos, o.pos)
+		if fd < food_d:
+			food_d = fd
+			food = o.pos
+			found = true
+	if found:
+		var bite := food - pos
+		if bite.length_squared() > 0.0001:
+			return bite.normalized()
+	rival.wander = float(rival.wander) + randf_range(-0.9, 0.9)
+	return Vector3(cos(float(rival.wander)), 0.0, sin(float(rival.wander)))
+
+func _separate_hole(pos: Vector3, radius: float, ignore: int) -> Vector3:
+	var out := pos
+	if _xz_dist(out, hole_pos) < radius + hole_radius + 0.35:
+		var push := out - hole_pos
+		if push.length_squared() < 0.0001:
+			push = Vector3(1.0, 0.0, 0.0)
+		out = hole_pos + push.normalized() * (radius + hole_radius + 0.4)
+	for j in rivals.size():
+		if j == ignore or not bool(rivals[j].alive):
+			continue
+		var other: Dictionary = rivals[j]
+		var need := radius + float(other.radius) + 0.35
+		if _xz_dist(out, other.pos) < need:
+			var push2: Vector3 = out - other.pos
+			if push2.length_squared() < 0.0001:
+				push2 = Vector3(0.0, 0.0, 1.0)
+			out = other.pos + push2.normalized() * (need + 0.05)
+	return out
+
+func _resolve_eats() -> void:
+	if not playing:
+		return
+	var i := 0
+	while i < rivals.size() and playing:
+		var rival: Dictionary = rivals[i]
+		if bool(rival.alive):
+			var dist := _xz_dist(hole_pos, rival.pos)
+			if hole_radius > float(rival.radius) * 1.12 and dist < hole_radius * 0.72:
+				_player_eats_rival(rival)
+			elif player_invuln <= 0.0 and float(rival.radius) > hole_radius * 1.12 and dist < float(rival.radius) * 0.72:
+				_rival_eats_player(rival)
+		i += 1
+	for a in rivals.size():
+		if not playing:
+			return
+		var left: Dictionary = rivals[a]
+		if not bool(left.alive):
+			continue
+		for b in range(a + 1, rivals.size()):
+			var right: Dictionary = rivals[b]
+			if not bool(right.alive):
+				continue
+			var gap := _xz_dist(left.pos, right.pos)
+			if float(left.radius) > float(right.radius) * 1.12 and gap < float(left.radius) * 0.72:
+				_rival_grow(left, 28 + int(float(right.radius) * 20.0))
+				left.pulse = 0.18
+				_kill_rival(right)
+			elif float(right.radius) > float(left.radius) * 1.12 and gap < float(right.radius) * 0.72:
+				_rival_grow(right, 28 + int(float(left.radius) * 20.0))
+				right.pulse = 0.18
+				_kill_rival(left)
+
+func _player_eats_rival(rival: Dictionary) -> void:
+	var bonus := 42 + int(float(rival.radius) * 36.0)
+	if combo_left > 0.0:
+		combo += 1
+	else:
+		combo = 1
+	combo_left = COMBO_WINDOW
+	bonus += maxi(combo - 1, 0)
+	score += bonus
+	_sync_level()
+	_burst(rival.pos, bonus, rival.color)
+	_feel(bonus, true)
+	_refresh_hud()
+	_kill_rival(rival)
+
+func _rival_eats_player(rival: Dictionary) -> void:
+	if level <= 0:
+		_finish_round(false, str(rival.name))
+		return
+	level -= 1
+	score = LEVEL_SCORE[level]
+	hole_radius = maxf(LEVEL_RADIUS[level], _start_radius())
+	shown_radius = hole_radius
+	hole_open = hole_radius
+	var away: Vector3 = hole_pos - rival.pos
+	if away.length_squared() < 0.01:
+		away = Vector3(1.0, 0.0, 0.0)
+	var kicked: Vector3 = rival.pos + away.normalized() * (float(rival.radius) + hole_radius + 1.5)
+	var lim := CITY_HALF - 1.2
+	hole_pos = Vector3(clampf(kicked.x, -lim, lim), 0.0, clampf(kicked.z, -lim, lim))
+	player_invuln = 2.6
+	shake_t = 0.42
+	shake_mag = 0.28
+	if size_lbl:
+		size_lbl.text = "Eaten!"
+	size_banner_t = 1.2
+	_feel(18, true)
+	_refresh_hud()
+
+func _kill_rival(rival: Dictionary) -> void:
+	rival.alive = false
+	rival.respawn = 2.1
+	rival.pulse = 0.0
+
+func _respawn_rival(rival: Dictionary) -> void:
+	var ang := randf() * TAU
+	rival.pos = Vector3(cos(ang) * 11.0, 0.0, sin(ang) * 11.0)
+	rival.radius = 0.38
+	rival.shown = 0.38
+	rival.score = 0
+	rival.alive = true
+	rival.wander = ang
+	rival.aim = Vector3(cos(ang), 0.0, sin(ang))
+
+func _rival_grow(rival: Dictionary, points: int) -> void:
+	rival.score = int(rival.score) + points
+	var n := 0
+	while n + 1 < LEVEL_SCORE.size() and int(rival.score) >= LEVEL_SCORE[n + 1]:
+		n += 1
+	var rad := float(LEVEL_RADIUS[n])
+	if rad > float(rival.radius):
+		rival.radius = rad
+		rival.pulse = 0.18
+
+func _sink_pos(sink: int) -> Vector3:
+	if sink >= 0 and sink < rivals.size():
+		return rivals[sink].pos
+	return hole_pos
+
+func _sink_radius(sink: int) -> float:
+	if sink >= 0 and sink < rivals.size():
+		if not bool(rivals[sink].alive):
+			return 0.0
+		return float(rivals[sink].radius)
+	return hole_radius
+
+func _sync_rival_visuals() -> void:
+	if rival_mm == null:
+		return
+	for i in rivals.size():
+		var rival: Dictionary = rivals[i]
+		var s := 0.0
+		if playing and bool(rival.alive):
+			var pulse := 1.0
+			if float(rival.pulse) > 0.0:
+				pulse = 1.0 + sin(clampf(float(rival.pulse) / 0.18, 0.0, 1.0) * PI) * 0.1
+			s = float(rival.shown) * pulse
+		var xf := Transform3D(Basis().scaled(Vector3(s, 1.0, s)), rival.pos if s > 0.0 else Vector3(0, -30, 0))
+		rival_mm.set_instance_transform(i, xf)
+		rival_mm.set_instance_color(i, rival.color)
+		if i >= rival_labels.size():
+			continue
+		var tag: Label = rival_labels[i]
+		var above: Vector3 = rival.pos + Vector3(0.0, 0.95, 0.0)
+		if s < 0.05 or cam == null or cam.is_position_behind(above):
+			tag.visible = false
+		else:
+			tag.visible = true
+			tag.text = str(rival.name)
+			tag.position = cam.unproject_position(above) - Vector2(90, 46)
+
+func _push_openings() -> void:
+	if ground_mat == null or opening_centers.size() < 8:
+		return
+	for i in 8:
+		opening_centers[i] = Vector3.ZERO
+		opening_radii[i] = 0.0
+	if playing:
+		opening_centers[0] = hole_pos
+		opening_radii[0] = hole_open
+		for i in rivals.size():
+			if i + 1 >= 8 or not bool(rivals[i].alive):
+				continue
+			opening_centers[i + 1] = rivals[i].pos
+			opening_radii[i + 1] = float(rivals[i].shown)
+	ground_mat.set_shader_parameter("openings", opening_centers)
+	ground_mat.set_shader_parameter("opening_r", opening_radii)
+	if grass_mat:
+		grass_mat.set_shader_parameter("openings", opening_centers)
+		grass_mat.set_shader_parameter("opening_r", opening_radii)
+
+func _fade_blockers() -> void:
+	if cam == null:
+		return
+	var eye := cam.global_position
+	var ab := Vector2(hole_pos.x - eye.x, hole_pos.z - eye.z)
+	var ab_len2 := ab.length_squared()
+	if ab_len2 < 0.04:
+		return
+	for o in props:
+		var role := str(o.role)
+		if role != "building" and role != "wide" and role != "house" and role != "tower":
+			continue
+		if not bool(o.in_mesh) or not bool(o.alive):
+			continue
+		var p: Vector3 = o.pos
+		var ap := Vector2(p.x - eye.x, p.z - eye.z)
+		var t := clampf(ap.dot(ab) / ab_len2, 0.0, 1.0)
+		var block := false
+		if t > 0.16 and t < 0.88:
+			var closest := Vector2(eye.x, eye.z) + ab * t
+			block = closest.distance_to(Vector2(p.x, p.z)) < float(o.size) * 0.9
+		if bool(o.faded) == block:
+			continue
+		o.faded = block
+		var mm: MultiMesh = kind_multimeshes[int(o.kind)]
+		if mm == null:
+			continue
+		var tint: Color = o.color
+		var fade := 0.28 if block else 1.0
+		mm.set_instance_color(int(o.index), Color(tint.r, tint.g, tint.b, fade))
+
+func _feel(points: int, heavy: bool) -> void:
+	rim_pulse = 0.2
+	if heavy or points >= 14:
+		shake_t = 0.34
+		shake_mag = 0.24 if points >= 24 else 0.14
+	if OS.has_feature("web"):
+		var pitch := 1.0 + float(mini(combo, 10)) * 0.08
+		var big := "true" if heavy or points >= 14 else "false"
+		JavaScriptBridge.eval("if(window.__holeSwallow)window.__holeSwallow(%.3f,%s);" % [pitch, big], true)
+
 func _process(delta: float) -> void:
 	var frame_delta := delta
 	delta = minf(delta, 1.0 / 20.0)
@@ -1602,27 +2051,31 @@ func _process(delta: float) -> void:
 		elif score >= target_score:
 			_finish_round(true)
 		else:
+			if player_invuln > 0.0:
+				player_invuln = maxf(0.0, player_invuln - delta)
 			_move_hole(delta)
 			_tick_movers(delta)
+			_tick_rivals(delta)
 	shown_radius = lerpf(shown_radius, hole_radius, 1.0 - exp(-7.0 * delta))
 	var pop := 1.0
 	if pop_t > 0.0:
 		var u := 1.0 - clampf(pop_t / POP_TIME, 0.0, 1.0)
 		pop = 1.0 + sin(u * PI) * 0.22
 		pop_t = maxf(0.0, pop_t - delta)
+	if rim_pulse > 0.0:
+		rim_pulse = maxf(0.0, rim_pulse - delta)
+		pop *= 1.0 + sin(clampf(rim_pulse / 0.2, 0.0, 1.0) * PI) * 0.14
 	var vis := shown_radius * pop
 	hole_open = vis
 	hole_mesh.position = hole_pos
 	hole_mesh.scale = Vector3(vis, 1.0, vis)
-	if ground_mat:
-		ground_mat.set_shader_parameter("hole_center", hole_pos)
-		ground_mat.set_shader_parameter("hole_radius", vis)
-	if grass_mat:
-		grass_mat.set_shader_parameter("hole_center", hole_pos)
-		grass_mat.set_shader_parameter("hole_radius", vis)
+	_sync_rival_visuals()
+	_push_openings()
 	_smooth_camera(delta)
 	_tick_floaters(delta)
 	_place_name_tag()
+	if playing:
+		_fade_blockers()
 	_tick_feedback(delta)
 	var sec := int(ceili(time_left))
 	if score != shown_score or level != shown_level or sec != shown_sec:
@@ -1708,10 +2161,37 @@ func _flat_dist(p: Vector3) -> float:
 	var dz := p.z - hole_pos.z
 	return sqrt(dx * dx + dz * dz)
 
-func _wants_body(o: Dictionary, dist: float) -> bool:
+func _fits_r(size: float, radius: float) -> bool:
+	return size < radius * FIT_RATIO
+
+func _xz_dist(a: Vector3, b: Vector3) -> float:
+	var dx := a.x - b.x
+	var dz := a.z - b.z
+	return sqrt(dx * dx + dz * dz)
+
+func _best_sink(o: Dictionary) -> Dictionary:
 	var base := float(o.base)
-	# The opening has reached the ground contact, so one side can lose support.
-	return _fits(base) and dist < hole_radius + base * 0.95
+	var p: Vector3 = o.pos
+	var best := -2
+	var best_d := INF
+	if _fits_r(base, hole_radius):
+		var d := _xz_dist(p, hole_pos)
+		if d < hole_radius + base * 0.95:
+			best = -1
+			best_d = d
+	for i in rivals.size():
+		var rival: Dictionary = rivals[i]
+		if not bool(rival.alive):
+			continue
+		var radius := float(rival.radius)
+		if not _fits_r(base, radius):
+			continue
+		var at: Vector3 = rival.pos
+		var d2 := _xz_dist(p, at)
+		if d2 < radius + base * 0.95 and d2 < best_d:
+			best = i
+			best_d = d2
+	return {"ok": best > -2, "sink": best, "dist": best_d}
 
 func _activate_nearby() -> void:
 	var budget := 2
@@ -1723,10 +2203,11 @@ func _activate_nearby() -> void:
 		for o in props:
 			if bool(o.in_body) or not bool(o.alive):
 				continue
-			var dist := _flat_dist(o.pos)
-			if dist < best_d and _wants_body(o, dist):
+			var pick := _best_sink(o)
+			if bool(pick.ok) and float(pick.dist) < best_d:
 				best = o
-				best_d = dist
+				best.sink = int(pick.sink)
+				best_d = float(pick.dist)
 				found = true
 		if not found:
 			return
@@ -1781,22 +2262,25 @@ func _drive_body(o: Dictionary) -> void:
 	if p.y < -2.25:
 		_swallow_done(o)
 		return
-	var dx := p.x - hole_pos.x
-	var dz := p.z - hole_pos.z
+	var sink := int(o.get("sink", -1))
+	var hp := _sink_pos(sink)
+	var hr := _sink_radius(sink)
+	var dx := p.x - hp.x
+	var dz := p.z - hp.z
 	var dist := sqrt(dx * dx + dz * dz)
 	var base := float(o.base)
-	if not _fits(base):
+	if hr < 0.05 or not _fits_r(base, hr):
 		_release_body(o, p)
 		return
 	var upright := b.global_transform.basis.y.dot(Vector3.UP)
 	var tilt := 1.0 - upright
-	var reaching := dist < hole_radius + base * 0.95
+	var reaching := dist < hr + base * 0.95
 	var falling := p.y < -0.28
 	var tipped := tilt > 0.1 or p.y < -0.04
 	# The shelf is only the fulcrum. Once the body has clearly tipped and its
 	# center is over the opening, drop the rim so it tumbles instead of hanging.
-	var committed := tilt > 0.07 and dist < hole_radius
-	if committed or (falling and dist < hole_radius + base * 0.2):
+	var committed := tilt > 0.07 and dist < hr
+	if committed or (falling and dist < hr + base * 0.2):
 		b.collision_mask = 0
 	elif reaching or tipped:
 		b.collision_mask = RIM_MASK
@@ -1832,17 +2316,22 @@ func _swallow_done(o: Dictionary) -> void:
 		var b: RigidBody3D = o.body
 		at = b.global_position
 	if playing and bool(o.alive):
-		if combo_left > 0.0:
-			combo += 1
+		var sink := int(o.get("sink", -1))
+		if sink >= 0 and sink < rivals.size() and bool(rivals[sink].alive):
+			_rival_grow(rivals[sink], int(o.points))
 		else:
-			combo = 1
-		combo_left = COMBO_WINDOW
-		var gained := int(o.points) + maxi(combo - 1, 0)
-		score += gained
-		_sync_level()
-		_announce_skins(Save.note_eaten(1))
-		_burst(at, gained, o.color)
-		_refresh_hud()
+			if combo_left > 0.0:
+				combo += 1
+			else:
+				combo = 1
+			combo_left = COMBO_WINDOW
+			var gained := int(o.points) + maxi(combo - 1, 0)
+			score += gained
+			_sync_level()
+			_announce_skins(Save.note_eaten(1))
+			_burst(at, gained, o.color)
+			_feel(gained, gained >= 14)
+			_refresh_hud()
 	o.alive = false
 	if o.body != null:
 		_pool_body(o.body)
@@ -1936,6 +2425,8 @@ func start_round(index: int) -> void:
 	shown_sec = -1
 	shown_level = -1
 	_spawn_city()
+	_spawn_rivals()
+	player_invuln = 2.8
 	hole_mesh.visible = true
 	hole_mesh.position = hole_pos
 	cam_distance = _cam_dist_for(hole_radius)
@@ -1949,7 +2440,7 @@ func start_round(index: int) -> void:
 	playing = true
 	_refresh_hud()
 
-func _finish_round(cleared: bool) -> void:
+func _finish_round(cleared: bool, eaten_by: String = "") -> void:
 	if not playing:
 		return
 	playing = false
@@ -1968,6 +2459,8 @@ func _finish_round(cleared: bool) -> void:
 		_announce_skins(Save.mark_cleared(map_index, score))
 	_announce_skins(Save.note_stars(map_index, round_stars))
 	var headline := "Level clear!" if cleared else "Time's up"
+	if eaten_by != "":
+		headline = "Eaten by %s" % eaten_by
 	over_lbl.text = "%s\n%s   +%d coins" % [headline, str(map.name), coins_earned]
 	_fill_result_bars()
 	result_anim = 0.0
