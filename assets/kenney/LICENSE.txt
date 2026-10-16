@@ -1,0 +1,17 @@
+Kenney game assets used in this project
+https://kenney.nl
+
+Packs (CC0 1.0 Universal, https://creativecommons.org/publicdomain/zero/1.0/):
+
+- City Kit: Roads (2.2) — city-kit-roads-license.txt
+- City Kit: Commercial (2.1) — city-kit-commercial-license.txt
+- City Kit: Suburban (2.0) — city-kit-suburban-license.txt
+- Car Kit (3.1) — car-kit-license.txt
+- Mini Characters (1.0) — mini-characters-license.txt
+- Nature Kit — nature-kit-license.txt
+
+Created and distributed by Kenney (www.kenney.nl).
+You can use this content for personal, educational, and commercial purposes.
+Credit to Kenney is appreciated and not required.
+
+Downloaded from https://kenney.nl/assets. Only the models used by the game are committed.

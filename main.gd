@@ -1,23 +1,55 @@
 extends Node3D
 
 const ROUND_TIME := 120.0
-const CITY_HALF := 40.0
-const BASE_SPEED := 6.5  # world units / second at full stick, smallest hole; ?speed= multiplies this
+const CITY_HALF := 15.4
+const GRID_MIN := -15
+const GRID_MAX := 15
+const ROAD_STEP := 5
+const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?speed= multiplies this
 const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
-const STOP_RATE := 34.0  # release dumps speed in about a tenth of a second
-const CAM_PITCH_DEG := 60.0  # degrees up from the ground; steep top-down
-const CAM_FOV := 58.0
-const CAM_BASE := 14.0
-const CAM_PER_RADIUS := 2.5
-const SPEED_SCREEN := 0.84  # world speed grows with the camera, a bit less than 1:1
+const STOP_RATE := 34.0
+const CAM_PITCH_DEG := 60.0
+const CAM_FOV := 56.0
+const CAM_BASE := 7.2
+const CAM_PER_RADIUS := 2.15
+const SPEED_SCREEN := 0.84
 const POOL := 8
 const FIT_RATIO := 0.92
 const POP_TIME := 0.32
 const BUILD_SHA := "__BUILD_SHA__"
-# Score to reach each level, and the hole radius once you are there.
-const LEVEL_SCORE := [0, 10, 24, 46, 76, 116, 168, 232, 310, 400]
-const LEVEL_RADIUS := [0.64, 1.0, 1.45, 2.0, 2.7, 3.5, 4.5, 5.7, 7.1, 8.6]
+const LEVEL_SCORE := [0, 14, 36, 70, 120, 190]
+const LEVEL_RADIUS := [0.50, 0.78, 1.05, 1.42, 1.9, 2.5]
+const GROUND_SHADER := """shader_type spatial;
+render_mode diffuse_lambert, cull_back;
+uniform sampler2D albedo_tex : source_color, filter_linear_mipmap;
+uniform vec3 hole_center = vec3(0.0);
+uniform float hole_radius = 0.0;
+varying vec3 world_pos;
+void vertex() {
+	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+void fragment() {
+	vec2 d = world_pos.xz - hole_center.xz;
+	if (hole_radius > 0.0 && dot(d, d) < hole_radius * hole_radius) {
+		discard;
+	}
+	vec3 col = texture(albedo_tex, UV).rgb;
+	ALBEDO = col * vec3(1.08, 1.06, 1.02);
+	ROUGHNESS = 1.0;
+	METALLIC = 0.0;
+}
+"""
+const PIT_SHADER := """shader_type spatial;
+render_mode unshaded, cull_disabled;
+varying vec4 vcol;
+void vertex() {
+	vcol = COLOR;
+}
+void fragment() {
+	ALBEDO = vcol.rgb;
+}
+"""
 
 var hole_pos := Vector3.ZERO
 var velocity := Vector3.ZERO
@@ -37,17 +69,21 @@ var movers: Array = []
 var active: Array = []
 var kind_lists: Array = []
 var kind_meshes: Array = []
-var kind_shapes: Array = []
+var kind_native: Array = []
 var kind_multimeshes: Array = []
+var kind_mats: Array = []
 var pool: Array = []
 var pool_free: Array = []
 var body_mat: PhysicsMaterial
-
+var shadow_mm: MultiMesh
+var shadow_owners: Array = []
+var ground_mat: ShaderMaterial
 var hole_mesh: MeshInstance3D
-var rim_mesh: MeshInstance3D
+var pop_fx: CPUParticles3D
+var floaters: Array = []
 var cam: Camera3D
 var cam_look := Vector3.ZERO
-var cam_distance := 16.0
+var cam_distance := 8.0
 var score_lbl: Label
 var timer_lbl: Label
 var level_lbl: Label
@@ -59,23 +95,29 @@ var debug_lbl: Label
 var debug_on := false
 var speed_scale := 1.0
 var joy_ui: Control
-var lit_mat: StandardMaterial3D
 var shown_score := -1
 var shown_sec := -1
 var shown_level := -1
+var tex_roads: Texture2D
+var tex_commercial: Texture2D
+var tex_suburban: Texture2D
+var tex_cars: Texture2D
+var tex_chars: Texture2D
+var mat_roads: StandardMaterial3D
+var mat_commercial: StandardMaterial3D
+var mat_suburban: StandardMaterial3D
+var mat_cars: StandardMaterial3D
+var mat_chars: StandardMaterial3D
+var mat_nature: StandardMaterial3D
 
 func _ready() -> void:
 	randomize()
 	debug_on = _query_debug()
 	speed_scale = _query_speed()
-	lit_mat = StandardMaterial3D.new()
-	lit_mat.albedo_color = Color.WHITE
-	lit_mat.vertex_color_use_as_albedo = true
-	lit_mat.roughness = 1.0
-	lit_mat.metallic = 0.0
 	body_mat = PhysicsMaterial.new()
-	body_mat.friction = 0.45
+	body_mat.friction = 0.4
 	body_mat.bounce = 0.0
+	_load_textures()
 	_build_world()
 	_build_ui()
 	_make_pool()
@@ -111,17 +153,6 @@ func _query_speed() -> float:
 		return 1.0
 	return clampf(value, 0.05, 3.0)
 
-func _with_color(src: Mesh, color: Color) -> ArrayMesh:
-	var arrays := src.surface_get_arrays(0)
-	var count := (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
-	var cols := PackedColorArray()
-	cols.resize(count)
-	cols.fill(color)
-	arrays[Mesh.ARRAY_COLOR] = cols
-	var out := ArrayMesh.new()
-	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return out
-
 func _prewarm_shaders() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -137,70 +168,92 @@ func _style(l: Label, size: int) -> void:
 	l.add_theme_constant_override("outline_size", 8)
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+func _load_textures() -> void:
+	tex_roads = load("res://assets/kenney/roads/Textures/colormap.png")
+	tex_commercial = load("res://assets/kenney/commercial/Textures/colormap.png")
+	tex_suburban = load("res://assets/kenney/suburban/Textures/colormap.png")
+	tex_cars = load("res://assets/kenney/cars/Textures/colormap.png")
+	tex_chars = load("res://assets/kenney/characters/Textures/colormap.png")
+	mat_roads = _tex_mat(tex_roads)
+	mat_commercial = _tex_mat(tex_commercial)
+	mat_suburban = _tex_mat(tex_suburban)
+	mat_cars = _tex_mat(tex_cars)
+	mat_chars = _tex_mat(tex_chars)
+	mat_nature = StandardMaterial3D.new()
+	mat_nature.albedo_color = Color.WHITE
+	mat_nature.vertex_color_use_as_albedo = true
+	mat_nature.roughness = 1.0
+	mat_nature.metallic = 0.0
+
+func _tex_mat(tex: Texture2D) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = tex
+	m.albedo_color = Color(1.06, 1.04, 1.0)
+	m.vertex_color_use_as_albedo = true
+	m.roughness = 1.0
+	m.metallic = 0.0
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	return m
+
 func _build_world() -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.53, 0.82, 1.0)
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.28, 0.58, 1.0)
+	sky_mat.sky_horizon_color = Color(1.0, 0.78, 0.58)
+	sky_mat.ground_horizon_color = Color(0.95, 0.8, 0.62)
+	sky_mat.ground_bottom_color = Color(0.45, 0.72, 0.4)
+	sky_mat.sun_angle_max = 28.0
+	var sky := Sky.new()
+	sky.sky_material = sky_mat
+	e.background_mode = Environment.BG_SKY
+	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.72, 0.76, 0.8)
-	e.ambient_light_energy = 1.05
+	e.ambient_light_color = Color(1.0, 0.9, 0.78)
+	e.ambient_light_energy = 0.9
+	e.fog_enabled = true
+	e.fog_mode = Environment.FOG_MODE_EXPONENTIAL
+	e.fog_light_color = Color(0.78, 0.88, 1.0)
+	e.fog_density = 0.018
+	e.fog_aerial_perspective = 0.35
+	e.fog_sky_affect = 0.45
 	env.environment = e
 	add_child(env)
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-58, 32, 0)
-	sun.light_color = Color(1.0, 0.97, 0.9)
-	sun.light_energy = 1.2
+	sun.rotation_degrees = Vector3(-48, 38, 0)
+	sun.light_color = Color(1.0, 0.9, 0.72)
+	sun.light_energy = 1.45
 	sun.shadow_enabled = false
 	add_child(sun)
-	var ground := MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(CITY_HALF * 2 + 16, CITY_HALF * 2 + 16)
-	ground.mesh = _with_color(pm, Color(0.4, 0.78, 0.34))
-	ground.material_override = lit_mat
-	_no_shadow(ground)
-	add_child(ground)
-	var roads := MeshInstance3D.new()
-	roads.mesh = _with_color(_merged_roads(), Color(0.45, 0.5, 0.56))
-	roads.material_override = lit_mat
-	_no_shadow(roads)
-	add_child(roads)
 	var floor := StaticBody3D.new()
 	floor.collision_layer = 1
 	floor.collision_mask = 0
 	floor.physics_material_override = body_mat
 	var floor_shape := CollisionShape3D.new()
 	var floor_box := BoxShape3D.new()
-	floor_box.size = Vector3(CITY_HALF * 2 + 24, 2.0, CITY_HALF * 2 + 24)
+	floor_box.size = Vector3(CITY_HALF * 2 + 8, 2.0, CITY_HALF * 2 + 8)
 	floor_shape.shape = floor_box
 	floor.position = Vector3(0, -1.0, 0)
 	floor.add_child(floor_shape)
 	add_child(floor)
+	var gshader := Shader.new()
+	gshader.code = GROUND_SHADER
+	ground_mat = ShaderMaterial.new()
+	ground_mat.shader = gshader
+	ground_mat.set_shader_parameter("albedo_tex", tex_roads)
+	ground_mat.set_shader_parameter("hole_center", Vector3.ZERO)
+	ground_mat.set_shader_parameter("hole_radius", hole_radius)
 	hole_mesh = MeshInstance3D.new()
-	var cm := CylinderMesh.new()
-	cm.top_radius = 1.0
-	cm.bottom_radius = 1.0
-	cm.height = 0.02
-	cm.radial_segments = 20
-	hole_mesh.mesh = cm
-	var hm := StandardMaterial3D.new()
-	hm.albedo_color = Color.BLACK
-	hm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	hole_mesh.material_override = hm
+	hole_mesh.mesh = _build_pit_mesh()
+	var pshader := Shader.new()
+	pshader.code = PIT_SHADER
+	var pmat := ShaderMaterial.new()
+	pmat.shader = pshader
+	hole_mesh.material_override = pmat
 	_no_shadow(hole_mesh)
 	hole_mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(hole_mesh)
-	rim_mesh = MeshInstance3D.new()
-	var tm := TorusMesh.new()
-	tm.inner_radius = 0.94
-	tm.outer_radius = 1.08
-	tm.rings = 10
-	tm.ring_segments = 8
-	rim_mesh.mesh = _with_color(tm, Color(0.15, 0.9, 1.0))
-	rim_mesh.material_override = lit_mat
-	_no_shadow(rim_mesh)
-	rim_mesh.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-	add_child(rim_mesh)
+	_build_pop_fx()
 	cam = Camera3D.new()
 	cam.fov = CAM_FOV
 	cam.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
@@ -210,15 +263,95 @@ func _build_world() -> void:
 	cam.position = hole_pos + _camera_offset(cam_distance)
 	cam.look_at(cam_look, Vector3.UP)
 
-func _merged_roads() -> ArrayMesh:
+func _build_pop_fx() -> void:
+	pop_fx = CPUParticles3D.new()
+	pop_fx.amount = 12
+	pop_fx.lifetime = 0.42
+	pop_fx.one_shot = true
+	pop_fx.explosiveness = 0.92
+	pop_fx.direction = Vector3(0, 1, 0)
+	pop_fx.spread = 58.0
+	pop_fx.initial_velocity_min = 1.4
+	pop_fx.initial_velocity_max = 2.6
+	pop_fx.gravity = Vector3(0, -4.2, 0)
+	pop_fx.scale_amount_min = 0.07
+	pop_fx.scale_amount_max = 0.16
+	pop_fx.emitting = false
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.22, 0.22)
+	pop_fx.mesh = quad
+	var pm := StandardMaterial3D.new()
+	pm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	pm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	pm.albedo_color = Color(1, 0.92, 0.35, 0.95)
+	pm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	pm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	pop_fx.material_override = pm
+	_no_shadow(pop_fx)
+	add_child(pop_fx)
+
+func _build_pit_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for i in range(-4, 5):
-		for horiz in [true, false]:
-			var rm := PlaneMesh.new()
-			rm.size = Vector2(CITY_HALF * 2, 3.1) if horiz else Vector2(3.1, CITY_HALF * 2)
-			var at := Vector3(0, 0.02, i * 10) if horiz else Vector3(i * 10, 0.025, 0)
-			st.append_from(rm, 0, Transform3D(Basis(), at))
+	var seg := 24
+	var rings := [
+		[0.98, 0.015, Color(0.09, 0.1, 0.13)],
+		[0.86, -0.45, Color(0.035, 0.038, 0.05)],
+		[0.68, -1.25, Color(0.012, 0.012, 0.016)],
+		[0.5, -2.55, Color(0, 0, 0)],
+	]
+	for r in rings.size() - 1:
+		var a: Array = rings[r]
+		var b: Array = rings[r + 1]
+		var r0 := float(a[0])
+		var y0 := float(a[1])
+		var c0: Color = a[2]
+		var r1 := float(b[0])
+		var y1 := float(b[1])
+		var c1: Color = b[2]
+		for i in seg:
+			var a0 := TAU * float(i) / float(seg)
+			var a1 := TAU * float(i + 1) / float(seg)
+			var p00 := Vector3(cos(a0) * r0, y0, sin(a0) * r0)
+			var p01 := Vector3(cos(a1) * r0, y0, sin(a1) * r0)
+			var p10 := Vector3(cos(a0) * r1, y1, sin(a0) * r1)
+			var p11 := Vector3(cos(a1) * r1, y1, sin(a1) * r1)
+			st.set_color(c0); st.add_vertex(p00)
+			st.set_color(c1); st.add_vertex(p10)
+			st.set_color(c0); st.add_vertex(p01)
+			st.set_color(c0); st.add_vertex(p01)
+			st.set_color(c1); st.add_vertex(p10)
+			st.set_color(c1); st.add_vertex(p11)
+	var bottom_y := -2.55
+	var bottom_r := 0.5
+	for i in seg:
+		var a0 := TAU * float(i) / float(seg)
+		var a1 := TAU * float(i + 1) / float(seg)
+		st.set_color(Color(0, 0, 0))
+		st.add_vertex(Vector3(0, bottom_y, 0))
+		st.set_color(Color(0, 0, 0))
+		st.add_vertex(Vector3(cos(a1) * bottom_r, bottom_y, sin(a1) * bottom_r))
+		st.set_color(Color(0, 0, 0))
+		st.add_vertex(Vector3(cos(a0) * bottom_r, bottom_y, sin(a0) * bottom_r))
+	var inner := 0.94
+	var outer := 1.16
+	var rim_y := 0.05
+	var rim := Color(0.05, 0.78, 1.0)
+	var rim_hi := Color(0.72, 0.97, 1.0)
+	for i in seg:
+		var a0 := TAU * float(i) / float(seg)
+		var a1 := TAU * float(i + 1) / float(seg)
+		var i0 := Vector3(cos(a0) * inner, rim_y, sin(a0) * inner)
+		var i1 := Vector3(cos(a1) * inner, rim_y, sin(a1) * inner)
+		var o0 := Vector3(cos(a0) * outer, rim_y, sin(a0) * outer)
+		var o1 := Vector3(cos(a1) * outer, rim_y, sin(a1) * outer)
+		st.set_color(rim); st.add_vertex(i0)
+		st.set_color(rim_hi); st.add_vertex(o0)
+		st.set_color(rim); st.add_vertex(i1)
+		st.set_color(rim); st.add_vertex(i1)
+		st.set_color(rim_hi); st.add_vertex(o0)
+		st.set_color(rim_hi); st.add_vertex(o1)
+	st.generate_normals()
 	return st.commit()
 
 func _camera_offset(dist: float) -> Vector3:
@@ -250,186 +383,342 @@ func _make_pool() -> void:
 		pool.append(b)
 		pool_free.append(b)
 
+func _load_model(path: String) -> Dictionary:
+	var scene := load(path) as PackedScene
+	var inst := scene.instantiate()
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_collect_mesh(inst, Transform3D.IDENTITY, st)
+	inst.free()
+	var mesh := st.commit()
+	var aabb := mesh.get_aabb()
+	var shift := Vector3(
+		-(aabb.position.x + aabb.size.x * 0.5),
+		-aabb.position.y,
+		-(aabb.position.z + aabb.size.z * 0.5)
+	)
+	var st2 := SurfaceTool.new()
+	st2.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for s in mesh.get_surface_count():
+		st2.append_from(mesh, s, Transform3D(Basis(), shift))
+	var planted := st2.commit()
+	return {"mesh": planted, "size": planted.get_aabb().size}
+
+func _collect_mesh(n: Node, parent: Transform3D, st: SurfaceTool) -> void:
+	var xform := parent
+	if n is Node3D:
+		xform = parent * (n as Node3D).transform
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		if mi.mesh:
+			for s in mi.mesh.get_surface_count():
+				var tint := Color.WHITE
+				var surf_mat := mi.mesh.surface_get_material(s)
+				if surf_mat is StandardMaterial3D:
+					var sm := surf_mat as StandardMaterial3D
+					if sm.albedo_texture == null:
+						tint = sm.albedo_color
+				_append_surface(st, mi.mesh, s, xform, tint)
+	for c in n.get_children():
+		_collect_mesh(c, xform, st)
+
+func _append_surface(st: SurfaceTool, mesh: Mesh, surface: int, xform: Transform3D, color: Color) -> void:
+	var arrays: Array = mesh.surface_get_arrays(surface)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var basis := xform.basis
+	var origin := xform.origin
+	var ids: PackedInt32Array = indices
+	if ids.is_empty():
+		ids.resize(verts.size())
+		for i in verts.size():
+			ids[i] = i
+	for idx in ids:
+		st.set_color(color)
+		if idx < norms.size():
+			st.set_normal((basis * norms[idx]).normalized())
+		if idx < uvs.size():
+			st.set_uv(uvs[idx])
+		st.add_vertex(basis * verts[idx] + origin)
+
 func _spawn_city() -> void:
-	# style: 0 person, 1 lamp, 2 bench, 3 tree, 4 car, 5 kiosk, 6 house, 7 tower
-	# place: 0 sidewalk, 1 road, 2 yard
-	# Large yards first so towers and houses claim a block before sidewalks fill in.
-	var specs := [
-		[7, 3.4, 11.5, 70, 0, 7, 2],
-		[6, 2.55, 5.6, 36, 0, 12, 2],
-		[5, 1.6, 2.5, 18, 0, 14, 2],
-		[3, 0.75, 2.15, 6, 0, 36, 2],
-		[2, 0.60, 0.48, 4, 0, 18, 0],
-		[1, 0.18, 3.15, 2, 0, 26, 0],
-		[0, 0.28, 1.55, 1, 1, 40, 0],
-		[4, 1.15, 0.85, 10, 2, 20, 1],
+	_spawn_ground()
+	# path, material, scale xz, scale y, points, role, mover, yaw_offset
+	# mover: 0 static, 1 person, 2 car. yaw_offset turns model nose onto the move direction.
+	var defs := [
+		["res://assets/kenney/roads/construction-cone.glb", mat_roads, 3.4, 3.4, 1, "small", 0, 0.0],
+		["res://assets/kenney/roads/construction-barrier.glb", mat_roads, 2.1, 2.1, 2, "small", 0, 0.0],
+		["res://assets/kenney/characters/character-male-a.glb", mat_chars, 0.62, 0.62, 2, "person", 1, 0.0],
+		["res://assets/kenney/characters/character-female-a.glb", mat_chars, 0.55, 0.55, 2, "person", 1, 0.0],
+		["res://assets/kenney/characters/character-male-c.glb", mat_chars, 0.6, 0.6, 2, "person", 1, 0.0],
+		["res://assets/kenney/roads/light-curved.glb", mat_roads, 1.75, 1.75, 2, "lamp", 0, 0.0],
+		["res://assets/kenney/nature/plant_bush.glb", mat_nature, 0.95, 0.95, 1, "small", 0, 0.0],
+		["res://assets/kenney/suburban/planter.glb", mat_suburban, 1.15, 1.15, 2, "small", 0, 0.0],
+		["res://assets/kenney/suburban/tree-small.glb", mat_suburban, 1.85, 1.85, 3, "tree", 0, 0.0],
+		["res://assets/kenney/roads/dumpster.glb", mat_roads, 2.7, 2.7, 4, "dumpster", 0, 0.0],
+		["res://assets/kenney/suburban/tree-large.glb", mat_suburban, 3.2, 3.2, 6, "tree", 0, 0.0],
+		["res://assets/kenney/nature/tree_simple.glb", mat_nature, 2.4, 2.2, 8, "tree", 0, 0.0],
+		["res://assets/kenney/cars/sedan.glb", mat_cars, 0.62, 0.62, 12, "car", 2, 0.0],
+		["res://assets/kenney/cars/taxi.glb", mat_cars, 0.58, 0.58, 12, "car", 2, 0.0],
+		["res://assets/kenney/cars/hatchback-sports.glb", mat_cars, 0.6, 0.6, 14, "car", 2, 0.0],
+		["res://assets/kenney/cars/van.glb", mat_cars, 0.55, 0.55, 16, "car", 2, 0.0],
+		["res://assets/kenney/commercial/low-detail-building-a.glb", mat_commercial, 4.0, 2.3, 22, "building", 0, 0.0],
+		["res://assets/kenney/commercial/low-detail-building-b.glb", mat_commercial, 3.8, 2.5, 22, "building", 0, 0.0],
+		["res://assets/kenney/commercial/low-detail-building-c.glb", mat_commercial, 4.1, 2.15, 24, "building", 0, 0.0],
+		["res://assets/kenney/commercial/low-detail-building-d.glb", mat_commercial, 3.7, 2.6, 24, "building", 0, 0.0],
+		["res://assets/kenney/commercial/low-detail-building-wide-a.glb", mat_commercial, 2.55, 1.9, 30, "wide", 0, 0.0],
+		["res://assets/kenney/suburban/building-type-a.glb", mat_suburban, 1.75, 1.45, 34, "house", 0, 0.0],
+		["res://assets/kenney/suburban/building-type-b.glb", mat_suburban, 1.7, 1.55, 34, "house", 0, 0.0],
+		["res://assets/kenney/suburban/building-type-c.glb", mat_suburban, 1.65, 1.35, 36, "house", 0, 0.0],
+		["res://assets/kenney/commercial/building-skyscraper-a.glb", mat_commercial, 2.2, 1.65, 70, "tower", 0, 0.0],
+		["res://assets/kenney/commercial/building-skyscraper-c.glb", mat_commercial, 2.05, 1.85, 70, "tower", 0, 0.0],
 	]
-	kind_lists.resize(specs.size())
-	kind_meshes.resize(specs.size())
-	kind_shapes.resize(specs.size())
-	kind_multimeshes.resize(specs.size())
-	for i in specs.size():
-		kind_lists[i] = []
-		var size: float = specs[i][1]
-		var height: float = specs[i][2]
-		kind_meshes[i] = _mesh_for(int(specs[i][0]), size, height)
-		kind_shapes[i] = _shape_for(int(specs[i][0]), size, height)
-	for spec in specs:
-		var count: int = spec[5]
-		var made := 0
-		var tries := 0
-		while made < count and tries < count * 50:
-			tries += 1
-			var size: float = spec[1]
-			var place: int = spec[6]
-			var spot := _random_spot(place)
-			var p: Vector3 = spot[0]
-			var dir: Vector3 = spot[1]
-			if not _accept(p, size, place):
-				continue
-			_add_prop(int(spec[0]), p, dir, size, float(spec[2]), int(spec[3]), int(spec[4]), place)
-			made += 1
-	for ki in specs.size():
+	for d in defs:
+		var info := _load_model(str(d[0]))
+		kind_lists.append([])
+		kind_meshes.append(info.mesh)
+		kind_native.append(info.size)
+		kind_mats.append(d[1])
+		kind_multimeshes.append(null)
+	_place_props(defs)
+	for ki in kind_meshes.size():
 		_build_kind_multimesh(ki)
+	_build_shadows()
 
-func _mesh_for(style: int, size: float, height: float) -> Mesh:
-	if style == 0:
-		var cap := CapsuleMesh.new()
-		cap.radius = 0.22
-		cap.height = height
-		cap.radial_segments = 8
-		cap.rings = 3
-		return cap
-	if style == 1 or style == 3:
-		var cyl := CylinderMesh.new()
-		cyl.radial_segments = 8
-		cyl.height = height
-		if style == 3:
-			cyl.top_radius = 0.0
-			cyl.bottom_radius = size
+func _spawn_ground() -> void:
+	var straight: Mesh = _load_model("res://assets/kenney/roads/road-straight.glb").mesh
+	var crossing: Mesh = _load_model("res://assets/kenney/roads/road-crossing.glb").mesh
+	var cross: Mesh = _load_model("res://assets/kenney/roads/road-crossroad.glb").mesh
+	var grass: Mesh = _load_model("res://assets/kenney/roads/tile-low.glb").mesh
+	var straights: Array = []
+	var crossings: Array = []
+	var crosses: Array = []
+	var grasses: Array = []
+	for i in range(GRID_MIN, GRID_MAX + 1):
+		for j in range(GRID_MIN, GRID_MAX + 1):
+			var on_i := _road_line(i)
+			var on_j := _road_line(j)
+			var at := Vector3(float(i), 0.0, float(j))
+			if on_i and on_j:
+				crosses.append(at)
+			elif on_j:
+				var near := _road_line(i - 1) or _road_line(i + 1)
+				if near:
+					crossings.append({"at": at, "yaw": 0.0})
+				else:
+					straights.append({"at": at, "yaw": 0.0})
+			elif on_i:
+				var near_j := _road_line(j - 1) or _road_line(j + 1)
+				if near_j:
+					crossings.append({"at": at, "yaw": PI * 0.5})
+				else:
+					straights.append({"at": at, "yaw": PI * 0.5})
+			else:
+				grasses.append(at)
+	_tile_multimesh(straight, straights, true)
+	_tile_multimesh(crossing, crossings, true)
+	_tile_multimesh(cross, crosses, false)
+	_tile_multimesh(grass, grasses, false)
+
+func _road_line(i: int) -> bool:
+	return i % ROAD_STEP == 0
+
+func _tile_multimesh(mesh: Mesh, items: Array, has_yaw: bool) -> void:
+	if items.is_empty():
+		return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = items.size()
+	for n in items.size():
+		var pos: Vector3
+		var yaw := 0.0
+		if has_yaw:
+			var item: Dictionary = items[n]
+			pos = item.at
+			yaw = float(item.yaw)
 		else:
-			cyl.top_radius = size
-			cyl.bottom_radius = size
-		return cyl
-	var box := BoxMesh.new()
-	if style == 2:
-		box.size = Vector3(size * 2.3, height, size * 0.85)
-	elif style == 4:
-		box.size = Vector3(size * 1.05, height, size * 2.0)
-	else:
-		box.size = Vector3(size * 2.0, height, size * 2.0)
-	return box
+			pos = items[n]
+		mm.set_instance_transform(n, Transform3D(Basis(Vector3.UP, yaw), pos))
+	var inst := MultiMeshInstance3D.new()
+	inst.multimesh = mm
+	inst.material_override = ground_mat
+	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 2, -4, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, 20, CITY_HALF * 2 + 4))
+	_no_shadow(inst)
+	add_child(inst)
 
-func _shape_for(style: int, size: float, height: float) -> Shape3D:
-	if style == 0:
-		var cap := CapsuleShape3D.new()
-		cap.radius = 0.22
-		cap.height = height
-		return cap
-	if style == 1 or style == 3:
-		var cyl := CylinderShape3D.new()
-		cyl.height = height
-		cyl.radius = size if style == 1 else size * 0.85
-		return cyl
-	var box := BoxShape3D.new()
-	if style == 2:
-		box.size = Vector3(size * 2.3, height, size * 0.85)
-	elif style == 4:
-		box.size = Vector3(size * 1.05, height, size * 2.0)
-	else:
-		box.size = Vector3(size * 2.0, height, size * 2.0)
-	return box
+func _place_props(defs: Array) -> void:
+	var by_role := {}
+	for i in defs.size():
+		var role := str(defs[i][5])
+		if not by_role.has(role):
+			by_role[role] = []
+		(by_role[role] as Array).append(i)
+	var lines: Array = []
+	for i in range(GRID_MIN, GRID_MAX + 1):
+		if _road_line(i):
+			lines.append(i)
+	var block_i := 0
+	var role_cursor := {}
+	for a in range(lines.size() - 1):
+		for b in range(lines.size() - 1):
+			var ix := (float(lines[a]) + float(lines[a + 1])) * 0.5
+			var iz := (float(lines[b]) + float(lines[b + 1])) * 0.5
+			var plaza := (a + b) % 3 == 0
+			var role := "tree" if plaza else "building"
+			if not plaza:
+				var pick := block_i % 7
+				if pick <= 1 and block_i % 5 == 0:
+					role = "tower"
+				elif pick == 2:
+					role = "wide"
+				elif pick == 3 or pick == 4:
+					role = "house"
+			var list: Array = by_role[role]
+			var cursor := int(role_cursor.get(role, 0))
+			role_cursor[role] = cursor + 1
+			var ki: int = list[cursor % list.size()]
+			var yaw := randf() * TAU if plaza else (PI * 0.5) * float(block_i % 4)
+			_add_prop(ki, Vector3(ix, 0, iz), Vector3.ZERO, yaw, defs[ki])
+			block_i += 1
+	_scatter(by_role["small"], defs, 22, "grass")
+	_scatter(by_role["tree"], defs, 16, "grass")
+	_scatter(by_role["dumpster"], defs, 8, "grass")
+	_spawn_walkers(by_role["person"], defs)
+	_spawn_lamps(by_role["lamp"], defs)
+	_spawn_cars(by_role["car"], defs)
 
-func _kind_color(style: int) -> Color:
-	var options: Array
-	if style == 0:
-		options = [Color(1, 0.32, 0.38), Color(0.25, 0.5, 1), Color(1, 0.82, 0.2), Color(0.25, 0.88, 0.5), Color(0.82, 0.38, 1)]
-	elif style == 1:
-		options = [Color(0.98, 0.9, 0.3)]
-	elif style == 2:
-		options = [Color(0.78, 0.48, 0.22), Color(0.55, 0.36, 0.2)]
-	elif style == 3:
-		options = [Color(0.18, 0.75, 0.28), Color(0.32, 0.82, 0.22), Color(0.12, 0.62, 0.32)]
-	elif style == 4:
-		options = [Color(0.95, 0.22, 0.22), Color(0.2, 0.45, 0.98), Color(1, 0.78, 0.15), Color(0.95, 0.95, 0.98), Color(0.15, 0.78, 0.72)]
-	elif style == 5:
-		options = [Color(1, 0.55, 0.15), Color(1, 0.4, 0.55), Color(0.2, 0.75, 0.85)]
-	elif style == 6:
-		options = [Color(0.95, 0.42, 0.38), Color(0.4, 0.68, 0.98), Color(0.98, 0.82, 0.35), Color(0.68, 0.48, 0.95)]
-	else:
-		options = [Color(0.5, 0.72, 0.98), Color(0.95, 0.5, 0.68), Color(0.98, 0.66, 0.32)]
-	var c: Color = options[randi() % options.size()]
-	return c.lightened(randf_range(-0.06, 0.08))
+func _scatter(kinds: Array, defs: Array, count: int, _where: String) -> void:
+	var made := 0
+	var tries := 0
+	while made < count and tries < count * 30:
+		tries += 1
+		var p := Vector3(randf_range(GRID_MIN + 0.2, GRID_MAX - 0.2), 0, randf_range(GRID_MIN + 0.2, GRID_MAX - 0.2))
+		if _road_line(int(round(p.x))) or _road_line(int(round(p.z))):
+			continue
+		if p.length() < 2.2:
+			continue
+		var ki: int = kinds[randi() % kinds.size()]
+		var native: Vector3 = kind_native[ki]
+		var sxz := float(defs[ki][2])
+		var foot := maxf(native.x, native.z) * sxz * 0.5
+		if _overlaps(p, foot):
+			continue
+		_add_prop(ki, p, Vector3.ZERO, randf() * TAU, defs[ki])
+		made += 1
 
-func _road_dist(v: float) -> float:
-	var m := fposmod(v, 10.0)
-	return minf(m, 10.0 - m)
+func _spawn_walkers(kinds: Array, defs: Array) -> void:
+	var made := 0
+	for i in range(GRID_MIN, GRID_MAX + 1):
+		if not _road_line(i):
+			continue
+		for axis in [0, 1]:
+			for side in [-1.0, 1.0]:
+				if made >= 28:
+					return
+				var along := randf_range(float(GRID_MIN) + 1.4, float(GRID_MAX) - 1.4)
+				var p := Vector3(along, 0, float(i) + 0.36 * side) if axis == 0 else Vector3(float(i) + 0.36 * side, 0, along)
+				if _road_line(int(round(p.x))) and _road_line(int(round(p.z))):
+					continue
+				if _overlaps(p, 0.22) or p.length() < 1.6:
+					continue
+				var dir := Vector3(1.0 if side > 0.0 else -1.0, 0, 0) if axis == 0 else Vector3(0, 0, 1.0 if side > 0.0 else -1.0)
+				var ki: int = kinds[made % kinds.size()]
+				_add_prop(ki, p, dir, 0.0, defs[ki])
+				made += 1
 
-func _random_spot(place: int) -> Array:
-	var roads := [-40, -30, -20, -10, 0, 10, 20, 30, 40]
-	var road := float(roads[randi() % roads.size()])
-	var along := randf_range(-CITY_HALF + 1.0, CITY_HALF - 1.0)
-	var horiz := randf() > 0.5
-	var sign_side := 1.0 if randf() > 0.5 else -1.0
-	var dir := Vector3.ZERO
-	var p := Vector3.ZERO
-	if place == 1:
-		var lane := 0.85 * sign_side
-		if horiz:
-			p = Vector3(along, 0, road + lane)
-			dir = Vector3(-sign_side, 0, 0)
-		else:
-			p = Vector3(road + lane, 0, along)
-			dir = Vector3(0, 0, -sign_side)
-	elif place == 0:
-		var side := 2.45 * sign_side
-		if horiz:
-			p = Vector3(along, 0, road + side)
-			dir = Vector3(1.0 if randf() > 0.5 else -1.0, 0, 0)
-		else:
-			p = Vector3(road + side, 0, along)
-			dir = Vector3(0, 0, 1.0 if randf() > 0.5 else -1.0)
-	else:
-		p = Vector3(randf_range(-CITY_HALF + 2.0, CITY_HALF - 2.0), 0, randf_range(-CITY_HALF + 2.0, CITY_HALF - 2.0))
-		dir = Vector3.ZERO
-	if dir.length_squared() > 0.0:
-		dir = dir.normalized()
-	return [p, dir]
+func _spawn_lamps(kinds: Array, defs: Array) -> void:
+	var made := 0
+	for i in range(GRID_MIN, GRID_MAX + 1):
+		if not _road_line(i):
+			continue
+		var along := float(GRID_MIN + 2)
+		while along < float(GRID_MAX - 1):
+			if made >= 20:
+				return
+			if not _road_line(int(round(along))):
+				var p := Vector3(along, 0, float(i) + 0.48)
+				if not _overlaps(p, 0.25):
+					var ki: int = kinds[made % kinds.size()]
+					_add_prop(ki, p, Vector3.ZERO, 0.0, defs[ki])
+					made += 1
+			along += 3.0
 
-func _accept(p: Vector3, size: float, place: int) -> bool:
-	if Vector2(p.x, p.z).length() < 6.0:
-		return false
-	if absf(p.x) > CITY_HALF - 0.5 or absf(p.z) > CITY_HALF - 0.5:
-		return false
-	var dx := _road_dist(p.x)
-	var dz := _road_dist(p.z)
-	if place == 2 and (dx < 3.1 or dz < 3.1):
-		return false
+func _spawn_cars(kinds: Array, defs: Array) -> void:
+	var made := 0
+	for i in range(GRID_MIN, GRID_MAX + 1):
+		if not _road_line(i):
+			continue
+		for axis in [0, 1]:
+			for sgn in [-1.0, 1.0]:
+				if made >= 16:
+					return
+				var along := randf_range(GRID_MIN + 1.0, GRID_MAX - 1.0)
+				var p: Vector3
+				var dir: Vector3
+				if axis == 0:
+					p = Vector3(along, 0, float(i) + 0.16 * sgn)
+					dir = Vector3(sgn, 0, 0)
+				else:
+					p = Vector3(float(i) + 0.16 * sgn, 0, along)
+					dir = Vector3(0, 0, sgn)
+				if _overlaps(p, 0.85, ["person", "lamp", "small"]):
+					continue
+				var ki: int = kinds[made % kinds.size()]
+				_add_prop(ki, p, dir, 0.0, defs[ki])
+				made += 1
+
+func _overlaps(p: Vector3, foot: float, ignore_roles: Array = []) -> bool:
 	for o in props:
+		if str(o.role) in ignore_roles:
+			continue
 		var op: Vector3 = o.pos
-		if Vector2(op.x - p.x, op.z - p.z).length() < float(o.size) + size + 0.45:
-			return false
-	return true
+		if Vector2(op.x - p.x, op.z - p.z).length() < float(o.size) + foot + 0.28:
+			return true
+	return false
 
-func _add_prop(style: int, p: Vector3, dir: Vector3, size: float, height: float, points: int, mover: int, _place: int) -> void:
-	var yaw := atan2(dir.x, dir.z) if dir.length_squared() > 0.0 else randf() * TAU
+func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) -> void:
+	var native: Vector3 = kind_native[ki]
+	var sxz := float(spec[2])
+	var sy := float(spec[3])
+	if str(spec[5]) in ["building", "wide", "house", "tower"]:
+		sy *= randf_range(0.86, 1.22)
+		sxz *= randf_range(0.94, 1.06)
+	var yaw_off := float(spec[7])
+	var yaw := yaw_in
+	if dir.length_squared() > 0.001:
+		yaw = atan2(dir.x, dir.z) + yaw_off
+	var scale := Vector3(sxz, sy, sxz)
+	var basis := Basis(Vector3.UP, yaw).scaled(scale)
+	var xform := Transform3D(basis, p)
+	var foot := maxf(native.x, native.z) * sxz * 0.5
+	var height := native.y * sy
+	var mover := int(spec[6])
 	var spd := 0.0
 	if mover == 1:
-		spd = randf_range(1.15, 1.65)
+		spd = randf_range(0.55, 0.85)
 	elif mover == 2:
-		spd = randf_range(2.6, 4.4)
-	var col := _kind_color(style)
-	var list: Array = kind_lists[style]
-	var xform := Transform3D(Basis(Vector3.UP, yaw), p + Vector3(0, height * 0.5, 0))
+		spd = randf_range(1.3, 2.1)
+	var tint := Color.WHITE
+	var role := str(spec[5])
+	if role in ["building", "wide", "house", "tower"]:
+		var palette := [Color(1, 0.45, 0.4), Color(0.35, 0.62, 1), Color(1, 0.82, 0.3), Color(0.45, 0.9, 0.55), Color(0.78, 0.48, 1), Color(1, 0.62, 0.25)]
+		tint = Color.WHITE.lerp(palette[randi() % palette.size()], 0.42)
+	var list: Array = kind_lists[ki]
 	var o := {
-		"kind": style,
+		"kind": ki,
 		"index": list.size(),
+		"shadow": -1,
 		"pos": p,
 		"yaw": yaw,
-		"size": size,
+		"scale": scale,
+		"size": foot,
 		"height": height,
-		"points": points,
-		"color": col,
+		"points": int(spec[4]),
+		"role": role,
+		"color": tint,
 		"mover": mover,
 		"dir": dir,
 		"speed": spd,
@@ -460,11 +749,82 @@ func _build_kind_multimesh(ki: int) -> void:
 		mm.set_instance_color(obj.index, obj.color)
 	var inst := MultiMeshInstance3D.new()
 	inst.multimesh = mm
-	inst.material_override = lit_mat
-	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 4, -16, -CITY_HALF - 4), Vector3(CITY_HALF * 2 + 8, 48, CITY_HALF * 2 + 8))
+	inst.material_override = kind_mats[ki]
+	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 2, -6, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, 24, CITY_HALF * 2 + 4))
 	_no_shadow(inst)
 	add_child(inst)
 	kind_multimeshes[ki] = mm
+
+func _build_shadows() -> void:
+	var img := Image.create(48, 48, false, Image.FORMAT_RGBA8)
+	for y in 48:
+		for x in 48:
+			var d := Vector2(float(x) - 23.5, float(y) - 23.5).length() / 23.5
+			var a := clampf(1.0 - smoothstep(0.15, 1.0, d), 0.0, 1.0)
+			img.set_pixel(x, y, Color(0, 0, 0, a * a * 0.42))
+	var tex := ImageTexture.create_from_image(img)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = tex
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	var quad := PlaneMesh.new()
+	quad.size = Vector2(1, 1)
+	shadow_mm = MultiMesh.new()
+	shadow_mm.transform_format = MultiMesh.TRANSFORM_3D
+	shadow_mm.mesh = quad
+	shadow_mm.instance_count = maxi(props.size(), 1)
+	shadow_mm.visible_instance_count = props.size()
+	shadow_owners.resize(props.size())
+	for i in props.size():
+		props[i].shadow = i
+		shadow_owners[i] = props[i]
+		shadow_mm.set_instance_transform(i, _shadow_xform(props[i]))
+	var inst := MultiMeshInstance3D.new()
+	inst.multimesh = shadow_mm
+	inst.material_override = mat
+	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 2, -2, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, 8, CITY_HALF * 2 + 4))
+	_no_shadow(inst)
+	add_child(inst)
+
+func _shadow_xform(o: Dictionary) -> Transform3D:
+	var p: Vector3 = o.pos
+	if bool(o.in_body) and o.body != null:
+		var b: RigidBody3D = o.body
+		p = b.global_position
+	var dx := p.x - hole_pos.x
+	var dz := p.z - hole_pos.z
+	if dx * dx + dz * dz < hole_radius * hole_radius * 0.8:
+		return Transform3D(Basis(), Vector3(0, -30, 0))
+	var s := float(o.size) * 2.6
+	var basis := Basis()
+	basis.x *= s
+	basis.z *= s
+	return Transform3D(basis, Vector3(p.x, 0.045, p.z))
+
+func _set_shadow(o: Dictionary) -> void:
+	if shadow_mm == null:
+		return
+	var idx := int(o.shadow)
+	if idx < 0:
+		return
+	shadow_mm.set_instance_transform(idx, _shadow_xform(o))
+
+func _drop_shadow(o: Dictionary) -> void:
+	if shadow_mm == null or int(o.shadow) < 0:
+		return
+	var i := int(o.shadow)
+	var last := shadow_owners.size() - 1
+	if i != last and last >= 0:
+		var swapped: Dictionary = shadow_owners[last]
+		swapped.shadow = i
+		shadow_owners[i] = swapped
+		shadow_mm.set_instance_transform(i, shadow_mm.get_instance_transform(last))
+	if last >= 0:
+		shadow_owners.remove_at(last)
+	shadow_mm.visible_instance_count = shadow_owners.size()
+	o.shadow = -1
 
 func _unmesh(o: Dictionary) -> void:
 	if not bool(o.in_mesh):
@@ -482,6 +842,7 @@ func _unmesh(o: Dictionary) -> void:
 	list.pop_back()
 	mm.visible_instance_count = list.size()
 	o.in_mesh = false
+	_drop_shadow(o)
 
 func _build_ui() -> void:
 	var ui := CanvasLayer.new()
@@ -509,7 +870,7 @@ func _build_ui() -> void:
 	bar_fill = ColorRect.new()
 	bar_fill.position = Vector2(3, 3)
 	bar_fill.size = Vector2(0, 12)
-	bar_fill.color = Color(0.2, 0.9, 1.0)
+	bar_fill.color = Color(1.0, 0.78, 0.2)
 	bar_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bar.add_child(bar_fill)
 	level_lbl = Label.new()
@@ -519,16 +880,21 @@ func _build_ui() -> void:
 	sha_lbl = Label.new()
 	sha_lbl.anchor_left = 1.0
 	sha_lbl.anchor_right = 1.0
-	sha_lbl.anchor_top = 0.0
-	sha_lbl.anchor_bottom = 0.0
 	sha_lbl.offset_left = -210
 	sha_lbl.offset_right = -18
-	sha_lbl.offset_top = 68
-	sha_lbl.offset_bottom = 98
+	sha_lbl.offset_top = 100
+	sha_lbl.offset_bottom = 130
 	sha_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_style(sha_lbl, 18)
 	sha_lbl.text = _short_sha()
 	ui.add_child(sha_lbl)
+	for _i in 6:
+		var fl := Label.new()
+		_style(fl, 32)
+		fl.visible = false
+		fl.modulate = Color(1, 0.95, 0.4)
+		ui.add_child(fl)
+		floaters.append({"lbl": fl, "pos": Vector3.ZERO, "age": -1.0})
 	over_panel = ColorRect.new()
 	(over_panel as ColorRect).color = Color(0, 0, 0, 0.62)
 	over_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -604,11 +970,12 @@ func _move_hole(delta: float) -> void:
 	else:
 		var alpha := 1.0 - exp(-STOP_RATE * delta)
 		velocity = velocity.lerp(Vector3.ZERO, alpha)
-		if velocity.length_squared() < 0.04:
+		if velocity.length_squared() < 0.01:
 			velocity = Vector3.ZERO
 	hole_pos += velocity * delta
-	hole_pos.x = clampf(hole_pos.x, -CITY_HALF, CITY_HALF)
-	hole_pos.z = clampf(hole_pos.z, -CITY_HALF, CITY_HALF)
+	var lim := CITY_HALF - 0.6
+	hole_pos.x = clampf(hole_pos.x, -lim, lim)
+	hole_pos.z = clampf(hole_pos.z, -lim, lim)
 
 func _refresh_joystick() -> void:
 	if joy_ui:
@@ -666,6 +1033,7 @@ func _refresh_hud() -> void:
 	shown_level = level
 
 func _process(delta: float) -> void:
+	var frame_delta := delta
 	delta = minf(delta, 1.0 / 20.0)
 	if playing:
 		time_left -= delta
@@ -685,18 +1053,42 @@ func _process(delta: float) -> void:
 		pop = 1.0 + sin(u * PI) * 0.22
 		pop_t = maxf(0.0, pop_t - delta)
 	var vis := shown_radius * pop
-	hole_mesh.position = hole_pos + Vector3(0, 0.045, 0)
-	hole_mesh.scale = Vector3(vis, 1, vis)
-	rim_mesh.position = hole_pos + Vector3(0, 0.06, 0)
-	rim_mesh.scale = Vector3(vis, 0.35, vis)
+	hole_mesh.position = hole_pos
+	hole_mesh.scale = Vector3(vis, 1.0, vis)
+	if ground_mat:
+		ground_mat.set_shader_parameter("hole_center", hole_pos)
+		ground_mat.set_shader_parameter("hole_radius", vis)
 	_smooth_camera(delta)
+	_tick_floaters(delta)
 	var sec := int(ceili(time_left))
 	if score != shown_score or level != shown_level or sec != shown_sec:
 		_refresh_hud()
 	if debug_on:
-		_update_debug(delta)
+		_update_debug(frame_delta)
+
+func _tick_floaters(delta: float) -> void:
+	for f in floaters:
+		if float(f.age) < 0.0:
+			continue
+		f.age = float(f.age) + delta
+		var p: Vector3 = f.pos
+		p.y += delta * 0.9
+		f.pos = p
+		var lbl: Label = f.lbl
+		if float(f.age) > 0.85 or cam.is_position_behind(p):
+			lbl.visible = false
+			if float(f.age) > 0.85:
+				f.age = -1.0
+			continue
+		var sp := cam.unproject_position(p)
+		lbl.visible = true
+		lbl.position = sp + Vector2(-16, -8)
+		var col := lbl.modulate
+		col.a = clampf(1.0 - float(f.age) / 0.85, 0.0, 1.0)
+		lbl.modulate = col
 
 func _tick_movers(delta: float) -> void:
+	var lim := float(GRID_MAX) + 0.15
 	for o in movers:
 		if bool(o.in_body) or not bool(o.alive):
 			continue
@@ -704,26 +1096,28 @@ func _tick_movers(delta: float) -> void:
 		var spd := float(o.speed)
 		var p: Vector3 = o.pos
 		p += dir * spd * delta
-		if p.x > CITY_HALF:
-			p.x = -CITY_HALF
-		elif p.x < -CITY_HALF:
-			p.x = CITY_HALF
-		if p.z > CITY_HALF:
-			p.z = -CITY_HALF
-		elif p.z < -CITY_HALF:
-			p.z = CITY_HALF
-		if int(o.mover) == 1 and randf() < delta * 0.35:
+		if p.x > lim:
+			p.x = -lim
+		elif p.x < -lim:
+			p.x = lim
+		if p.z > lim:
+			p.z = -lim
+		elif p.z < -lim:
+			p.z = lim
+		if int(o.mover) == 1 and randf() < delta * 0.25:
 			dir = -dir
 		o.dir = dir
 		o.pos = p
+		# Kenney cars and characters face +Z. atan2(dir.x, dir.z) maps +Z onto dir.
 		o.yaw = atan2(dir.x, dir.z)
 		o.vel = dir * spd
-		var h := float(o.height)
-		var xform := Transform3D(Basis(Vector3.UP, float(o.yaw)), p + Vector3(0, h * 0.5, 0))
+		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
+		var xform := Transform3D(basis, p)
 		o.xform = xform
 		if bool(o.in_mesh):
 			var mm: MultiMesh = kind_multimeshes[int(o.kind)]
 			mm.set_instance_transform(int(o.index), xform)
+			_set_shadow(o)
 
 func _update_debug(delta: float) -> void:
 	var frame_ms := delta * 1000.0
@@ -752,8 +1146,8 @@ func _flat_dist(p: Vector3) -> float:
 func _wants_body(o: Dictionary, dist: float) -> bool:
 	var size := float(o.size)
 	if _fits(size):
-		return dist < hole_radius + size + 1.5
-	return dist < hole_radius + size * 0.25
+		return dist < hole_radius + size + 0.8
+	return dist < hole_radius + size * 0.2
 
 func _activate_nearby() -> void:
 	var budget := 2
@@ -780,12 +1174,16 @@ func _take_body(o: Dictionary) -> bool:
 		return false
 	var b: RigidBody3D = pool_free.pop_back()
 	var cs := b.get_node("Shape") as CollisionShape3D
-	cs.shape = kind_shapes[int(o.kind)]
-	b.mass = maxf(0.35, float(o.size) * float(o.height) * 0.45)
-	var h := float(o.height)
+	var native: Vector3 = kind_native[int(o.kind)]
+	var sc: Vector3 = o.scale
+	var box := BoxShape3D.new()
+	box.size = Vector3(maxf(native.x * sc.x, 0.08), maxf(native.y * sc.y, 0.08), maxf(native.z * sc.z, 0.08))
+	cs.shape = box
+	cs.position = Vector3(0, box.size.y * 0.5, 0)
+	b.mass = maxf(0.35, box.size.x * box.size.y * box.size.z * 0.45)
 	var p: Vector3 = o.pos
 	b.freeze = true
-	b.global_transform = Transform3D(Basis(Vector3.UP, float(o.yaw)), p + Vector3(0, h * 0.5, 0))
+	b.global_transform = Transform3D(Basis(Vector3.UP, float(o.yaw)), Vector3(p.x, 0.0, p.z))
 	b.freeze = false
 	b.collision_mask = 1
 	b.linear_velocity = o.vel
@@ -804,20 +1202,26 @@ func _pool_body(b: RigidBody3D) -> void:
 	b.position = Vector3(0, -50, 0)
 	pool_free.append(b)
 
+func _visual_from_body(o: Dictionary, b: RigidBody3D) -> Transform3D:
+	var t := b.global_transform
+	var sc: Vector3 = o.scale
+	var basis := Basis(t.basis.x.normalized() * sc.x, t.basis.y.normalized() * sc.y, t.basis.z.normalized() * sc.z)
+	return Transform3D(basis, t.origin)
+
 func _drive_body(o: Dictionary) -> void:
 	var b: RigidBody3D = o.body
 	if b == null:
 		return
 	var p := b.global_position
-	if p.y < -1.7:
+	if p.y < -2.25:
 		_swallow_done(o)
 		return
 	var dx := p.x - hole_pos.x
 	var dz := p.z - hole_pos.z
 	var dist := sqrt(dx * dx + dz * dz)
 	var size := float(o.size)
-	var committed := p.y < float(o.height) * 0.35
-	if dist > hole_radius + 6.0 and not committed:
+	var committed := p.y < -0.12
+	if dist > hole_radius + 3.2 and not committed:
 		_release_body(o, p)
 		return
 	var mass := b.mass
@@ -827,31 +1231,54 @@ func _drive_body(o: Dictionary) -> void:
 	if _fits(size):
 		if _over_opening(size, dist) or committed:
 			b.collision_mask = 0
-			b.apply_central_force(inward * (12.0 * mass) + Vector3.DOWN * (22.0 * mass))
+			b.apply_central_force(inward * (14.0 * mass) + Vector3.DOWN * (26.0 * mass))
 		else:
 			b.collision_mask = 1
 			if dist < hole_radius + size * 1.9:
 				var axis := inward.cross(Vector3.UP)
-				b.apply_torque(axis * (8.0 * mass))
-				b.apply_central_force(inward * (18.0 * mass))
+				b.apply_torque(axis * (9.0 * mass))
+				b.apply_central_force(inward * (16.0 * mass))
 	else:
 		b.collision_mask = 1
-		if dist < maxf(hole_radius * 0.98, 0.2):
-			var outward := -inward
-			b.apply_central_force(outward * (28.0 * mass))
+		if dist < maxf(hole_radius * 0.98, 0.2) and dist > 0.04:
+			b.apply_central_force(-inward * (22.0 * mass))
 	var v := b.linear_velocity
 	var hv := Vector2(v.x, v.z)
-	if hv.length() > 8.0:
-		hv = hv.limit_length(8.0)
-		b.linear_velocity = Vector3(hv.x, minf(v.y, 5.0), hv.y)
+	if hv.length() > 4.2:
+		hv = hv.limit_length(4.2)
+		b.linear_velocity = Vector3(hv.x, minf(v.y, 4.0), hv.y)
 	if bool(o.in_mesh):
 		var mm: MultiMesh = kind_multimeshes[int(o.kind)]
-		mm.set_instance_transform(int(o.index), b.global_transform)
+		var xf := _visual_from_body(o, b)
+		o.xform = xf
+		mm.set_instance_transform(int(o.index), xf)
+		_set_shadow(o)
+
+func _burst(at: Vector3, points: int, tint: Color) -> void:
+	pop_fx.global_position = at + Vector3(0, 0.45, 0)
+	var pm := pop_fx.material_override as StandardMaterial3D
+	pm.albedo_color = Color(tint.r, tint.g, tint.b, 0.95).lerp(Color(1, 0.95, 0.4, 0.95), 0.45)
+	pop_fx.restart()
+	pop_fx.emitting = true
+	for f in floaters:
+		if float(f.age) < 0.0:
+			f.age = 0.0
+			f.pos = at + Vector3(0, 0.7, 0)
+			var lbl: Label = f.lbl
+			lbl.text = "+%d" % points
+			lbl.visible = true
+			lbl.modulate = Color(1, 0.95, 0.35, 1)
+			return
 
 func _swallow_done(o: Dictionary) -> void:
+	var at := hole_pos
+	if o.body != null:
+		var b: RigidBody3D = o.body
+		at = b.global_position
 	if playing and bool(o.alive):
 		score += int(o.points)
 		_sync_level()
+		_burst(at, int(o.points), o.color)
 	o.alive = false
 	if o.body != null:
 		_pool_body(o.body)
@@ -870,8 +1297,9 @@ func _release_body(o: Dictionary, p: Vector3) -> void:
 	o.pos = grounded
 	active.erase(o)
 	if bool(o.in_mesh):
-		var h := float(o.height)
-		var xform := Transform3D(Basis(Vector3.UP, float(o.yaw)), grounded + Vector3(0, h * 0.5, 0))
+		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
+		var xform := Transform3D(basis, grounded)
 		o.xform = xform
 		var mm: MultiMesh = kind_multimeshes[int(o.kind)]
 		mm.set_instance_transform(int(o.index), xform)
+		_set_shadow(o)
