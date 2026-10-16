@@ -17,6 +17,10 @@ const SPEED_SCREEN := 0.84
 const POOL := 8
 const FIT_RATIO := 0.92
 const POP_TIME := 0.32
+const FALL_GRAVITY := 2.15
+const RIM_MASK := 8
+const RIM_COUNT := 16
+const COMBO_WINDOW := 1.15
 const BUILD_SHA := "__BUILD_SHA__"
 const LEVEL_SCORE := [0, 14, 36, 70, 120, 190]
 const LEVEL_RADIUS := [0.50, 0.78, 1.05, 1.42, 1.9, 2.5]
@@ -25,6 +29,7 @@ render_mode diffuse_lambert, cull_back;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec3 hole_center = vec3(0.0);
 uniform float hole_radius = 0.0;
+uniform float paint_grass = 0.0;
 varying vec3 world_pos;
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -34,9 +39,44 @@ void fragment() {
 	if (hole_radius > 0.0 && dot(d, d) < hole_radius * hole_radius) {
 		discard;
 	}
-	ALBEDO = texture(albedo_tex, UV).rgb;
+	vec3 col = texture(albedo_tex, UV).rgb;
+	float luma = dot(col, vec3(0.299, 0.587, 0.114));
+	float mx = max(col.r, max(col.g, col.b));
+	float mn = min(col.r, min(col.g, col.b));
+	float sat = mx - mn;
+	vec3 outc = col;
+	if (paint_grass > 0.5) {
+		float shade = clamp(0.25 + luma * 0.9, 0.0, 1.0);
+		outc = mix(vec3(0.10, 0.58, 0.16), vec3(0.55, 0.95, 0.28), shade);
+	} else if (luma > 0.78 && sat < 0.2) {
+		outc = vec3(0.96, 0.97, 1.0);
+	} else if (col.g > col.r + 0.04 && col.g >= col.b - 0.02) {
+		float shade = clamp(0.2 + luma * 0.95, 0.0, 1.0);
+		outc = mix(vec3(0.12, 0.62, 0.18), vec3(0.58, 0.96, 0.30), shade);
+	} else if (luma > 0.64 && sat < 0.22) {
+		float shade = clamp((luma - 0.4) / 0.5, 0.0, 1.0);
+		outc = mix(vec3(0.93, 0.68, 0.46), vec3(1.0, 0.92, 0.74), shade);
+	} else if (sat < 0.34) {
+		float shade = clamp(luma * 1.15, 0.0, 1.0);
+		outc = mix(vec3(0.14, 0.18, 0.28), vec3(0.32, 0.40, 0.52), shade);
+	} else {
+		outc = clamp(vec3(luma) + (col - vec3(luma)) * 1.85, vec3(0.0), vec3(1.0));
+	}
+	ALBEDO = outc;
 	ROUGHNESS = 1.0;
 	METALLIC = 0.0;
+	SPECULAR = 0.0;
+}
+"""
+const BUILDING_SHADER := """shader_type spatial;
+render_mode diffuse_lambert, cull_back;
+uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+void fragment() {
+	vec3 tex = texture(albedo_tex, UV).rgb;
+	float luma = dot(tex, vec3(0.299, 0.587, 0.114));
+	vec3 candy = COLOR.rgb * mix(0.62, 1.2, clamp(luma, 0.0, 1.0));
+	ALBEDO = mix(tex, candy, 0.84);
+	ROUGHNESS = 1.0;
 	SPECULAR = 0.0;
 }
 """
@@ -97,6 +137,25 @@ var active: Array = []
 var kind_lists: Array = []
 var kind_meshes: Array = []
 var kind_native: Array = []
+var kind_base: Array = []
+var rim_root: Node3D
+var rim_bodies: Array = []
+var rim_radius := -1.0
+var hole_open := 0.5
+var combo := 0
+var combo_left := 0.0
+var size_banner_t := 0.0
+var result_anim := 1.0
+var result_targets: Array = []
+var result_fills: Array = []
+var result_labels: Array = []
+var so_close_lbl: Label
+var star_row: Control
+var next_lbl: Label
+var next_fill: ColorRect
+var combo_lbl: Label
+var size_lbl: Label
+var round_stars := 0
 var kind_multimeshes: Array = []
 var kind_mats: Array = []
 var pool: Array = []
@@ -105,6 +164,7 @@ var body_mat: PhysicsMaterial
 var shadow_mm: MultiMesh
 var shadow_owners: Array = []
 var ground_mat: ShaderMaterial
+var grass_mat: ShaderMaterial
 var hole_mesh: MeshInstance3D
 var pop_fx: CPUParticles3D
 var floaters: Array = []
@@ -174,8 +234,8 @@ func _ready() -> void:
 		Save.unlock_all()
 	_load_font()
 	body_mat = PhysicsMaterial.new()
-	body_mat.friction = 0.55
-	body_mat.bounce = 0.0
+	body_mat.friction = 0.42
+	body_mat.bounce = 0.04
 	_load_textures()
 	_build_world()
 	_build_ui()
@@ -187,6 +247,19 @@ func _ready() -> void:
 	AdService.interstitial_closed.connect(_after_ad)
 	AdService.rewarded_done.connect(_after_reward)
 	_prewarm_shaders()
+	var preview := _query_preview()
+	if preview == "levels":
+		_show_screen("levels")
+	elif preview == "results":
+		call_deferred("_preview_results")
+	elif preview == "play":
+		call_deferred("_on_play")
+
+func _preview_results() -> void:
+	start_round(0)
+	score = int(float(target_score) * 0.86)
+	time_left = 36.0
+	_finish_round(false)
 
 func _short_sha() -> String:
 	var s := BUILD_SHA.strip_edges()
@@ -204,6 +277,18 @@ func _query_debug() -> bool:
 
 func _query_unlockall() -> bool:
 	return _web_search().find("unlockall=1") != -1
+
+func _query_preview() -> String:
+	var search := _web_search()
+	var key := "preview="
+	var at := search.find(key)
+	if at == -1:
+		return ""
+	var rest := search.substr(at + key.length())
+	var amp := rest.find("&")
+	if amp != -1:
+		rest = rest.substr(0, amp)
+	return rest
 
 func _load_font() -> void:
 	var file := load("res://assets/fonts/Fredoka.ttf") as Font
@@ -280,32 +365,32 @@ func _build_world() -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	sky_mat = ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.22, 0.48, 0.98)
-	sky_mat.sky_horizon_color = Color(1.0, 0.72, 0.48)
-	sky_mat.ground_horizon_color = Color(0.95, 0.78, 0.55)
-	sky_mat.ground_bottom_color = Color(0.36, 0.58, 0.34)
+	sky_mat.sky_top_color = Color(0.25, 0.58, 1.0)
+	sky_mat.sky_horizon_color = Color(0.55, 0.86, 1.0)
+	sky_mat.ground_horizon_color = Color(0.55, 0.9, 0.55)
+	sky_mat.ground_bottom_color = Color(0.28, 0.75, 0.32)
 	sky_mat.sun_angle_max = 0.0
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 	e.background_mode = Environment.BG_SKY
 	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(1.0, 0.99, 0.97)
-	e.ambient_light_energy = 0.78
+	e.ambient_light_color = Color(1.0, 0.98, 0.94)
+	e.ambient_light_energy = 1.0
 	e.tonemap_mode = Environment.TONE_MAPPER_LINEAR
-	e.tonemap_exposure = 1.0
+	e.tonemap_exposure = 1.02
 	e.adjustment_enabled = true
-	e.adjustment_brightness = 1.0
-	e.adjustment_contrast = 1.02
-	e.adjustment_saturation = 1.16
+	e.adjustment_brightness = 1.03
+	e.adjustment_contrast = 1.12
+	e.adjustment_saturation = 1.18
 	e.fog_enabled = false
 	world_env = e
 	env.environment = e
 	add_child(env)
 	sun = DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-62, 32, 0)
-	sun.light_color = Color(1.0, 0.98, 0.94)
-	sun.light_energy = 0.22
+	sun.light_color = Color(1.0, 0.96, 0.86)
+	sun.light_energy = 0.4
 	sun.shadow_enabled = false
 	add_child(sun)
 	var floor := StaticBody3D.new()
@@ -319,6 +404,7 @@ func _build_world() -> void:
 	floor.position = Vector3(0, -1.0, 0)
 	floor.add_child(floor_shape)
 	add_child(floor)
+	_build_rim()
 	var gshader := Shader.new()
 	gshader.code = GROUND_SHADER
 	ground_mat = ShaderMaterial.new()
@@ -326,6 +412,13 @@ func _build_world() -> void:
 	ground_mat.set_shader_parameter("albedo_tex", tex_roads)
 	ground_mat.set_shader_parameter("hole_center", Vector3.ZERO)
 	ground_mat.set_shader_parameter("hole_radius", hole_radius)
+	ground_mat.set_shader_parameter("paint_grass", 0.0)
+	grass_mat = ShaderMaterial.new()
+	grass_mat.shader = gshader
+	grass_mat.set_shader_parameter("albedo_tex", tex_roads)
+	grass_mat.set_shader_parameter("hole_center", Vector3.ZERO)
+	grass_mat.set_shader_parameter("hole_radius", hole_radius)
+	grass_mat.set_shader_parameter("paint_grass", 1.0)
 	hole_mesh = MeshInstance3D.new()
 	hole_mesh.mesh = _build_pit_mesh()
 	var pshader := Shader.new()
@@ -444,17 +537,67 @@ func _camera_offset(dist: float) -> Vector3:
 func _cam_dist_for(radius: float) -> float:
 	return CAM_BASE + radius * CAM_PER_RADIUS
 
+func _build_rim() -> void:
+	rim_root = Node3D.new()
+	rim_root.name = "Rim"
+	add_child(rim_root)
+	var mat := PhysicsMaterial.new()
+	mat.friction = 0.45
+	mat.bounce = 0.0
+	for _i in RIM_COUNT:
+		var body := StaticBody3D.new()
+		body.collision_layer = RIM_MASK
+		body.collision_mask = 0
+		body.physics_material_override = mat
+		var cs := CollisionShape3D.new()
+		cs.shape = BoxShape3D.new()
+		body.add_child(cs)
+		rim_root.add_child(body)
+		rim_bodies.append(body)
+	_layout_rim(0.5)
+
+func _layout_rim(radius: float) -> void:
+	# Thin ground shelf around the opening. The inner edge is the fulcrum;
+	# there is no tall wall, so a body tips over the rim and tumbles in.
+	var reach := maxf(1.8, radius * 1.5)
+	var height := 0.14
+	var mid := radius + reach * 0.5
+	var chord := maxf(TAU * radius / float(RIM_COUNT) * 1.32, 0.16)
+	for i in RIM_COUNT:
+		var ang := TAU * float(i) / float(RIM_COUNT)
+		var body: StaticBody3D = rim_bodies[i]
+		var cs := body.get_child(0) as CollisionShape3D
+		var box := cs.shape as BoxShape3D
+		box.size = Vector3(reach, height, chord)
+		var outward := Vector3(cos(ang), 0.0, sin(ang))
+		var tangent := Vector3(-sin(ang), 0.0, cos(ang))
+		body.transform = Transform3D(Basis(outward, Vector3.UP, tangent), outward * mid + Vector3(0, -height * 0.5, 0))
+	rim_radius = radius
+
+func _sync_rim() -> void:
+	if rim_root == null:
+		return
+	if not playing:
+		rim_root.position = Vector3(0, -40, 0)
+		return
+	var r := hole_open if hole_open > 0.05 else hole_radius
+	rim_root.global_position = Vector3(hole_pos.x, 0.0, hole_pos.z)
+	if absf(r - rim_radius) > 0.015:
+		_layout_rim(r)
+
 func _make_pool() -> void:
 	for _i in POOL:
 		var b := RigidBody3D.new()
 		b.collision_layer = 2
 		b.collision_mask = 1
-		b.gravity_scale = 3.2
-		b.linear_damp = 0.35
-		b.angular_damp = 1.4
+		b.gravity_scale = FALL_GRAVITY
+		b.linear_damp = 0.04
+		b.angular_damp = 0.1
 		b.can_sleep = false
 		b.continuous_cd = false
-		b.axis_lock_angular_y = true
+		b.axis_lock_angular_x = false
+		b.axis_lock_angular_y = false
+		b.axis_lock_angular_z = false
 		b.physics_material_override = body_mat
 		b.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		var cs := CollisionShape3D.new()
@@ -485,11 +628,44 @@ func _load_model(path: String) -> Dictionary:
 	for s in mesh.get_surface_count():
 		st2.append_from(mesh, s, Transform3D(Basis(), shift))
 	var planted := _shade_mesh(st2.commit())
-	return {"mesh": planted, "size": planted.get_aabb().size}
+	return {"mesh": planted, "size": planted.get_aabb().size, "base": _contact_half(planted)}
 
 func _shade_mesh(mesh: Mesh) -> ArrayMesh:
-	# Keep the Kenney colors flat. Base darkening read as mud against a high-key scene.
-	return mesh as ArrayMesh
+	var arrays: Array = mesh.surface_get_arrays(0)
+	var cols: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	if cols.is_empty():
+		return mesh as ArrayMesh
+	for i in cols.size():
+		var c: Color = cols[i]
+		var luma := c.r * 0.3 + c.g * 0.59 + c.b * 0.11
+		cols[i] = Color(
+			clampf(luma + (c.r - luma) * 1.65, 0.0, 1.0),
+			clampf(luma + (c.g - luma) * 1.65, 0.0, 1.0),
+			clampf(luma + (c.b - luma) * 1.65, 0.0, 1.0),
+			1.0
+		)
+	arrays[Mesh.ARRAY_COLOR] = cols
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return out
+
+func _contact_half(mesh: Mesh) -> float:
+	var aabb := mesh.get_aabb()
+	var arrays: Array = mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var y0 := aabb.position.y
+	var h := maxf(aabb.size.y, 0.001)
+	var cx := aabb.position.x + aabb.size.x * 0.5
+	var cz := aabb.position.z + aabb.size.z * 0.5
+	var half := 0.0
+	var count := 0
+	for v in verts:
+		if v.y <= y0 + maxf(h * 0.1, 0.02):
+			half = maxf(half, maxf(absf(v.x - cx), absf(v.z - cz)))
+			count += 1
+	if count < 3 or half < 0.012:
+		half = maxf(aabb.size.x, aabb.size.z) * 0.22
+	return half
 
 func _collect_mesh(n: Node, parent: Transform3D, st: SurfaceTool) -> void:
 	var xform := parent
@@ -530,6 +706,18 @@ func _append_surface(st: SurfaceTool, mesh: Mesh, surface: int, xform: Transform
 			st.set_uv(uvs[idx])
 		st.add_vertex(basis * verts[idx] + origin)
 
+func _kind_material(spec: Array) -> Material:
+	var role := str(spec[5])
+	if role in ["building", "wide", "house", "tower"]:
+		var sm := ShaderMaterial.new()
+		var sh := Shader.new()
+		sh.code = BUILDING_SHADER
+		sm.shader = sh
+		var src: StandardMaterial3D = spec[1]
+		sm.set_shader_parameter("albedo_tex", src.albedo_texture)
+		return sm
+	return spec[1]
+
 func _ensure_models() -> void:
 	if not prop_defs.is_empty():
 		return
@@ -566,7 +754,8 @@ func _ensure_models() -> void:
 		kind_lists.append([])
 		kind_meshes.append(info.mesh)
 		kind_native.append(info.size)
-		kind_mats.append(d[1])
+		kind_base.append(float(info.base))
+		kind_mats.append(_kind_material(d))
 		kind_multimeshes.append(null)
 	ground_meshes = [
 		_load_model("res://assets/kenney/roads/road-straight.glb").mesh,
@@ -625,15 +814,15 @@ func _spawn_ground() -> void:
 					straights.append({"at": at, "yaw": PI * 0.5})
 			else:
 				grasses.append(at)
-	_tile_multimesh(straight, straights, true)
-	_tile_multimesh(crossing, crossings, true)
-	_tile_multimesh(cross, crosses, false)
-	_tile_multimesh(grass, grasses, false)
+	_tile_multimesh(straight, straights, true, false)
+	_tile_multimesh(crossing, crossings, true, false)
+	_tile_multimesh(cross, crosses, false, false)
+	_tile_multimesh(grass, grasses, false, true)
 
 func _road_line(i: int) -> bool:
 	return i % ROAD_STEP == 0
 
-func _tile_multimesh(mesh: Mesh, items: Array, has_yaw: bool) -> void:
+func _tile_multimesh(mesh: Mesh, items: Array, has_yaw: bool, grass: bool) -> void:
 	if items.is_empty():
 		return
 	var mm := MultiMesh.new()
@@ -652,7 +841,7 @@ func _tile_multimesh(mesh: Mesh, items: Array, has_yaw: bool) -> void:
 		mm.set_instance_transform(n, Transform3D(Basis(Vector3.UP, yaw), pos))
 	var inst := MultiMeshInstance3D.new()
 	inst.multimesh = mm
-	inst.material_override = ground_mat
+	inst.material_override = grass_mat if grass else ground_mat
 	inst.custom_aabb = AABB(Vector3(-CITY_HALF - 2, -4, -CITY_HALF - 2), Vector3(CITY_HALF * 2 + 4, 20, CITY_HALF * 2 + 4))
 	_no_shadow(inst)
 	_add_city(inst)
@@ -819,6 +1008,7 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 	var basis := Basis(Vector3.UP, yaw).scaled(scale)
 	var xform := Transform3D(basis, p)
 	var foot := maxf(native.x, native.z) * sxz * 0.5
+	var base := maxf(float(kind_base[ki]) * sxz, 0.05)
 	var height := native.y * sy
 	var mover := int(spec[6])
 	var spd := 0.0
@@ -829,8 +1019,8 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 	var tint := Color.WHITE
 	var role := str(spec[5])
 	if role in ["building", "wide", "house", "tower"]:
-		var palette := [Color(1, 0.45, 0.4), Color(0.35, 0.62, 1), Color(1, 0.82, 0.3), Color(0.45, 0.9, 0.55), Color(0.78, 0.48, 1), Color(1, 0.62, 0.25)]
-		tint = Color.WHITE.lerp(palette[randi() % palette.size()], 0.16)
+		var palette := [Color(0.96, 0.18, 0.24), Color(1.0, 0.78, 0.12), Color(0.1, 0.78, 0.82), Color(1.0, 0.38, 0.66), Color(1.0, 0.46, 0.08), Color(0.32, 0.46, 0.98)]
+		tint = palette[randi() % palette.size()]
 	var list: Array = kind_lists[ki]
 	var o := {
 		"kind": ki,
@@ -840,6 +1030,7 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 		"yaw": yaw,
 		"scale": scale,
 		"size": foot,
+		"base": base,
 		"height": height,
 		"points": int(spec[4]),
 		"role": role,
@@ -995,9 +1186,40 @@ func _build_ui() -> void:
 	_style(timer_lbl, 36)
 	ui.add_child(timer_lbl)
 	level_lbl = Label.new()
-	level_lbl.position = Vector2(132, 78)
-	_style(level_lbl, 24)
+	level_lbl.position = Vector2(132, 72)
+	_style(level_lbl, 22)
 	ui.add_child(level_lbl)
+	next_lbl = Label.new()
+	next_lbl.position = Vector2(132, 104)
+	_style(next_lbl, 18)
+	ui.add_child(next_lbl)
+	var next_bg := ColorRect.new()
+	next_bg.position = Vector2(132, 134)
+	next_bg.size = Vector2(226, 14)
+	next_bg.color = Color(1, 1, 1, 0.28)
+	next_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(next_bg)
+	next_fill = ColorRect.new()
+	next_fill.position = Vector2(3, 2)
+	next_fill.size = Vector2(0, 10)
+	next_fill.color = Color(1.0, 0.45, 0.7)
+	next_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	next_bg.add_child(next_fill)
+	combo_lbl = Label.new()
+	combo_lbl.position = Vector2(180, 160)
+	combo_lbl.visible = false
+	_style(combo_lbl, 28)
+	combo_lbl.modulate = Color(1, 0.86, 0.2)
+	ui.add_child(combo_lbl)
+	size_lbl = Label.new()
+	size_lbl.text = "SIZE UP!"
+	size_lbl.position = Vector2(150, 520)
+	size_lbl.size = Vector2(420, 80)
+	size_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	size_lbl.visible = false
+	size_lbl.pivot_offset = Vector2(210, 40)
+	_style(size_lbl, 54)
+	ui.add_child(size_lbl)
 	name_lbl = Label.new()
 	name_lbl.text = PLAYER_NAME
 	name_lbl.size = Vector2(140, 36)
@@ -1023,25 +1245,76 @@ func _build_ui() -> void:
 		ui.add_child(fl)
 		floaters.append({"lbl": fl, "pos": Vector3.ZERO, "age": -1.0})
 	over_panel = ColorRect.new()
-	(over_panel as ColorRect).color = Color(0, 0, 0, 0.62)
+	(over_panel as ColorRect).color = Color(0.12, 0.28, 0.62, 0.55)
 	over_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	over_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	over_panel.visible = false
 	ui.add_child(over_panel)
+	var card := Panel.new()
+	card.position = Vector2(48, 150)
+	card.size = Vector2(624, 760)
+	var card_style := StyleBoxFlat.new()
+	card_style.bg_color = Color(0.96, 0.98, 1.0)
+	card_style.corner_radius_top_left = 28
+	card_style.corner_radius_top_right = 28
+	card_style.corner_radius_bottom_left = 28
+	card_style.corner_radius_bottom_right = 28
+	card.add_theme_stylebox_override("panel", card_style)
+	over_panel.add_child(card)
 	over_lbl = Label.new()
-	over_lbl.position = Vector2(40, 220)
-	over_lbl.size = Vector2(640, 420)
+	over_lbl.position = Vector2(70, 175)
+	over_lbl.size = Vector2(580, 90)
 	over_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	over_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_style(over_lbl, 40)
+	_style(over_lbl, 36)
+	over_lbl.add_theme_color_override("font_color", Color(0.12, 0.28, 0.55))
+	over_lbl.add_theme_constant_override("outline_size", 0)
 	over_panel.add_child(over_lbl)
-	double_btn = _make_button("Double coins", Vector2(150, 680), Vector2(420, 70), Color(0.95, 0.62, 0.15))
+	star_row = Control.new()
+	star_row.position = Vector2(250, 270)
+	star_row.size = Vector2(220, 48)
+	star_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	star_row.set_meta("stars", 0)
+	star_row.draw.connect(_draw_star_row.bind(star_row))
+	over_panel.add_child(star_row)
+	for i in 3:
+		var cap := Label.new()
+		cap.position = Vector2(90, 340 + i * 78)
+		cap.size = Vector2(540, 28)
+		_style(cap, 20)
+		cap.add_theme_color_override("font_color", Color(0.15, 0.28, 0.48))
+		cap.add_theme_constant_override("outline_size", 0)
+		over_panel.add_child(cap)
+		result_labels.append(cap)
+		var track := ColorRect.new()
+		track.position = Vector2(90, 372 + i * 78)
+		track.size = Vector2(540, 18)
+		track.color = Color(0.8, 0.86, 0.95)
+		track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		over_panel.add_child(track)
+		var fill := ColorRect.new()
+		fill.position = Vector2(3, 3)
+		fill.size = Vector2(0, 10)
+		fill.color = Color(0.2, 0.72, 0.95)
+		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		track.add_child(fill)
+		result_fills.append(fill)
+	so_close_lbl = Label.new()
+	so_close_lbl.text = "So close!"
+	so_close_lbl.position = Vector2(90, 580)
+	so_close_lbl.size = Vector2(540, 36)
+	so_close_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	so_close_lbl.visible = false
+	_style(so_close_lbl, 26)
+	so_close_lbl.modulate = Color(1.0, 0.45, 0.25)
+	over_panel.add_child(so_close_lbl)
+	double_btn = _make_button("Double coins", Vector2(150, 640), Vector2(420, 68), Color(0.95, 0.62, 0.15))
 	double_btn.pressed.connect(_on_double_coins)
 	over_panel.add_child(double_btn)
-	next_btn = _make_button("Next level", Vector2(150, 770), Vector2(420, 70), Color(0.18, 0.55, 0.42))
+	next_btn = _make_button("Next level", Vector2(150, 722), Vector2(420, 68), Color(0.18, 0.72, 0.42))
 	next_btn.pressed.connect(_on_next_level)
 	over_panel.add_child(next_btn)
-	continue_btn = _make_button("Menu", Vector2(150, 860), Vector2(420, 70), Color(0.18, 0.28, 0.48))
+	continue_btn = _make_button("Menu", Vector2(150, 804), Vector2(420, 64), Color(0.25, 0.45, 0.85))
 	continue_btn.pressed.connect(_on_continue)
 	over_panel.add_child(continue_btn)
 	debug_lbl = Label.new()
@@ -1239,7 +1512,9 @@ func _sync_level() -> void:
 	if grew:
 		level = n
 		pop_t = POP_TIME
+		size_banner_t = 1.15
 	hole_radius = maxf(LEVEL_RADIUS[level], _start_radius())
+	hole_open = maxf(hole_open, hole_radius)
 	if grew:
 		_announce_skins(Save.note_size(level + 1))
 
@@ -1255,9 +1530,63 @@ func _refresh_hud() -> void:
 	level_lbl.text = "%s  Size %d" % [str(map.get("name", "")), level + 1]
 	if progress_ring:
 		progress_ring.queue_redraw()
+	_refresh_next_skin()
+	if combo_lbl:
+		combo_lbl.visible = combo >= 2 and combo_left > 0.0
+		combo_lbl.text = "Combo x%d" % combo
 	shown_score = score
 	shown_sec = sec
 	shown_level = level
+
+func _refresh_next_skin() -> void:
+	if next_lbl == null:
+		return
+	var nxt: Dictionary = Save.next_skin()
+	if nxt.is_empty():
+		next_lbl.visible = false
+		if next_fill:
+			next_fill.visible = false
+		return
+	var skin: Dictionary = nxt.skin
+	var prog: Dictionary = nxt.progress
+	next_lbl.visible = true
+	next_lbl.text = "Next skin: %s  %d/%d" % [str(skin.name), int(prog.cur), int(prog.need)]
+	if next_fill:
+		next_fill.visible = true
+		next_fill.size = Vector2(220.0 * float(prog.ratio), 10.0)
+		next_fill.color = skin.a
+
+func _tick_feedback(delta: float) -> void:
+	if combo_left > 0.0:
+		combo_left = maxf(0.0, combo_left - delta)
+		if combo_left <= 0.0 and combo_lbl:
+			combo_lbl.visible = false
+	if size_lbl:
+		if size_banner_t > 0.0:
+			size_banner_t = maxf(0.0, size_banner_t - delta)
+			size_lbl.visible = true
+			var u := clampf(size_banner_t / 1.15, 0.0, 1.0)
+			size_lbl.modulate = Color(1, 0.95, 0.35, u)
+			size_lbl.scale = Vector2.ONE * (1.0 + (1.0 - u) * 0.18)
+		else:
+			size_lbl.visible = false
+	if mode == "results" and result_anim < 1.0:
+		result_anim = minf(1.0, result_anim + delta * 1.35)
+		var eased := 1.0 - pow(1.0 - result_anim, 3.0)
+		for i in result_fills.size():
+			var fill: ColorRect = result_fills[i]
+			var goal := float(result_targets[i]) if i < result_targets.size() else 0.0
+			fill.size = Vector2(534.0 * goal * eased, fill.size.y)
+		if star_row:
+			var shown := int(round(float(round_stars) * eased))
+			star_row.set_meta("stars", shown)
+			star_row.queue_redraw()
+		if so_close_lbl:
+			var close := false
+			for g in result_targets:
+				if float(g) >= 0.82 and float(g) < 1.0:
+					close = true
+			so_close_lbl.visible = close and eased > 0.72
 
 func _process(delta: float) -> void:
 	var frame_delta := delta
@@ -1282,14 +1611,19 @@ func _process(delta: float) -> void:
 		pop = 1.0 + sin(u * PI) * 0.22
 		pop_t = maxf(0.0, pop_t - delta)
 	var vis := shown_radius * pop
+	hole_open = vis
 	hole_mesh.position = hole_pos
 	hole_mesh.scale = Vector3(vis, 1.0, vis)
 	if ground_mat:
 		ground_mat.set_shader_parameter("hole_center", hole_pos)
 		ground_mat.set_shader_parameter("hole_radius", vis)
+	if grass_mat:
+		grass_mat.set_shader_parameter("hole_center", hole_pos)
+		grass_mat.set_shader_parameter("hole_radius", vis)
 	_smooth_camera(delta)
 	_tick_floaters(delta)
 	_place_name_tag()
+	_tick_feedback(delta)
 	var sec := int(ceili(time_left))
 	if score != shown_score or level != shown_level or sec != shown_sec:
 		_refresh_hud()
@@ -1361,6 +1695,7 @@ func _update_debug(delta: float) -> void:
 		JavaScriptBridge.eval("window.__godotStats={fps:%d,frameMs:%.2f,physMs:%.2f,draws:%d,bodies:%d,vw:%d,vh:%d}" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y], true)
 
 func _physics_process(_delta: float) -> void:
+	_sync_rim()
 	if playing:
 		_activate_nearby()
 	var i := active.size() - 1
@@ -1374,9 +1709,9 @@ func _flat_dist(p: Vector3) -> float:
 	return sqrt(dx * dx + dz * dz)
 
 func _wants_body(o: Dictionary, dist: float) -> bool:
-	var size := float(o.size)
-	# Anything wider than the opening stays a static mesh on solid ground.
-	return _fits(size) and _mostly_over(size, dist)
+	var base := float(o.base)
+	# The opening has reached the ground contact, so one side can lose support.
+	return _fits(base) and dist < hole_radius + base * 0.95
 
 func _activate_nearby() -> void:
 	var budget := 2
@@ -1406,15 +1741,16 @@ func _take_body(o: Dictionary) -> bool:
 	var native: Vector3 = kind_native[int(o.kind)]
 	var sc: Vector3 = o.scale
 	var box := BoxShape3D.new()
-	box.size = Vector3(maxf(native.x * sc.x, 0.08), maxf(native.y * sc.y, 0.08), maxf(native.z * sc.z, 0.08))
+	var foot_w := maxf(float(o.base) * 2.0, 0.08)
+	box.size = Vector3(foot_w, maxf(native.y * sc.y, 0.08), foot_w)
 	cs.shape = box
 	cs.position = Vector3(0, box.size.y * 0.5, 0)
-	b.mass = maxf(0.35, box.size.x * box.size.y * box.size.z * 0.45)
+	b.mass = clampf(foot_w * foot_w * box.size.y * 1.6, 0.35, 6.0)
 	var p: Vector3 = o.pos
 	b.freeze = true
 	b.global_transform = Transform3D(Basis(Vector3.UP, float(o.yaw)), Vector3(p.x, 0.0, p.z))
 	b.freeze = false
-	b.collision_mask = 1
+	b.collision_mask = RIM_MASK
 	b.linear_velocity = o.vel
 	b.angular_velocity = Vector3.ZERO
 	b.sleeping = false
@@ -1448,12 +1784,25 @@ func _drive_body(o: Dictionary) -> void:
 	var dx := p.x - hole_pos.x
 	var dz := p.z - hole_pos.z
 	var dist := sqrt(dx * dx + dz * dz)
-	var size := float(o.size)
-	var committed := p.y < -0.12
-	if not _fits(size) or (not committed and not _mostly_over(size, dist)):
+	var base := float(o.base)
+	if not _fits(base):
 		_release_body(o, p)
 		return
-	b.collision_mask = 0
+	var upright := b.global_transform.basis.y.dot(Vector3.UP)
+	var tilt := 1.0 - upright
+	var reaching := dist < hole_radius + base * 0.95
+	var falling := p.y < -0.28
+	var tipped := tilt > 0.1 or p.y < -0.04
+	# The shelf is only the fulcrum. Once the body has clearly tipped and its
+	# center is over the opening, drop the rim so it tumbles instead of hanging.
+	var committed := tilt > 0.07 and dist < hole_radius
+	if committed or (falling and dist < hole_radius + base * 0.2):
+		b.collision_mask = 0
+	elif reaching or tipped:
+		b.collision_mask = RIM_MASK
+	else:
+		_release_body(o, p)
+		return
 	if bool(o.in_mesh):
 		var mm: MultiMesh = kind_multimeshes[int(o.kind)]
 		var xf := _visual_from_body(o, b)
@@ -1483,10 +1832,17 @@ func _swallow_done(o: Dictionary) -> void:
 		var b: RigidBody3D = o.body
 		at = b.global_position
 	if playing and bool(o.alive):
-		score += int(o.points)
+		if combo_left > 0.0:
+			combo += 1
+		else:
+			combo = 1
+		combo_left = COMBO_WINDOW
+		var gained := int(o.points) + maxi(combo - 1, 0)
+		score += gained
 		_sync_level()
 		_announce_skins(Save.note_eaten(1))
-		_burst(at, int(o.points), o.color)
+		_burst(at, gained, o.color)
+		_refresh_hud()
 	o.alive = false
 	if o.body != null:
 		_pool_body(o.body)
@@ -1517,9 +1873,9 @@ func _apply_theme(m: Dictionary) -> void:
 	sky_mat.sky_horizon_color = m.horizon
 	sky_mat.ground_horizon_color = m.horizon
 	sky_mat.ground_bottom_color = m.ground
-	world_env.adjustment_saturation = clampf(float(m.sat), 1.0, 1.12)
-	sun.light_color = Color(1.0, 0.98, 0.94)
-	sun.light_energy = 0.22
+	world_env.adjustment_saturation = clampf(float(m.sat) * 0.82, 1.12, 1.28)
+	sun.light_color = Color(1.0, 0.96, 0.86)
+	sun.light_energy = 0.4
 	sun.rotation_degrees = Vector3(-62, float(m.sun_yaw), 0)
 
 func _apply_skin() -> void:
@@ -1562,8 +1918,12 @@ func start_round(index: int) -> void:
 	score = 0
 	level = 0
 	pop_t = 0.0
+	combo = 0
+	combo_left = 0.0
+	size_banner_t = 0.0
 	hole_radius = _start_radius()
 	shown_radius = hole_radius
+	hole_open = hole_radius
 	_sync_level()
 	hole_pos = Vector3.ZERO
 	velocity = Vector3.ZERO
@@ -1602,11 +1962,20 @@ func _finish_round(cleared: bool) -> void:
 	doubled = false
 	if coins_earned > 0:
 		Save.add_coins(coins_earned)
+	round_stars = _star_rating(cleared)
+	_announce_skins(Save.note_round())
 	if cleared:
 		_announce_skins(Save.mark_cleared(map_index, score))
+	_announce_skins(Save.note_stars(map_index, round_stars))
 	var headline := "Level clear!" if cleared else "Time's up"
-	var pct := int(_map_progress() * 100.0)
-	over_lbl.text = "%s\n%s\n%d / %d  (%d%%)\n+%d coins" % [headline, str(map.name), score, target_score, pct, coins_earned]
+	over_lbl.text = "%s\n%s   +%d coins" % [headline, str(map.name), coins_earned]
+	_fill_result_bars()
+	result_anim = 0.0
+	if star_row:
+		star_row.set_meta("stars", 0)
+		star_row.queue_redraw()
+	if so_close_lbl:
+		so_close_lbl.visible = false
 	double_btn.visible = true
 	double_btn.disabled = false
 	double_btn.text = "Double coins"
@@ -1626,9 +1995,10 @@ func _after_reward(granted: bool) -> void:
 	coins_earned *= 2
 	double_btn.text = "Coins doubled"
 	double_btn.disabled = true
-	var pct := int(_map_progress() * 100.0)
 	var headline := "Level clear!" if round_cleared else "Time's up"
-	over_lbl.text = "%s\n%s\n%d / %d  (%d%%)\n+%d coins" % [headline, str(map.name), score, target_score, pct, coins_earned]
+	over_lbl.text = "%s\n%s   +%d coins" % [headline, str(map.name), coins_earned]
+	_fill_result_bars()
+	result_anim = 0.35
 
 func _on_next_level() -> void:
 	if map_index + 1 < CatalogScript.maps().size() and map_index + 1 <= Save.unlocked_level:
@@ -1656,11 +2026,7 @@ func _show_screen(which: String) -> void:
 	menu_layer.visible = true
 	for c in menu_layer.get_children():
 		c.queue_free()
-	var bg := ColorRect.new()
-	bg.color = Color(0.4, 0.72, 0.98)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.mouse_filter = Control.MOUSE_FILTER_STOP
-	menu_layer.add_child(bg)
+	menu_layer.add_child(_gradient_bg(Color(0.22, 0.58, 1.0), Color(0.45, 0.86, 0.98), Color(0.98, 0.78, 0.55)))
 	if which == "menu":
 		_screen_menu()
 	elif which == "levels":
@@ -1682,21 +2048,22 @@ func _show_screen(which: String) -> void:
 	menu_layer.add_child(menu_sha)
 
 func _screen_menu() -> void:
-	var title := _menu_label("Hole Arcade", Vector2(40, 160), 64)
+	_add_currency_pills(24)
+	var title := _menu_label("Hole Arcade", Vector2(40, 180), 68)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.size = Vector2(640, 80)
+	title.size = Vector2(640, 90)
 	menu_layer.add_child(title)
-	menu_layer.add_child(_menu_label("Coins %d" % Save.coins, Vector2(40, 260), 32))
-	var play := _make_button("Play", Vector2(150, 380), Vector2(420, 84), Color(0.16, 0.55, 0.85))
+	var play := _make_button("PLAY", Vector2(120, 360), Vector2(480, 110), Color(0.18, 0.78, 0.38))
+	play.add_theme_font_size_override("font_size", 42)
 	play.pressed.connect(_on_play)
 	menu_layer.add_child(play)
-	var levels := _make_button("Levels", Vector2(150, 490), Vector2(420, 76), Color(0.18, 0.32, 0.55))
+	var levels := _make_button("Levels", Vector2(120, 500), Vector2(480, 86), Color(0.2, 0.48, 0.95))
 	levels.pressed.connect(_show_screen.bind("levels"))
 	menu_layer.add_child(levels)
-	var skins := _make_button("Skins", Vector2(150, 590), Vector2(420, 76), Color(0.42, 0.22, 0.62))
+	var skins := _make_button("Skins", Vector2(120, 610), Vector2(480, 86), Color(0.62, 0.28, 0.86))
 	skins.pressed.connect(_show_screen.bind("skins"))
 	menu_layer.add_child(skins)
-	var shop := _make_button("Shop", Vector2(150, 690), Vector2(420, 76), Color(0.72, 0.42, 0.12))
+	var shop := _make_button("Shop", Vector2(120, 720), Vector2(480, 86), Color(0.95, 0.55, 0.16))
 	shop.pressed.connect(_show_screen.bind("shop"))
 	menu_layer.add_child(shop)
 
@@ -1705,71 +2072,114 @@ func _on_play() -> void:
 	start_round(i)
 
 func _screen_levels() -> void:
-	menu_layer.add_child(_menu_label("Levels", Vector2(40, 24), 42))
-	var back := _make_button("Back", Vector2(500, 24), Vector2(180, 56), Color(0.2, 0.24, 0.34))
+	_add_currency_pills(18)
+	menu_layer.add_child(_menu_label("Levels", Vector2(36, 78), 40))
+	var back := _make_button("Back", Vector2(520, 78), Vector2(164, 52), Color(0.2, 0.4, 0.72))
 	back.pressed.connect(_show_screen.bind("menu"))
 	menu_layer.add_child(back)
+	var play := _make_button("PLAY", Vector2(120, 150), Vector2(480, 84), Color(0.18, 0.78, 0.38))
+	play.add_theme_font_size_override("font_size", 36)
+	play.pressed.connect(_on_play)
+	menu_layer.add_child(play)
 	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(36, 110)
-	scroll.size = Vector2(648, 1100)
+	scroll.position = Vector2(24, 256)
+	scroll.size = Vector2(672, 1000)
 	menu_layer.add_child(scroll)
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 10)
-	box.custom_minimum_size = Vector2(620, 0)
-	scroll.add_child(box)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 16)
+	scroll.add_child(grid)
 	var maps: Array = CatalogScript.maps()
 	for i in maps.size():
-		var m: Dictionary = maps[i]
-		var locked := i > Save.unlocked_level
-		var best_score := int(Save.best[i]) if i < Save.best.size() else 0
-		var label := "%d  %s    %d pts" % [i + 1, str(m.name), int(m.target)]
-		if locked:
-			label += "    Lock — Clear level %d" % i
-		elif best_score > 0:
-			label += "    best %d" % best_score
-		var b := _make_button(label, Vector2.ZERO, Vector2(600, 72), Color(0.16, 0.28, 0.42) if not locked else Color(0.14, 0.15, 0.18))
-		b.disabled = locked
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.pressed.connect(start_round.bind(i))
-		box.add_child(b)
+		grid.add_child(_level_card(i, maps[i]))
 
 func _screen_skins() -> void:
-	menu_layer.add_child(_menu_label("Skins", Vector2(40, 24), 42))
-	menu_layer.add_child(_menu_label("Coins %d" % Save.coins, Vector2(220, 32), 24))
-	var back := _make_button("Back", Vector2(500, 24), Vector2(180, 56), Color(0.2, 0.24, 0.34))
+	_add_currency_pills(18)
+	menu_layer.add_child(_menu_label("Skins", Vector2(36, 78), 40))
+	var back := _make_button("Back", Vector2(520, 78), Vector2(164, 52), Color(0.2, 0.4, 0.72))
 	back.pressed.connect(_show_screen.bind("menu"))
 	menu_layer.add_child(back)
 	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(36, 110)
-	scroll.size = Vector2(648, 1100)
+	scroll.position = Vector2(28, 150)
+	scroll.size = Vector2(664, 1100)
 	menu_layer.add_child(scroll)
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
-	box.custom_minimum_size = Vector2(620, 0)
+	box.add_theme_constant_override("separation", 12)
+	box.custom_minimum_size = Vector2(640, 0)
 	scroll.add_child(box)
 	for s in CatalogScript.skins():
-		var id := str(s.id)
-		var owned := Save.has_skin(id)
-		var status := "Equip"
-		if Save.skin_id == id:
-			status = "Equipped"
-		elif not owned:
-			status = _lock_text(str(s.unlock))
-		var b := _make_button("%s    %s" % [str(s.name), status], Vector2.ZERO, Vector2(600, 68), s.a)
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.add_theme_color_override("font_color", Color.WHITE)
-		b.pressed.connect(_on_skin.bind(id))
-		box.add_child(b)
+		box.add_child(_skin_card(s))
+
+func _star_rating(cleared: bool) -> int:
+	var ratio := _map_progress()
+	var budget := ROUND_TIME + Save.extra_time()
+	if cleared and time_left >= budget * 0.28:
+		return 3
+	if cleared:
+		return 2
+	if ratio >= 0.5:
+		return 1
+	return 0
+
+func _fill_result_bars() -> void:
+	result_targets.clear()
+	var nxt: Dictionary = Save.next_skin()
+	if nxt.is_empty():
+		_set_result_row(0, "All skins unlocked", 1.0, Color(0.2, 0.75, 0.45))
+	else:
+		var skin: Dictionary = nxt.skin
+		var prog: Dictionary = nxt.progress
+		_set_result_row(0, "Next skin: %s  %d/%d" % [str(skin.name), int(prog.cur), int(prog.need)], float(prog.ratio), skin.a)
+	_set_result_row(1, "Level  %d / %d" % [score, target_score], _map_progress(), Color(1.0, 0.72, 0.18))
+	var buy: Dictionary = Save.next_purchase()
+	if buy.is_empty():
+		_set_result_row(2, "Coins %d" % Save.coins, 1.0, Color(0.95, 0.78, 0.2))
+	else:
+		_set_result_row(2, "%s  %d/%d coins" % [str(buy.label), int(buy.cur), int(buy.need)], float(buy.ratio), Color(0.95, 0.62, 0.15))
+
+func _set_result_row(i: int, text: String, ratio: float, color: Color) -> void:
+	if i < result_labels.size():
+		var lbl: Label = result_labels[i]
+		lbl.text = text
+	if i < result_fills.size():
+		var fill: ColorRect = result_fills[i]
+		fill.color = color
+		fill.size = Vector2(0, 10)
+	while result_targets.size() <= i:
+		result_targets.append(0.0)
+	result_targets[i] = clampf(ratio, 0.0, 1.0)
+
+func _draw_star_row(ctrl: Control) -> void:
+	var n := int(ctrl.get_meta("stars", 0))
+	for i in 3:
+		_paint_star(ctrl, Vector2(22.0 + float(i) * 62.0, 22.0), 16.0, i < n)
+
+func _paint_star(ci: CanvasItem, center: Vector2, radius: float, filled: bool) -> void:
+	var color := Color(1.0, 0.78, 0.15) if filled else Color(0.75, 0.8, 0.88)
+	for i in 5:
+		var a0 := -PI * 0.5 + TAU * float(i) / 5.0
+		var tip := center + Vector2(cos(a0), sin(a0)) * radius
+		var left := center + Vector2(cos(a0 + PI / 5.0), sin(a0 + PI / 5.0)) * radius * 0.42
+		var right := center + Vector2(cos(a0 - PI / 5.0), sin(a0 - PI / 5.0)) * radius * 0.42
+		ci.draw_colored_polygon(PackedVector2Array([center, right, tip, left]), color)
 
 func _lock_text(unlock: String) -> String:
+	var p := Save.progress_for(unlock)
+	var cur := int(p.cur)
+	var need := int(p.need)
 	if unlock.begins_with("coins:"):
-		return "Lock — %s coins" % unlock.substr(6)
+		return "Lock — %d/%d coins" % [cur, need]
 	if unlock.begins_with("level:"):
-		return "Lock — Clear level %s" % unlock.substr(6)
+		return "Lock — Clear level %d  (%d/%d)" % [need, cur, need]
 	if unlock.begins_with("eat:"):
-		return "Lock — Eat %s objects" % unlock.substr(4)
+		return "Lock — Eat %d/%d" % [cur, need]
+	if unlock.begins_with("rounds:"):
+		return "Lock — Play %d/%d rounds" % [cur, need]
+	if unlock.begins_with("stars:"):
+		return "Lock — %d/%d stars" % [cur, need]
 	if unlock.begins_with("size:"):
-		return "Lock — Reach size %s" % unlock.substr(5)
+		return "Lock — Reach size %d" % need
 	return "Lock"
 
 func _on_skin(id: String) -> void:
@@ -1870,7 +2280,134 @@ func _make_button(text: String, pos: Vector2, size: Vector2, color: Color) -> Bu
 	b.add_theme_stylebox_override("pressed", pressed)
 	b.add_theme_stylebox_override("disabled", disabled)
 	b.add_theme_stylebox_override("focus", normal)
+	b.pivot_offset = size * 0.5
+	b.button_down.connect(_bounce_down.bind(b))
+	b.button_up.connect(_bounce_up.bind(b))
 	return b
+
+func _bounce_down(b: Button) -> void:
+	var tw := create_tween()
+	tw.tween_property(b, "scale", Vector2(0.94, 0.94), 0.06)
+
+func _bounce_up(b: Button) -> void:
+	var tw := create_tween()
+	tw.tween_property(b, "scale", Vector2.ONE, 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+func _gradient_bg(top: Color, mid: Color, bottom: Color) -> TextureRect:
+	var img := Image.create(2, 64, false, Image.FORMAT_RGBA8)
+	for y in 64:
+		var t := float(y) / 63.0
+		var c := top.lerp(mid, clampf(t * 2.0, 0.0, 1.0))
+		if t > 0.5:
+			c = mid.lerp(bottom, (t - 0.5) * 2.0)
+		img.set_pixel(0, y, c)
+		img.set_pixel(1, y, c)
+	var tex := ImageTexture.create_from_image(img)
+	var rect := TextureRect.new()
+	rect.texture = tex
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	rect.stretch_mode = TextureRect.STRETCH_SCALE
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return rect
+
+func _add_currency_pills(y: float) -> void:
+	var coins := _make_button("%d coins" % Save.coins, Vector2(24, y), Vector2(210, 52), Color(0.95, 0.62, 0.16))
+	coins.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	menu_layer.add_child(coins)
+	var star_n := Save.total_stars()
+	var stars_btn := _make_button("%d stars" % star_n, Vector2(250, y), Vector2(210, 52), Color(0.98, 0.78, 0.18))
+	stars_btn.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stars_btn.add_theme_color_override("font_color", Color(0.35, 0.22, 0.05))
+	menu_layer.add_child(stars_btn)
+
+func _level_card(index: int, m: Dictionary) -> Control:
+	var locked := index > Save.unlocked_level
+	var stars_n := int(Save.stars[index]) if index < Save.stars.size() else 0
+	var color: Color = m.horizon
+	color.s = minf(color.s * 1.4 + 0.12, 0.85)
+	color.v = clampf(color.v, 0.78, 0.95)
+	if locked:
+		color = color.lerp(Color(0.42, 0.48, 0.58), 0.28)
+		color.v = minf(color.v, 0.72)
+	var card := Button.new()
+	card.custom_minimum_size = Vector2(316, 196)
+	card.text = ""
+	card.disabled = locked
+	var box := _btn_box(color)
+	card.add_theme_stylebox_override("normal", box)
+	card.add_theme_stylebox_override("hover", _btn_box(color.lightened(0.08)))
+	card.add_theme_stylebox_override("pressed", _btn_box(color.darkened(0.08)))
+	card.add_theme_stylebox_override("disabled", box)
+	card.add_theme_stylebox_override("focus", box)
+	card.pivot_offset = Vector2(158, 98)
+	card.button_down.connect(_bounce_down.bind(card))
+	card.button_up.connect(_bounce_up.bind(card))
+	if not locked:
+		card.pressed.connect(start_round.bind(index))
+	var num := Label.new()
+	num.text = str(index + 1)
+	num.position = Vector2(16, 8)
+	num.size = Vector2(120, 64)
+	_style(num, 42)
+	num.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(num)
+	var name_l := Label.new()
+	name_l.text = str(m.name)
+	name_l.position = Vector2(16, 72)
+	name_l.size = Vector2(284, 36)
+	_style(name_l, 22)
+	name_l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(name_l)
+	var stars := Control.new()
+	stars.position = Vector2(16, 118)
+	stars.size = Vector2(200, 40)
+	stars.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stars.set_meta("stars", 0 if locked else stars_n)
+	stars.draw.connect(_draw_star_row.bind(stars))
+	card.add_child(stars)
+	var sub := Label.new()
+	sub.position = Vector2(16, 156)
+	sub.size = Vector2(284, 30)
+	_style(sub, 16)
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if locked:
+		sub.text = "Lock — Clear level %d" % index
+	else:
+		sub.text = "%d pts" % int(m.target)
+	card.add_child(sub)
+	return card
+
+func _skin_card(s: Dictionary) -> Control:
+	var id := str(s.id)
+	var owned := Save.has_skin(id)
+	var wrap := Control.new()
+	wrap.custom_minimum_size = Vector2(640, 108)
+	var status := "Equip"
+	if Save.skin_id == id:
+		status = "Equipped"
+	elif not owned:
+		status = _lock_text(str(s.unlock))
+	var b := _make_button("%s    %s" % [str(s.name), status], Vector2.ZERO, Vector2(640, 72), s.a)
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	b.add_theme_color_override("font_color", Color.WHITE)
+	b.pressed.connect(_on_skin.bind(id))
+	wrap.add_child(b)
+	if not owned:
+		var prog := Save.progress_for(str(s.unlock))
+		var track := ColorRect.new()
+		track.position = Vector2(16, 80)
+		track.size = Vector2(608, 14)
+		track.color = Color(1, 1, 1, 0.35)
+		track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		wrap.add_child(track)
+		var fill := ColorRect.new()
+		fill.position = Vector2(2, 2)
+		fill.size = Vector2(604.0 * float(prog.ratio), 10)
+		fill.color = Color(1, 0.95, 0.55)
+		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		track.add_child(fill)
+	return wrap
 
 func _btn_box(color: Color) -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
