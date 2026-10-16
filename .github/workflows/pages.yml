@@ -37,12 +37,22 @@ jobs:
       - name: Export Web
         run: |
           set -euo pipefail
+          test -n "${GITHUB_SHA}"
+          # Packed into the game so the on-screen label matches this commit even if HTML is cached.
+          sed -i "s/__BUILD_SHA__/${GITHUB_SHA}/g" main.gd
+          grep -q "${GITHUB_SHA}" main.gd
           mkdir -p build/web
           godot --headless --path . --export-release "Web" build/web/index.html
           test -s build/web/index.html
           test -s build/web/index.js
           test -s build/web/index.wasm
           test -s build/web/index.pck
+          # Query-string the shell after export. Do not put ?v= on the executable name:
+          # Godot would request "index?v=SHA.wasm" and the pack would 404.
+          sed -i "s/__BUILD_SHA__/${GITHUB_SHA}/g" build/web/index.html
+          grep -q "index.js?v=${GITHUB_SHA}" build/web/index.html
+          grep -q "v=${GITHUB_SHA}" build/web/index.html
+          ! grep -q '__BUILD_SHA__' build/web/index.html
           # thread_support=false: no SharedArrayBuffer / COOP-COEP, so GitHub Pages and phone browsers can run it
           grep -q 'const GODOT_THREADS_ENABLED = false;' build/web/index.html
 

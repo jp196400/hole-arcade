@@ -1,9 +1,9 @@
 # Hole Arcade
 
-A Godot 4.3 hole.io-style prototype. Drag the hole to swallow anything smaller than you and grow before the 90-second timer runs out. Tap after the round to play again.
+A Godot 4.3 hole.io-style game. Steer with a floating joystick, swallow anything that fits, and level up before the two-minute timer ends.
 
 Play it at https://jp196400.github.io/hole-arcade/
 
-The Web preset exports with thread support off, so the build does not need `SharedArrayBuffer` or cross-origin isolation headers. That is what keeps it running on GitHub Pages and on phone browsers. The hole eases toward your finger instead of jumping to each touch sample. On phones the canvas stays at CSS pixels (not the full device pixel ratio), which is what keeps WebGL from filling a 3x iPhone framebuffer. Add `?debug=1` to the page URL to show FPS, frame time, physics time, draw calls, and active bodies. Hold a finger to steer: the hole keeps moving that way until you let go, then eases to a stop. Full speed is 36 units per second past a short stick radius. `?speed=0.5` multiplies that cap.
+The bottom-left corner shows the build id (the first 7 characters of the commit). The same id is drawn in the game under the timer. Both should match. The page loads `index.js`, `index.wasm`, and `index.pck` with `?v=<commit>` so Safari cannot keep an older pack. The Web preset exports with thread support off, so the build does not need `SharedArrayBuffer`. On phones the canvas stays at CSS pixels. Add `?debug=1` for FPS and draw calls, or `?speed=0.5` to scale movement.
 
-Open the project in Godot 4.3 and run `main.tscn`. Pushes to `main` install Godot 4.3 headless plus the matching export templates, export the Web preset, and deploy `build/web` to GitHub Pages.
+Open the project in Godot 4.3 and run `main.tscn`. Pushes to `main` install Godot 4.3, export the Web preset, and deploy `build/web` to GitHub Pages.

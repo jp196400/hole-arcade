@@ -2,12 +2,55 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8">
+		<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+		<meta http-equiv="Pragma" content="no-cache">
+		<meta http-equiv="Expires" content="0">
 		<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 		<title>$GODOT_PROJECT_NAME</title>
+		<!-- build __BUILD_SHA__ -->
 		<script>
-		// Safari: block scroll/pinch, and cap devicePixelRatio so Godot's
-		// canvas backing store stays at CSS pixels on a 3x iPhone.
+		// Safari: block scroll/pinch, cap devicePixelRatio, and cache-bust
+		// wasm/pck/js so a new Pages deploy cannot reuse an old build.
 		(function () {
+			var BUILD = '__BUILD_SHA__';
+			window.__BUILD_SHA__ = BUILD;
+			function bust(url) {
+				if (typeof url !== 'string') {
+					return url;
+				}
+				if (url.indexOf('v=') !== -1) {
+					return url;
+				}
+				if (!/\.(wasm|pck|js|png|svg)(\?|#|$)/.test(url)) {
+					return url;
+				}
+				var hash = url.indexOf('#');
+				var base = hash >= 0 ? url.slice(0, hash) : url;
+				var frag = hash >= 0 ? url.slice(hash) : '';
+				return base + (base.indexOf('?') >= 0 ? '&' : '?') + 'v=' + BUILD + frag;
+			}
+			var origFetch = window.fetch;
+			if (origFetch) {
+				window.fetch = function (input, init) {
+					if (typeof input === 'string') {
+						input = bust(input);
+					} else if (typeof Request !== 'undefined' && input instanceof Request) {
+						var next = bust(input.url);
+						if (next !== input.url) {
+							input = new Request(next, input);
+						}
+					}
+					return origFetch.call(this, input, init);
+				};
+			}
+			var origOpen = XMLHttpRequest.prototype.open;
+			XMLHttpRequest.prototype.open = function () {
+				var args = Array.prototype.slice.call(arguments);
+				if (typeof args[1] === 'string') {
+					args[1] = bust(args[1]);
+				}
+				return origOpen.apply(this, args);
+			};
 			function block(ev) { ev.preventDefault(); }
 			document.addEventListener('touchmove', block, { passive: false });
 			document.addEventListener('gesturestart', block, { passive: false });
@@ -16,6 +59,12 @@
 			try {
 				Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: function () { return 1; } });
 			} catch (err) {}
+			document.addEventListener('DOMContentLoaded', function () {
+				var el = document.getElementById('build-sha');
+				if (el && BUILD.indexOf('__') !== 0) {
+					el.textContent = BUILD.slice(0, 7);
+				}
+			});
 		})();
 		</script>
 		<style>
@@ -47,6 +96,17 @@ body {
 	outline: none;
 }
 
+#build-sha {
+	position: fixed;
+	left: 8px;
+	bottom: 6px;
+	z-index: 50;
+	color: rgba(255, 255, 255, 0.88);
+	font: 12px/1.2 ui-monospace, Menlo, Consolas, monospace;
+	pointer-events: none;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
 #status, #status-splash, #status-progress {
 	position: absolute;
 	left: 0;
@@ -65,6 +125,7 @@ body {
 	justify-content: center;
 	align-items: center;
 	visibility: hidden;
+	z-index: 2;
 }
 
 #status-splash {
@@ -103,18 +164,19 @@ body {
 		<canvas id="canvas">
 			Your browser does not support the canvas tag.
 		</canvas>
+		<div id="build-sha">dev</div>
 
 		<noscript>
 			Your browser does not support JavaScript.
 		</noscript>
 
 		<div id="status">
-			<img id="status-splash" src="$GODOT_SPLASH" alt="">
+			<img id="status-splash" src="$GODOT_SPLASH?v=__BUILD_SHA__" alt="">
 			<progress id="status-progress"></progress>
 			<div id="status-notice"></div>
 		</div>
 
-		<script src="$GODOT_URL"></script>
+		<script src="$GODOT_URL?v=__BUILD_SHA__"></script>
 		<script>
 const GODOT_CONFIG = $GODOT_CONFIG;
 const GODOT_THREADS_ENABLED = $GODOT_THREADS_ENABLED;
