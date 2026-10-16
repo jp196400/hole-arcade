@@ -24,7 +24,11 @@ var clears := 0
 var clean_clears := 0
 var sweeps := 0
 var rival_eats := 0
+var streak := 0
+var tallies := {}
+var maps_cleared: Array = []
 var stars: Array = []
+const TALLY_KEYS := ["cars", "trees", "buildings", "people", "props", "boats", "lamps", "animals"]
 var music_on := true
 var sfx_on := true
 var play_time := 0.0
@@ -40,9 +44,13 @@ var _play_save_wait := 0.0
 func _ready() -> void:
 	best.resize(10)
 	stars.resize(10)
+	maps_cleared.resize(10)
 	for i in best.size():
 		best[i] = 0
 		stars[i] = 0
+		maps_cleared[i] = 0
+	for k in TALLY_KEYS:
+		tallies[k] = 0
 	load_game()
 	grant_play_skins()
 
@@ -67,6 +75,18 @@ func load_game() -> void:
 	clean_clears = maxi(0, int(cf.get_value("player", "clean", 0)))
 	sweeps = maxi(0, int(cf.get_value("player", "sweeps", 0)))
 	rival_eats = maxi(0, int(cf.get_value("player", "rival_eats", 0)))
+	streak = maxi(0, int(cf.get_value("player", "streak", 0)))
+	var tally_csv := str(cf.get_value("player", "tallies", ""))
+	if tally_csv != "":
+		for part in tally_csv.split(",", false):
+			var bits := part.split(":", false)
+			if bits.size() == 2 and tallies.has(str(bits[0])):
+				tallies[str(bits[0])] = maxi(0, int(bits[1]))
+	var map_csv := str(cf.get_value("player", "maps", ""))
+	if map_csv != "":
+		var mp := map_csv.split(",", false)
+		for i in mini(mp.size(), maps_cleared.size()):
+			maps_cleared[i] = 1 if int(mp[i]) > 0 else 0
 	music_on = bool(cf.get_value("player", "music_on", true))
 	sfx_on = bool(cf.get_value("player", "sfx_on", true))
 	play_time = maxf(0.0, float(cf.get_value("player", "play_time", 0.0)))
@@ -108,6 +128,15 @@ func save_game() -> void:
 	cf.set_value("player", "clean", clean_clears)
 	cf.set_value("player", "sweeps", sweeps)
 	cf.set_value("player", "rival_eats", rival_eats)
+	cf.set_value("player", "streak", streak)
+	var tally_bits: PackedStringArray = []
+	for k in TALLY_KEYS:
+		tally_bits.append("%s:%d" % [str(k), int(tallies.get(k, 0))])
+	cf.set_value("player", "tallies", ",".join(tally_bits))
+	var map_bits: PackedStringArray = []
+	for i in maps_cleared.size():
+		map_bits.append(str(int(maps_cleared[i])))
+	cf.set_value("player", "maps", ",".join(map_bits))
 	cf.set_value("player", "music_on", music_on)
 	cf.set_value("player", "sfx_on", sfx_on)
 	cf.set_value("player", "play_time", play_time)
@@ -145,6 +174,11 @@ func wipe() -> void:
 	clean_clears = 0
 	sweeps = 0
 	rival_eats = 0
+	streak = 0
+	for k in TALLY_KEYS:
+		tallies[k] = 0
+	for i in maps_cleared.size():
+		maps_cleared[i] = 0
 	music_on = true
 	sfx_on = true
 	play_time = 0.0
@@ -254,51 +288,83 @@ func total_stars() -> int:
 		n += int(s)
 	return n
 
+func _maps_done() -> int:
+	var n := 0
+	for v in maps_cleared:
+		if int(v) > 0:
+			n += 1
+	return n
+
+func _stars3() -> int:
+	var n := 0
+	for s in stars:
+		if int(s) >= 3:
+			n += 1
+	return n
+
 func progress_for(unlock: String) -> Dictionary:
-	var cur := 0
+	var key := ""
 	var need := 1
-	var unit := ""
-	if unlock.begins_with("rounds:"):
-		need = int(unlock.substr(7))
-		cur = rounds
-		unit = "rounds"
-	elif unlock.begins_with("eat:"):
-		need = int(unlock.substr(4))
-		cur = eaten
-		unit = "eaten"
-	elif unlock.begins_with("level:"):
-		need = int(unlock.substr(6))
-		cur = unlocked_level
-		unit = "levels"
-	elif unlock.begins_with("stars:"):
-		need = int(unlock.substr(6))
-		cur = total_stars()
-		unit = "stars"
-	elif unlock.begins_with("coins:"):
-		need = int(unlock.substr(6))
-		cur = coins
-		unit = "coins"
-	elif unlock.begins_with("size:"):
-		need = int(unlock.substr(5))
-		cur = max_size
-		unit = "size"
-	elif unlock.begins_with("clean:"):
-		need = int(unlock.substr(6))
-		cur = clean_clears
-		unit = "clean"
-	elif unlock.begins_with("sweep:"):
-		need = int(unlock.substr(6))
-		cur = sweeps
-		unit = "sweeps"
-	elif unlock.begins_with("rivals:"):
-		need = int(unlock.substr(7))
-		cur = rival_eats
-		unit = "rivals"
+	var cut := unlock.find(":")
+	if cut >= 0:
+		key = unlock.substr(0, cut)
+		need = int(unlock.substr(cut + 1))
 	need = maxi(need, 1)
+	var cur := 0
+	var label := "Challenge"
+	match key:
+		"cars", "trees", "buildings", "people", "props", "boats", "lamps", "animals":
+			cur = int(tallies.get(key, 0))
+		"rivals":
+			cur = rival_eats
+		"clean":
+			cur = clean_clears
+		"streak":
+			cur = streak
+		"sweeps":
+			cur = sweeps
+		"maps":
+			cur = _maps_done()
+		"stars3":
+			cur = _stars3()
+		_:
+			key = ""
+	match key:
+		"cars":
+			label = "Cars eaten"
+		"trees":
+			label = "Trees eaten"
+		"buildings":
+			label = "Buildings eaten"
+		"people":
+			label = "People eaten"
+		"props":
+			label = "Props eaten"
+		"boats":
+			label = "Boats eaten"
+		"lamps":
+			label = "Lamps eaten"
+		"animals":
+			label = "Animals eaten"
+		"rivals":
+			label = "Rival holes eaten"
+		"clean":
+			label = "Clear without being eaten"
+		"streak":
+			label = "Clears in a row"
+		"sweeps":
+			label = "Full rival sweeps"
+		"maps":
+			label = "Levels fully cleared"
+		"stars3":
+			label = "3-star levels"
+		_:
+			label = "Challenge"
 	return {
 		"cur": cur,
 		"need": need,
-		"unit": unit,
+		"unit": key,
+		"label": label,
 		"ratio": clampf(float(cur) / float(need), 0.0, 1.0),
 	}
 
@@ -367,6 +433,14 @@ func grant_play_skins() -> Array:
 		save_game()
 	return fresh
 
+func note_swallow(bucket: String) -> Array:
+	eaten += 1
+	if tallies.has(bucket):
+		tallies[bucket] = int(tallies[bucket]) + 1
+	var fresh := grant_play_skins()
+	save_game()
+	return fresh
+
 func note_eaten(n: int) -> Array:
 	eaten += n
 	var fresh := grant_play_skins()
@@ -405,12 +479,21 @@ func note_rival_eat() -> Array:
 	save_game()
 	return fresh
 
-func note_clear(clean: bool, sweep: bool) -> Array:
+func note_fail() -> void:
+	if streak == 0:
+		return
+	streak = 0
+	save_game()
+
+func note_clear(index: int, clean: bool, sweep: bool) -> Array:
 	clears += 1
+	streak += 1
 	if clean:
 		clean_clears += 1
 	if sweep:
 		sweeps += 1
+	if index >= 0 and index < maps_cleared.size():
+		maps_cleared[index] = 1
 	_refresh_unlocks()
 	var fresh := grant_play_skins()
 	save_game()
@@ -436,8 +519,13 @@ func unlock_all() -> void:
 	rounds = maxi(rounds, 40)
 	clears = maxi(clears, 40)
 	clean_clears = maxi(clean_clears, 20)
-	sweeps = maxi(sweeps, 6)
-	rival_eats = maxi(rival_eats, 40)
+	sweeps = maxi(sweeps, 20)
+	rival_eats = maxi(rival_eats, 80)
+	streak = maxi(streak, 10)
+	for k in TALLY_KEYS:
+		tallies[k] = maxi(int(tallies.get(k, 0)), 5000)
+	for i in maps_cleared.size():
+		maps_cleared[i] = 1
 	for i in stars.size():
 		stars[i] = 3
 	for s in CatalogSafe.skins():

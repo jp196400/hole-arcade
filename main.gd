@@ -444,6 +444,8 @@ var unlock_title: Label
 var unlock_body: Label
 var unlock_ok: Button
 var unlock_queue: Array = []
+var toast_busy := false
+var toast_gen := 0
 const PLAYER_NAME := "You"
 const RIVAL_NAMES := ["Midge", "Puddle", "Niblet", "Scoot", "Bramble", "Tumble"]
 const RIVAL_COLORS := [
@@ -491,6 +493,8 @@ func _ready() -> void:
 		call_deferred("_preview_progress")
 	elif preview == "daily":
 		_show_screen("daily")
+	elif preview == "skins":
+		_show_screen("skins")
 	elif preview == "hole" or preview == "street" or preview == "facade":
 		call_deferred("_preview_shot", preview)
 	elif preview.begins_with("play"):
@@ -511,9 +515,7 @@ func _preview_results() -> void:
 	shown_radius = hole_radius
 	playing = true
 	_finish_round(true)
-	unlock_queue.clear()
-	if unlock_layer:
-		unlock_layer.visible = false
+	_dismiss_unlock()
 
 func _preview_progress() -> void:
 	start_round(2)
@@ -1811,6 +1813,23 @@ func _tint_animals() -> void:
 			o.color = coats[n % coats.size()]
 			n += 1
 
+func _swallow_bucket(id: String) -> String:
+	if id in ["sedan", "taxi", "hatch", "van", "police", "truck", "bus", "tractor", "forklift"]:
+		return "cars"
+	if id in ["tree_small", "tree_large", "tree_simple", "palm"]:
+		return "trees"
+	if id in ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "house_a", "house_b", "house_c", "tower_a", "tower_c", "barn"]:
+		return "buildings"
+	if id in ["person_a", "person_b", "person_c"]:
+		return "people"
+	if id == "boat":
+		return "boats"
+	if id == "lamp":
+		return "lamps"
+	if id == "animal":
+		return "animals"
+	return "props"
+
 func kind_id_of(ki: int) -> String:
 	for key in kind_by_id.keys():
 		if int(kind_by_id[key]) == ki:
@@ -2364,46 +2383,41 @@ func _build_unlock_popup() -> void:
 	unlock_layer.layer = 30
 	unlock_layer.visible = false
 	add_child(unlock_layer)
-	var dim := ColorRect.new()
-	dim.color = Color(0.15, 0.35, 0.7, 0.35)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	unlock_layer.add_child(dim)
 	var card := Panel.new()
-	card.position = Vector2(70, 430)
-	card.size = Vector2(580, 300)
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.98, 0.99, 1.0)
-	style.corner_radius_top_left = 24
-	style.corner_radius_top_right = 24
-	style.corner_radius_bottom_left = 24
-	style.corner_radius_bottom_right = 24
-	card.add_theme_stylebox_override("panel", style)
+	card.name = "Toast"
+	card.anchor_left = 0.5
+	card.anchor_right = 0.5
+	card.anchor_top = 0.0
+	card.offset_left = -320
+	card.offset_right = 320
+	card.offset_top = 280
+	card.offset_bottom = 420
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_theme_stylebox_override("panel", _panel_style())
 	unlock_layer.add_child(card)
 	unlock_title = Label.new()
-	unlock_title.text = "New skin unlocked!"
-	unlock_title.position = Vector2(90, 470)
-	unlock_title.size = Vector2(540, 56)
+	unlock_title.text = "Challenge complete"
+	unlock_title.position = Vector2(24, 16)
+	unlock_title.size = Vector2(592, 48)
 	unlock_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_style(unlock_title, 48)
-	unlock_title.add_theme_color_override("font_color", Color(0.12, 0.28, 0.55))
+	unlock_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_style(unlock_title, 36)
+	unlock_title.add_theme_color_override("font_color", BRAND_INK)
 	unlock_title.add_theme_constant_override("outline_size", 0)
-	unlock_layer.add_child(unlock_title)
+	card.add_child(unlock_title)
 	unlock_body = Label.new()
-	unlock_body.position = Vector2(90, 540)
-	unlock_body.size = Vector2(540, 50)
+	unlock_body.position = Vector2(24, 68)
+	unlock_body.size = Vector2(592, 64)
 	unlock_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_style(unlock_body, 44)
+	unlock_body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_style(unlock_body, 32)
 	unlock_body.add_theme_constant_override("outline_size", 0)
-	unlock_layer.add_child(unlock_body)
-	unlock_ok = _make_button("OK", Vector2(160, 620), Vector2(400, 88), Color(0.2, 0.58, 0.95))
-	unlock_ok.pressed.connect(_dismiss_unlock)
-	unlock_layer.add_child(unlock_ok)
+	card.add_child(unlock_body)
 
 func _announce_skins(found: Array) -> void:
 	for s in found:
 		unlock_queue.append(s)
-	if unlock_layer == null or unlock_layer.visible:
+	if unlock_layer == null or toast_busy:
 		return
 	_present_unlock()
 
@@ -2412,17 +2426,43 @@ func _present_unlock() -> void:
 		return
 	if unlock_queue.is_empty():
 		unlock_layer.visible = false
+		toast_busy = false
 		return
-	var s: Dictionary = unlock_queue[0]
-	unlock_body.text = str(s.name)
+	var s: Dictionary = unlock_queue.pop_front()
+	var prog := Save.progress_for(str(s.unlock))
+	var shown := mini(int(prog.cur), int(prog.need))
+	unlock_body.text = "%s\n%s %d/%d" % [str(s.name), str(prog.get("label", "")), shown, int(prog.need)]
 	unlock_body.add_theme_color_override("font_color", s.a)
-	unlock_ok.text = "Next" if unlock_queue.size() > 1 else "OK"
+	var card := unlock_layer.get_node("Toast") as Panel
 	unlock_layer.visible = true
+	toast_busy = true
+	toast_gen += 1
+	var gen := toast_gen
+	card.modulate.a = 0.0
+	card.offset_top = 280.0
+	card.offset_bottom = 420.0
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(card, "modulate:a", 1.0, 0.28).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(card, "offset_top", 430.0, 0.32).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(card, "offset_bottom", 570.0, 0.32).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.set_parallel(false)
+	tw.tween_interval(2.15)
+	tw.tween_property(card, "modulate:a", 0.0, 0.28).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	tw.tween_callback(_finish_toast.bind(gen))
+
+func _finish_toast(gen: int) -> void:
+	if gen != toast_gen:
+		return
+	toast_busy = false
+	_present_unlock()
 
 func _dismiss_unlock() -> void:
-	if not unlock_queue.is_empty():
-		unlock_queue.pop_front()
-	_present_unlock()
+	toast_gen += 1
+	toast_busy = false
+	unlock_queue.clear()
+	if unlock_layer:
+		unlock_layer.visible = false
 
 func _place_name_tag() -> void:
 	if name_lbl == null or cam == null or not hole_mesh.visible:
@@ -2441,8 +2481,6 @@ func _input(event: InputEvent) -> void:
 			_unlock_audio()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if unlock_layer and unlock_layer.visible:
-		return
 	if ad_hold:
 		return
 	if mode != "play" and mode != "attract":
@@ -2683,7 +2721,7 @@ func _refresh_next_skin() -> void:
 	var skin: Dictionary = nxt.skin
 	var prog: Dictionary = nxt.progress
 	next_lbl.visible = true
-	next_lbl.text = "Next skin: %s  %d/%d" % [str(skin.name), int(prog.cur), int(prog.need)]
+	next_lbl.text = "%s  %d/%d" % [str(prog.get("label", "Next skin")), int(prog.cur), int(prog.need)]
 	if next_fill:
 		next_fill.visible = true
 		var track := next_fill.get_parent() as ColorRect
@@ -3431,7 +3469,7 @@ func _swallow_done(o: Dictionary) -> void:
 			score += gained
 			player_eaten += 1
 			_sync_level()
-			_announce_skins(Save.note_eaten(1))
+			_announce_skins(Save.note_swallow(_swallow_bucket(kind_id_of(int(o.kind)))))
 			_burst(at, gained, o.color)
 			_feel(gained, gained >= 14)
 			_refresh_hud()
@@ -3733,7 +3771,7 @@ func _finish_round(cleared: bool, eaten_by: String = "") -> void:
 	if cleared:
 		var clean := not continue_used
 		var sweep := rivals_bitten.size() >= RIVAL_NAMES.size()
-		_announce_skins(Save.note_clear(clean, sweep))
+		_announce_skins(Save.note_clear(map_index, clean, sweep))
 	over_lbl.text = "%s\n%s   +%d coins" % [_round_headline(), str(map.name), coins_earned]
 	_fill_result_bars()
 	result_anim = 0.0
@@ -3934,6 +3972,7 @@ func _settle_eaten() -> void:
 	var payout := int(float(score) * 0.08)
 	if payout > 0:
 		Save.add_coins(payout)
+	Save.note_fail()
 	_announce_skins(Save.note_round())
 	var stars_n := 1 if _clear_ratio() >= 0.5 else 0
 	_announce_skins(Save.note_stars(map_index, stars_n))
@@ -4331,7 +4370,7 @@ func _fill_result_bars() -> void:
 	else:
 		var skin: Dictionary = nxt.skin
 		var prog: Dictionary = nxt.progress
-		_set_result_row(0, "Next skin: %s  %d/%d" % [str(skin.name), int(prog.cur), int(prog.need)], float(prog.ratio), skin.a)
+		_set_result_row(0, "%s  %s %d/%d" % [str(skin.name), str(prog.get("label", "")), int(prog.cur), int(prog.need)], float(prog.ratio), skin.a)
 	_set_result_row(1, "City cleared  %d%%" % int(round(_clear_ratio() * 100.0)), _clear_ratio(), Color(1.0, 0.72, 0.18))
 	var buy: Dictionary = Save.next_purchase()
 	if buy.is_empty():
@@ -4367,27 +4406,7 @@ func _paint_star(ci: CanvasItem, center: Vector2, radius: float, filled: bool) -
 
 func _lock_text(unlock: String) -> String:
 	var p := Save.progress_for(unlock)
-	var cur := int(p.cur)
-	var need := int(p.need)
-	if unlock.begins_with("coins:"):
-		return "Lock — %d/%d coins" % [cur, need]
-	if unlock.begins_with("level:"):
-		return "Lock — Clear level %d  (%d/%d)" % [need, cur, need]
-	if unlock.begins_with("eat:"):
-		return "Lock — Eat %d/%d" % [cur, need]
-	if unlock.begins_with("rounds:"):
-		return "Lock — Play %d/%d rounds" % [cur, need]
-	if unlock.begins_with("stars:"):
-		return "Lock — %d/%d stars" % [cur, need]
-	if unlock.begins_with("size:"):
-		return "Lock — Reach size %d" % need
-	if unlock.begins_with("clean:"):
-		return "Lock — Untouched clears %d/%d" % [cur, need]
-	if unlock.begins_with("sweep:"):
-		return "Lock — Eat every rival %d/%d" % [cur, need]
-	if unlock.begins_with("rivals:"):
-		return "Lock — Rivals eaten %d/%d" % [cur, need]
-	return "Lock"
+	return "%s %d/%d" % [str(p.get("label", "Challenge")), int(p.cur), int(p.need)]
 
 func _on_try_skin(id: String) -> void:
 	if Save.has_skin(id):
@@ -4667,14 +4686,12 @@ func _skin_card(s: Dictionary) -> Control:
 	var id := str(s.id)
 	var owned := Save.has_skin(id)
 	var wrap := Control.new()
-	wrap.custom_minimum_size = Vector2(640, 176 if not owned else 108)
+	wrap.custom_minimum_size = Vector2(640, 176)
 	var status := "Equip"
 	if Save.skin_id == id and Save.trial_skin != id:
 		status = "Equipped"
 	elif Save.trial_skin == id:
 		status = "Next round"
-	elif not owned:
-		status = _lock_text(str(s.unlock))
 	var width := 460.0 if not owned else 640.0
 	var label := str(s.name) if not owned else "%s    %s" % [str(s.name), status]
 	var b := _make_button(label, Vector2.ZERO, Vector2(width, 88), s.a, 34)
@@ -4686,22 +4703,33 @@ func _skin_card(s: Dictionary) -> Control:
 		var try_b := _make_button("Try", Vector2(476, 0), Vector2(164, 88), BRAND_INK, 34)
 		try_b.pressed.connect(_on_try_skin.bind(id))
 		wrap.add_child(try_b)
-		var lock_l := _menu_label(status, Vector2(8, 96), 30)
-		lock_l.size = Vector2(620, 40)
-		wrap.add_child(lock_l)
-		var prog := Save.progress_for(str(s.unlock))
-		var track := ColorRect.new()
-		track.position = Vector2(16, 142)
-		track.size = Vector2(608, 16)
-		track.color = Color(1, 1, 1, 0.35)
-		track.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		wrap.add_child(track)
-		var fill := ColorRect.new()
-		fill.position = Vector2(2, 2)
-		fill.size = Vector2(604.0 * float(prog.ratio), 12)
-		fill.color = Color(1, 0.95, 0.55)
-		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		track.add_child(fill)
+	var prog := Save.progress_for(str(s.unlock))
+	var line := "Ready"
+	if str(s.unlock) != "free":
+		if owned:
+			line = "%s %d/%d" % [str(prog.get("label", "Challenge")), int(prog.need), int(prog.need)]
+		else:
+			line = _lock_text(str(s.unlock))
+	var lock_l := _menu_label(line, Vector2(8, 96), 30)
+	lock_l.size = Vector2(620, 40)
+	wrap.add_child(lock_l)
+	var track := ColorRect.new()
+	track.position = Vector2(16, 142)
+	track.size = Vector2(608, 16)
+	track.color = Color(1, 1, 1, 0.35)
+	track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(track)
+	var fill := ColorRect.new()
+	fill.position = Vector2(2, 2)
+	fill.size = Vector2(0, 12)
+	fill.color = Color(1, 0.95, 0.55) if not owned else Color(0.45, 0.82, 0.48)
+	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	track.add_child(fill)
+	var goal := 604.0 if owned or str(s.unlock) == "free" else 604.0 * float(prog.ratio)
+	wrap.tree_entered.connect(func() -> void:
+		var tw := fill.create_tween()
+		tw.tween_property(fill, "size", Vector2(goal, 12), 0.55).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	, CONNECT_ONE_SHOT)
 	return wrap
 
 func _btn_box(color: Color) -> StyleBoxFlat:
