@@ -2,6 +2,9 @@ extends Node
 
 const CatalogSafe = preload("res://catalog.gd")
 const PATH := "user://hole_save.cfg"
+# v1 was the unversioned [player] file. v2 adds [meta] saved_at so the web
+# IndexedDB file and the localStorage mirror can be compared.
+const SAVE_VERSION := 2
 const SIZE_RADIUS := [0.50, 0.62, 0.74, 0.88, 1.02]
 const SPEED_MUL := [1.0, 1.08, 1.16, 1.25, 1.34]
 const EXTRA_TIME := [0.0, 15.0, 30.0, 45.0, 60.0]
@@ -40,6 +43,9 @@ var trial_skin := ""
 var last_daily := ""
 var daily_doubled := false
 var _play_save_wait := 0.0
+var _disk_text := ""
+var _rev := 0
+var _flush_cb: JavaScriptObject
 
 func _ready() -> void:
 	best.resize(10)
@@ -51,13 +57,122 @@ func _ready() -> void:
 		maps_cleared[i] = 0
 	for k in TALLY_KEYS:
 		tallies[k] = 0
+	_install_web_hooks()
 	load_game()
 	grant_play_skins()
 
-func load_game() -> void:
-	var cf := ConfigFile.new()
-	if cf.load(PATH) != OK:
+func _install_web_hooks() -> void:
+	if not OS.has_feature("web"):
 		return
+	# Keep the callback on this node. Godot drops it if nothing references it.
+	_flush_cb = JavaScriptBridge.create_callback(_on_page_hide)
+	var window := JavaScriptBridge.get_interface("window")
+	if window:
+		window.__holeSetFlush(_flush_cb)
+
+func _on_page_hide(_args: Array) -> void:
+	save_game()
+
+# [rev, saved_at]. Missing text is [-1, -1]. A legacy file with no [meta] is [0, 0].
+# rev wins over the clock, so a later save is kept even if the device clock jumps back.
+func _rank_of(text: String) -> Array:
+	if text.strip_edges() == "":
+		return [-1, -1]
+	var cf := ConfigFile.new()
+	if cf.parse(text) != OK:
+		return [-1, -1]
+	if not cf.has_section("player") and not cf.has_section("meta"):
+		return [-1, -1]
+	return [int(cf.get_value("meta", "rev", 0)), int(cf.get_value("meta", "saved_at", 0))]
+
+func _beats(a: Array, b: Array) -> bool:
+	if int(a[0]) != int(b[0]):
+		return int(a[0]) > int(b[0])
+	return int(a[1]) > int(b[1])
+
+func _pick_text(file_text: String, mirror_text: String) -> String:
+	var file_rank := _rank_of(file_text)
+	var mirror_rank := _rank_of(mirror_text)
+	# The mirror is written synchronously on every save. On a tie it is the
+	# copy most likely to have survived a tab close before IndexedDB finished.
+	if _beats(mirror_rank, file_rank):
+		return mirror_text
+	if _beats(file_rank, mirror_rank):
+		return file_text
+	if int(mirror_rank[0]) >= 0:
+		return mirror_text
+	if int(file_rank[0]) >= 0:
+		return file_text
+	return ""
+
+func _read_user() -> String:
+	if not FileAccess.file_exists(PATH):
+		return ""
+	return FileAccess.get_file_as_string(PATH)
+
+func _write_user(text: String) -> void:
+	var f := FileAccess.open(PATH, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(text)
+	f.close()
+
+func _mirror_get() -> String:
+	if not OS.has_feature("web"):
+		return ""
+	var raw = JavaScriptBridge.eval("(window.__holeLoadMirror?window.__holeLoadMirror():'')", true)
+	if raw == null:
+		return ""
+	return str(raw)
+
+func _mirror_put(text: String) -> void:
+	if not OS.has_feature("web"):
+		return
+	var payload := JSON.stringify(text)
+	JavaScriptBridge.eval("if(window.__holeSaveMirror)window.__holeSaveMirror(" + payload + ");", true)
+
+func _sync_fs() -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("if(window.__holeSyncFS)window.__holeSyncFS();", true)
+
+func load_game() -> void:
+	var file_text := _read_user()
+	var mirror_text := _mirror_get()
+	var chosen := _pick_text(file_text, mirror_text)
+	if chosen == "":
+		return
+	var cf := ConfigFile.new()
+	if cf.parse(chosen) != OK:
+		var other := file_text if chosen == mirror_text else mirror_text
+		cf = ConfigFile.new()
+		if other == "" or other == chosen or cf.parse(other) != OK:
+			return
+		chosen = other
+	_disk_text = chosen
+	_migrate(cf)
+	_apply(cf)
+	if not OS.has_feature("web"):
+		return
+	if chosen != file_text:
+		_write_user(chosen)
+		_sync_fs()
+	if chosen != mirror_text:
+		_mirror_put(chosen)
+
+# Older files have no [meta]. Keep every player key. Missing "clears" is seeded
+# in _apply from unlocked_level so an update does not lock maps the player had.
+func _migrate(cf: ConfigFile) -> void:
+	var v := int(cf.get_value("meta", "version", 0))
+	if v < 1:
+		pass
+	if v < 2:
+		pass
+	if v > SAVE_VERSION:
+		pass
+
+func _apply(cf: ConfigFile) -> void:
+	_rev = maxi(0, int(cf.get_value("meta", "rev", 0)))
 	coins = int(cf.get_value("player", "coins", 0))
 	size_rank = clampi(int(cf.get_value("player", "size_rank", 0)), 0, 4)
 	speed_rank = clampi(int(cf.get_value("player", "speed_rank", 0)), 0, 4)
@@ -114,6 +229,15 @@ func load_game() -> void:
 
 func save_game() -> void:
 	var cf := ConfigFile.new()
+	if _disk_text != "" and cf.parse(_disk_text) != OK:
+		cf = ConfigFile.new()
+	var version := int(cf.get_value("meta", "version", 0))
+	if version < SAVE_VERSION:
+		version = SAVE_VERSION
+	_rev += 1
+	cf.set_value("meta", "version", version)
+	cf.set_value("meta", "rev", _rev)
+	cf.set_value("meta", "saved_at", int(Time.get_unix_time_from_system() * 1000.0))
 	cf.set_value("player", "coins", coins)
 	cf.set_value("player", "size_rank", size_rank)
 	cf.set_value("player", "speed_rank", speed_rank)
@@ -156,7 +280,11 @@ func save_game() -> void:
 	for i in best.size():
 		bits.append(str(int(best[i])))
 	cf.set_value("player", "best", ",".join(bits))
-	cf.save(PATH)
+	var text := cf.encode_to_text()
+	_write_user(text)
+	_disk_text = text
+	_mirror_put(text)
+	_sync_fs()
 
 func wipe() -> void:
 	coins = 0

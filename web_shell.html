@@ -135,7 +135,48 @@
 					music = src;
 				}).catch(function () {});
 			}
+			function requestPersist() {
+				window.__holePersistRequested = true;
+				try {
+					if (navigator.storage && navigator.storage.persist) {
+						navigator.storage.persist().catch(function () {});
+					}
+				} catch (err) {}
+			}
+			var MIRROR_KEY = 'hole-arcade-save';
+			window.__holeSaveMirror = function (text) {
+				try {
+					localStorage.setItem(MIRROR_KEY, String(text));
+					return 1;
+				} catch (err) {
+					return 0;
+				}
+			};
+			window.__holeLoadMirror = function () {
+				try {
+					return localStorage.getItem(MIRROR_KEY) || '';
+				} catch (err) {
+					return '';
+				}
+			};
+			window.__holeFlush = null;
+			window.__holeSetFlush = function (cb) {
+				window.__holeFlush = cb;
+			};
+			function flushProgress() {
+				var cb = window.__holeFlush;
+				if (!cb) return;
+				try { cb(); } catch (err) {
+					window.__holeFlushError = String(err && err.message ? err.message : err);
+				}
+			}
+			document.addEventListener('visibilitychange', function () {
+				if (document.visibilityState === 'hidden') flushProgress();
+			});
+			window.addEventListener('pagehide', flushProgress);
+			requestPersist();
 			window.__holeUnlock = function () {
+				requestPersist();
 				var c = ac();
 				if (!c) return;
 				if (c.state === 'suspended') c.resume();
@@ -295,6 +336,31 @@ body {
 const GODOT_CONFIG = $GODOT_CONFIG;
 const GODOT_THREADS_ENABLED = $GODOT_THREADS_ENABLED;
 const engine = new Engine(GODOT_CONFIG);
+window.__holeEngine = engine;
+window.__holeSyncBusy = false;
+window.__holeSyncAgain = false;
+window.__holeSyncFS = function () {
+	var rt = window.__holeEngine && window.__holeEngine.rtenv;
+	if (!rt || typeof rt.syncPersistentFS !== 'function') {
+		window.__holeSyncAgain = true;
+		return;
+	}
+	if (window.__holeSyncBusy) {
+		window.__holeSyncAgain = true;
+		return;
+	}
+	window.__holeSyncBusy = true;
+	window.__holeSyncAgain = false;
+	var done = function () {
+		window.__holeSyncBusy = false;
+		if (window.__holeSyncAgain) window.__holeSyncFS();
+	};
+	try {
+		Promise.resolve(rt.syncPersistentFS()).then(done, done);
+	} catch (err) {
+		done();
+	}
+};
 
 (function () {
 	const statusOverlay = document.getElementById('status');

@@ -57,6 +57,9 @@ jobs:
           ! grep -q '__BUILD_SHA__' build/web/index.html
           # thread_support=false: no SharedArrayBuffer / COOP-COEP, so GitHub Pages and phone browsers can run it
           grep -q 'const GODOT_THREADS_ENABLED = false;' build/web/index.html
+          # Godot only copies user:// to IndexedDB on quit. Expose a queued sync so the game can flush after each save.
+          python3 tools/patch_web_sync.py build/web/index.js
+          grep -q 'syncPersistentFS' build/web/index.js
 
       - name: Setup Pages
         uses: actions/configure-pages@v6

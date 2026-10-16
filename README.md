@@ -1,6 +1,6 @@
 # Hole Arcade
 
-A Godot 4.3 hole.io-style game. Steer with a floating joystick, swallow what fits when the hole is under it, and clear 10 themed maps. Each map covers about two and a half times the old street grid and is packed with more buildings, vehicles, and small props. Off-screen blocks are culled, and physics runs only on objects next to a hole. Coins, upgrades, and 15 hole skins are saved on the device. The game opens on the live level. Tap or drag to start. Ads and Remove Ads are test placeholders, with no ad account and no charge.
+A Godot 4.3 hole.io-style game. Steer with a floating joystick, swallow what fits when the hole is under it, and clear 10 themed maps. Each map covers about two and a half times the old street grid and is packed with more buildings, vehicles, and small props. Off-screen blocks are culled, and physics runs only on objects next to a hole. Coins, unlocked levels, stars, skins, the selected skin, upgrades, lifetime challenge stats, sound and music, Remove Ads, and the daily reward are saved in the browser (IndexedDB, with a localStorage backup of whichever copy is newer). Safari can clear that site storage after about 7 days without a visit. A native iOS or Android build keeps the same file on the device and does not have that limit. The game opens on the live level. Tap or drag to start. Ads and Remove Ads are test placeholders, with no ad account and no charge.
 
 Play it at https://jp196400.github.io/hole-arcade/
 

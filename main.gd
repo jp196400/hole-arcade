@@ -3237,7 +3237,7 @@ func _update_debug(delta: float) -> void:
 	var win := DisplayServer.window_get_size()
 	debug_lbl.text = "FPS %d\nframe %.1f ms\nphysics %.2f ms\ndraws %d\nbodies %d\nview %dx%d\nspeed x%.2f\nscale %.2f render %.2f msaa %d\n%s" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y, speed_scale, quality_scale, quality_render, quality_msaa, _short_sha()]
 	if OS.has_feature("web"):
-		JavaScriptBridge.eval("window.__godotStats={fps:%d,frameMs:%.2f,physMs:%.2f,draws:%d,bodies:%d,vw:%d,vh:%d}" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y], true)
+		JavaScriptBridge.eval("window.__godotStats={fps:%d,frameMs:%.2f,physMs:%.2f,draws:%d,bodies:%d,vw:%d,vh:%d,coins:%d,level:%d,skin:%s,noAds:%d,music:%d,sfx:%d,size:%d,speed:%d,time:%d,cars:%d,stars:%d,clears:%d,daily:%s,doubled:%d}" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y, Save.coins, Save.unlocked_level, JSON.stringify(str(Save.skin_id)), 1 if Save.no_ads else 0, 1 if Save.music_on else 0, 1 if Save.sfx_on else 0, Save.size_rank, Save.speed_rank, Save.time_rank, int(Save.tallies.get("cars", 0)), Save.total_stars(), Save.clears, JSON.stringify(str(Save.last_daily)), 1 if Save.daily_doubled else 0], true)
 
 func _physics_process(_delta: float) -> void:
 	_sync_rim()
