@@ -68,7 +68,7 @@
 		// SFX are original tones. Music is music.ogg (CC0, see assets/music/LICENSE.txt).
 		// The context is created on the first tap so iOS Safari will play it.
 		(function () {
-			var prefs = { music: true, sfx: true };
+			var prefs = { music: true, sfx: true, haptics: true };
 			var ctx = null;
 			var music = null;
 			var unlocked = false;
@@ -189,12 +189,21 @@
 				if (!prefs.music) stopMusic();
 				else if (unlocked) startMusic();
 			};
+			window.__holeSetHaptics = function (on) {
+				prefs.haptics = !!on;
+			};
+			// iOS Safari has no Vibration API. A hidden checkbox switch used to buzz
+			// when script clicked its label; WebKit 309082 rejects that untrusted
+			// click, so a swallow cannot fire an iPhone haptic from here.
+			window.__holeHaptic = function (ms) {
+				if (!prefs.haptics) return;
+				try {
+					if (typeof navigator.vibrate === 'function') navigator.vibrate(ms);
+				} catch (err) {}
+			};
 			window.__holePlay = function (kind, pitch, big) {
 				try {
-					if (!prefs.sfx) {
-						if (big && navigator.vibrate) navigator.vibrate(16);
-						return;
-					}
+					if (!prefs.sfx) return;
 					var c = ac();
 					if (!c) return;
 					if (c.state === 'suspended') c.resume();
@@ -211,7 +220,6 @@
 					else if (kind === 'click') tone(c, 'square', 980, 640, 0.035, 0.04);
 					else if (kind === 'beep') tone(c, 'square', 880 * p, 880 * p, 0.06, 0.09);
 					else tone(c, 'sine', 480 * p, 150 * p, 0.09, 0.12);
-					if (big && navigator.vibrate) navigator.vibrate(16);
 				} catch (err) {}
 			};
 			window.__holeSwallow = function (pitch, big) {

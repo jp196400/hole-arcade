@@ -297,6 +297,7 @@ var pop_t := 0.0
 var score := 0
 var time_left := ROUND_TIME
 var playing := true
+var edge_probe := false
 var props: Array = []
 var movers: Array = []
 var active: Array = []
@@ -531,6 +532,8 @@ func _ready() -> void:
 		call_deferred("_probe_growth")
 	elif preview == "size7":
 		call_deferred("_preview_size")
+	elif preview == "eat":
+		call_deferred("_probe_edge_eat")
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
@@ -589,6 +592,77 @@ func _probe_growth() -> void:
 		var fits := map_max_base < end_r * FIT_RATIO
 		print("GROW %s start %.3f end %.3f x%.2f size %d final %.3f maxb %.3f fits %s rival %.2f screen %.0f%% -> %.0f%%" % [str(map.name), start_r, end_r, end_r / maxf(start_r, 0.001), level + 1, final_radius, map_max_base, "yes" if fits else "NO", rival_cap, _screen_frac(start_r, start_dist) * 100.0, _screen_frac(end_r, end_dist) * 100.0])
 	get_tree().quit()
+
+func _probe_edge_eat() -> void:
+	start_round(0)
+	playing = false
+	edge_probe = true
+	velocity = Vector3.ZERO
+	for rv in rivals:
+		rv.alive = false
+	var lines: PackedStringArray = []
+	var ok := true
+	for rad in [0.55, 4.0]:
+		var inside: Dictionary = await _probe_one_eat(rad, true)
+		lines.append(str(inside.text))
+		ok = ok and bool(inside.ok)
+		var outside: Dictionary = await _probe_one_eat(rad, false)
+		lines.append(str(outside.text))
+		ok = ok and bool(outside.ok)
+	print("EAT_PROBE %s" % " | ".join(lines))
+	get_tree().quit(0 if ok else 1)
+
+func _probe_one_eat(rad: float, want_fall: bool) -> Dictionary:
+	hole_radius = rad
+	hole_open = rad
+	shown_radius = rad
+	hole_pos = Vector3(12.0, 0.0, -6.0)
+	var player_ring := {"root": rim_root, "bodies": rim_bodies, "radius": -1.0}
+	_place_ring(player_ring, rad, hole_pos, true)
+	rim_radius = rad
+	var sample := _probe_small_prop(rad)
+	if sample.is_empty():
+		return {"ok": false, "text": "r=%.2f %s no-prop" % [rad, "in" if want_fall else "out"]}
+	var base := float(sample.base)
+	var dist := (rad - base * 0.16 - 0.05) if want_fall else (rad + base * 0.85 + 0.12)
+	sample.pos = hole_pos + Vector3(dist, 0.0, 0.0)
+	sample.vel = Vector3.ZERO
+	sample.sink = -1
+	if not _take_body(sample):
+		return {"ok": false, "text": "r=%.2f take-fail base=%.3f" % [rad, base]}
+	var b: RigidBody3D = sample.body
+	var min_y := b.global_position.y
+	var mask0 := int(b.collision_mask)
+	for _f in 48:
+		await get_tree().physics_frame
+		if sample.body == null:
+			min_y = -3.0
+			break
+		min_y = minf(min_y, (sample.body as RigidBody3D).global_position.y)
+	var fell := min_y < -0.35 or sample.body == null
+	if sample.body != null:
+		_release_body(sample, (sample.body as RigidBody3D).global_position)
+	var good := fell == want_fall
+	var label := "in" if want_fall else "out"
+	return {
+		"ok": good,
+		"text": "r=%.2f %s base=%.3f dist=%.3f mask=%d minY=%.2f fell=%s %s" % [rad, label, base, dist, mask0, min_y, str(fell), "ok" if good else "FAIL"],
+	}
+
+func _probe_small_prop(rad: float) -> Dictionary:
+	var best: Dictionary = {}
+	var best_base := 99.0
+	var limit := rad * FIT_RATIO * 0.92
+	for o in props:
+		if bool(o.get("in_body", false)) or not bool(o.get("alive", false)):
+			continue
+		var base := float(o.base)
+		if base < 0.08 or base > limit or base > 0.55:
+			continue
+		if base < best_base:
+			best = o
+			best_base = base
+	return best
 
 func _preview_size() -> void:
 	quality_locked = true
@@ -1019,12 +1093,13 @@ func _make_ring(ring_name: String) -> Dictionary:
 	return {"root": root, "bodies": bodies, "radius": -1.0}
 
 func _layout_ring(bodies: Array, radius: float) -> void:
-	# Thin ground shelf around the opening. The inner edge is the fulcrum;
-	# there is no tall wall, so a body tips over the rim and tumbles in.
-	var reach := maxf(1.8, radius * 1.5)
-	var height := 0.14
-	var mid := radius + reach * 0.5
-	var chord := maxf(TAU * radius / float(RIM_COUNT) * 1.32, 0.16)
+	# Thin ground shelf outside the opening. Its inner face sits a hair past
+	# the lip so a small footprint already inside the hole is not perched on it.
+	var reach := maxf(1.6, radius * 1.35)
+	var height := 0.12
+	var chord := maxf(TAU * radius / float(RIM_COUNT) * 1.12, 0.14)
+	var inner := radius + 0.04
+	var mid := inner + reach * 0.5
 	for i in bodies.size():
 		var ang := TAU * float(i) / float(RIM_COUNT)
 		var body: StaticBody3D = bodies[i]
@@ -1049,7 +1124,7 @@ func _sync_rim() -> void:
 	if rim_root == null:
 		return
 	var player_ring := {"root": rim_root, "bodies": rim_bodies, "radius": rim_radius}
-	var show_player := playing and hole_open > 0.05
+	var show_player := (playing or edge_probe) and hole_open > 0.05
 	_place_ring(player_ring, hole_open, hole_pos, show_player)
 	rim_radius = float(player_ring.radius)
 	for i in rival_rings.size():
@@ -3023,7 +3098,12 @@ func _fits(size: float) -> bool:
 	return size < hole_radius * FIT_RATIO
 
 func _mostly_over(size: float, dist: float) -> bool:
-	return dist + size * 0.35 < hole_radius
+	return _center_in_opening(size, dist, hole_radius)
+
+func _center_in_opening(size: float, dist: float, radius: float) -> bool:
+	# The footprint center is inside the opening, inset by a small fraction of
+	# the object's own size so a wide base still has to clear the lip.
+	return dist < radius - size * 0.16
 
 func _clear_ratio() -> float:
 	if clear_total <= 0:
@@ -3593,6 +3673,7 @@ func _feel(points: int, heavy: bool, sound: bool = true) -> void:
 	if heavy or points >= 14:
 		shake_t = 0.34
 		shake_mag = 0.24 if points >= 24 else 0.14
+	HapticService.pulse(heavy or points >= 14)
 	if not sound:
 		return
 	var kind := "pop"
@@ -3849,6 +3930,8 @@ func _bucket_move(o: Dictionary) -> void:
 	_bucket_add(o)
 
 func _activate_nearby() -> void:
+	if edge_probe:
+		return
 	var budget := 2
 	while budget > 0 and not pool_free.is_empty():
 		budget -= 1
@@ -3865,7 +3948,7 @@ func _activate_nearby() -> void:
 		for s in centers.size():
 			var sp: Vector3 = centers[s]
 			var rad := float(radii[s])
-			var reach := rad + 2.6
+			var reach := rad + maxf(3.0, rad * 0.45)
 			var x0 := int(floor((sp.x - reach) / 4.0))
 			var x1 := int(floor((sp.x + reach) / 4.0))
 			var z0 := int(floor((sp.z - reach) / 4.0))
@@ -3910,8 +3993,15 @@ func _take_body(o: Dictionary) -> bool:
 	b.freeze = true
 	b.global_transform = Transform3D(Basis(Vector3.UP, float(o.yaw)), Vector3(p.x, 0.0, p.z))
 	b.freeze = false
-	b.collision_mask = RIM_MASK
-	b.linear_velocity = o.vel
+	b.can_sleep = false
+	var sink_at := _sink_pos(int(o.get("sink", -1)))
+	var sink_r := _sink_radius(int(o.get("sink", -1)))
+	var over := _center_in_opening(float(o.base), _xz_dist(Vector3(p.x, 0, p.z), sink_at), sink_r)
+	b.collision_mask = 0 if over else RIM_MASK
+	var vel: Vector3 = o.vel
+	if over and vel.y > -1.2:
+		vel.y = -1.8
+	b.linear_velocity = vel
 	b.angular_velocity = Vector3.ZERO
 	b.sleeping = false
 	o.body = b
@@ -3951,16 +4041,23 @@ func _drive_body(o: Dictionary) -> void:
 	if hr < 0.05 or not _fits_r(base, hr):
 		_release_body(o, p)
 		return
+	if b.sleeping:
+		b.sleeping = false
 	var upright := b.global_transform.basis.y.dot(Vector3.UP)
 	var tilt := 1.0 - upright
-	var reaching := dist < hr + base * 0.95
-	var falling := p.y < -0.28
+	var reaching := dist < hr + maxf(base * 0.45, 0.2)
+	var falling := p.y < -0.2
 	var tipped := tilt > 0.1 or p.y < -0.04
-	# The shelf is only the fulcrum. Once the body has clearly tipped and its
-	# center is over the opening, drop the rim so it tumbles instead of hanging.
-	var committed := tilt > 0.07 and dist < hr
-	if committed or (falling and dist < hr + base * 0.2):
+	var over := _center_in_opening(base, dist, hr)
+	# Once the footprint center is inside the opening, ignore the shelf so a
+	# small prop is not held up until it reaches the middle.
+	if over or (falling and dist < hr):
 		b.collision_mask = 0
+		b.sleeping = false
+		if p.y > -0.06 and b.linear_velocity.y > -0.6:
+			var kick := b.linear_velocity
+			kick.y = -1.8
+			b.linear_velocity = kick
 	elif reaching or tipped:
 		b.collision_mask = RIM_MASK
 	else:
@@ -4291,7 +4388,9 @@ func _sync_audio() -> void:
 		return
 	var music := "true" if Save.music_on else "false"
 	var sfx_on := "true" if Save.sfx_on else "false"
+	var haptics := "true" if Save.haptics_on else "false"
 	JavaScriptBridge.eval("if(window.__holeSetAudio)window.__holeSetAudio(%s,%s);" % [music, sfx_on], true)
+	JavaScriptBridge.eval("if(window.__holeSetHaptics)window.__holeSetHaptics(%s);" % haptics, true)
 
 func _finish_round(cleared: bool, eaten_by: String = "") -> void:
 	if not playing:
@@ -4759,6 +4858,13 @@ func _toggle_sfx() -> void:
 	_sync_audio()
 	_show_screen("settings")
 
+func _toggle_haptics() -> void:
+	Save.set_haptics(not Save.haptics_on)
+	_sync_audio()
+	if Save.haptics_on:
+		HapticService.pulse(false)
+	_show_screen("settings")
+
 func _ui_click() -> void:
 	_sfx("click", 1.0, false)
 
@@ -5043,7 +5149,10 @@ func _screen_settings() -> void:
 	var sfx_btn := _make_button("SFX: %s" % ("On" if Save.sfx_on else "Off"), Vector2(60, 360), Vector2(600, 96), BRAND_CYAN if Save.sfx_on else BRAND_INK)
 	sfx_btn.pressed.connect(_toggle_sfx)
 	menu_layer.add_child(sfx_btn)
-	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(60, 490), 32)
+	var hap_btn := _make_button("Haptics: %s" % ("On" if Save.haptics_on else "Off"), Vector2(60, 480), Vector2(600, 96), BRAND_CYAN if Save.haptics_on else BRAND_INK)
+	hap_btn.pressed.connect(_toggle_haptics)
+	menu_layer.add_child(hap_btn)
+	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(60, 610), 32)
 	note.size = Vector2(560, 80)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	menu_layer.add_child(note)

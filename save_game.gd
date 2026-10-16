@@ -34,6 +34,7 @@ var stars: Array = []
 const TALLY_KEYS := ["cars", "trees", "buildings", "people", "props", "boats", "lamps", "animals"]
 var music_on := true
 var sfx_on := true
+var haptics_on := true
 var play_time := 0.0
 var first_ad_shown := false
 var last_ad_play := 0.0
@@ -204,6 +205,7 @@ func _apply(cf: ConfigFile) -> void:
 			maps_cleared[i] = 1 if int(mp[i]) > 0 else 0
 	music_on = bool(cf.get_value("player", "music_on", true))
 	sfx_on = bool(cf.get_value("player", "sfx_on", true))
+	haptics_on = bool(cf.get_value("player", "haptics_on", true))
 	play_time = maxf(0.0, float(cf.get_value("player", "play_time", 0.0)))
 	first_ad_shown = bool(cf.get_value("player", "first_ad_shown", false))
 	last_ad_play = maxf(0.0, float(cf.get_value("player", "last_ad_play", 0.0)))
@@ -263,6 +265,7 @@ func save_game() -> void:
 	cf.set_value("player", "maps", ",".join(map_bits))
 	cf.set_value("player", "music_on", music_on)
 	cf.set_value("player", "sfx_on", sfx_on)
+	cf.set_value("player", "haptics_on", haptics_on)
 	cf.set_value("player", "play_time", play_time)
 	cf.set_value("player", "first_ad_shown", first_ad_shown)
 	cf.set_value("player", "last_ad_play", last_ad_play)
@@ -309,6 +312,7 @@ func wipe() -> void:
 		maps_cleared[i] = 0
 	music_on = true
 	sfx_on = true
+	haptics_on = true
 	play_time = 0.0
 	first_ad_shown = false
 	last_ad_play = 0.0
@@ -382,6 +386,10 @@ func set_music(on: bool) -> void:
 
 func set_sfx(on: bool) -> void:
 	sfx_on = on
+	save_game()
+
+func set_haptics(on: bool) -> void:
+	haptics_on = on
 	save_game()
 
 func start_radius() -> float:
