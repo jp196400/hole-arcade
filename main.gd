@@ -3,12 +3,17 @@ extends Node3D
 
 const ROUND_TIME := 90.0
 const CITY_HALF := 40.0
-const DRAG_SENSITIVITY := 0.027  # world units per screen pixel; 45% of the previous 0.06
-const MAX_SPEED := 36.0  # world units per second; half of the previous 72
-const FOLLOW_RATE := 18.0  # exponential catch-up toward the finger; unchanged
+const MAX_SPEED := 36.0  # world units per second at full stick; ?speed= multiplies this
+const JOY_DEADZONE := 14.0  # pixels; no movement inside this
+const JOY_FULL_RADIUS := 56.0  # pixels; full speed at and beyond this
+const FOLLOW_RATE := 18.0  # ease to a stop after the finger lifts
 
 var hole_pos := Vector3.ZERO
-var drag_target := Vector3.ZERO
+var velocity := Vector3.ZERO
+var joy_held := false
+var joy_anchor := Vector2.ZERO
+var joy_finger := Vector2.ZERO
+var joy_id := 0
 var hole_radius := 1.0
 var score := 0
 var time_left := ROUND_TIME
@@ -30,7 +35,8 @@ var over_panel: Control
 var over_lbl: Label
 var debug_lbl: Label
 var debug_on := false
-var speed_scale := 1.0  # ?speed=0.5 multiplies sensitivity and the cap
+var speed_scale := 1.0  # ?speed=0.5 multiplies MAX_SPEED
+var joy_ui: Control
 var lit_mat: StandardMaterial3D
 var shown_score := -1
 var shown_sec := -1
@@ -288,33 +294,77 @@ func _build_ui() -> void:
 	debug_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	debug_lbl.visible = debug_on
 	ui.add_child(debug_lbl)
+	joy_ui = Control.new()
+	joy_ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	joy_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	joy_ui.draw.connect(_draw_joystick)
+	ui.add_child(joy_ui)
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventScreenDrag and playing:
-		# Relative drag moves the target. The hole eases toward it in _process.
-		var d: Vector2 = event.relative * DRAG_SENSITIVITY * speed_scale * (0.8 + hole_radius * 0.2)
-		drag_target += Vector3(d.x, 0, d.y)
-		drag_target.x = clampf(drag_target.x, -CITY_HALF, CITY_HALF)
-		drag_target.z = clampf(drag_target.z, -CITY_HALF, CITY_HALF)
-	elif event is InputEventScreenTouch and event.pressed and not playing:
+	if event is InputEventScreenTouch and event.pressed and not playing:
 		get_tree().reload_current_scene()
+		return
+	if not playing:
+		return
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			joy_held = true
+			joy_id = event.index
+			joy_anchor = event.position
+			joy_finger = event.position
+		elif event.index == joy_id:
+			joy_held = false
+		_refresh_joystick()
+	elif event is InputEventScreenDrag and joy_held and event.index == joy_id:
+		joy_finger = event.position
+		_refresh_joystick()
+
+func _screen_vector_to_world(screen: Vector2) -> Vector3:
+	# Screen +x is right, +y is down. Map through the camera so "up" on
+	# the phone is away from the camera on the ground.
+	var basis := cam.global_transform.basis
+	var right := Vector3(basis.x.x, 0.0, basis.x.z)
+	var forward := Vector3(-basis.z.x, 0.0, -basis.z.z)
+	right = right.normalized() if right.length_squared() > 0.0001 else Vector3.RIGHT
+	forward = forward.normalized() if forward.length_squared() > 0.0001 else Vector3(0, 0, -1)
+	return right * screen.x - forward * screen.y
+
+func _stick_velocity() -> Vector3:
+	var offset := joy_finger - joy_anchor
+	var mag := offset.length()
+	if mag <= JOY_DEADZONE:
+		return Vector3.ZERO
+	var span := maxf(JOY_FULL_RADIUS - JOY_DEADZONE, 0.001)
+	var power := clampf((mag - JOY_DEADZONE) / span, 0.0, 1.0)
+	var dir := _screen_vector_to_world(offset / mag)
+	if dir.length_squared() < 0.0001:
+		return Vector3.ZERO
+	return dir.normalized() * MAX_SPEED * speed_scale * power
 
 func _move_hole(delta: float) -> void:
-	var to := drag_target - hole_pos
-	var dist := to.length()
-	if dist < 0.0001:
-		return
-	var alpha := 1.0 - exp(-FOLLOW_RATE * delta)
-	var step := to * alpha
-	var max_step := MAX_SPEED * speed_scale * (0.8 + hole_radius * 0.2) * delta
-	if step.length() > max_step:
-		step = to.normalized() * max_step
-	# Never step past the target (large delta would otherwise overshoot the cap math).
-	if step.length() > dist:
-		step = to
-	hole_pos += step
+	if joy_held:
+		velocity = _stick_velocity()
+	else:
+		var alpha := 1.0 - exp(-FOLLOW_RATE * delta)
+		velocity = velocity.lerp(Vector3.ZERO, alpha)
+		if velocity.length_squared() < 0.0001:
+			velocity = Vector3.ZERO
+	hole_pos += velocity * delta
 	hole_pos.x = clampf(hole_pos.x, -CITY_HALF, CITY_HALF)
 	hole_pos.z = clampf(hole_pos.z, -CITY_HALF, CITY_HALF)
+
+func _refresh_joystick() -> void:
+	if joy_ui:
+		joy_ui.queue_redraw()
+
+func _draw_joystick() -> void:
+	if not joy_held:
+		return
+	joy_ui.draw_arc(joy_anchor, JOY_FULL_RADIUS, 0.0, TAU, 40, Color(1, 1, 1, 0.28), 2.5, true)
+	joy_ui.draw_arc(joy_anchor, JOY_DEADZONE, 0.0, TAU, 24, Color(1, 1, 1, 0.12), 1.5, true)
+	var offset := joy_finger - joy_anchor
+	offset = offset.limit_length(JOY_FULL_RADIUS)
+	joy_ui.draw_circle(joy_anchor + offset, 16.0, Color(1, 1, 1, 0.42))
 
 func _smooth_camera(delta: float) -> void:
 	var want_h := 10.0 + hole_radius * 5.0
@@ -331,6 +381,8 @@ func _process(delta: float) -> void:
 		time_left -= delta
 		if time_left <= 0.0:
 			time_left = 0.0; playing = false
+			joy_held = false
+			_refresh_joystick()
 			over_lbl.text = "Time's up!\nScore: %d\n\nTap to play again" % score
 			over_panel.visible = true
 		_move_hole(delta)
