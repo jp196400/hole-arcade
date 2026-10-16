@@ -22,7 +22,7 @@ const LEVEL_SCORE := [0, 14, 36, 70, 120, 190]
 const LEVEL_RADIUS := [0.50, 0.78, 1.05, 1.42, 1.9, 2.5]
 const GROUND_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_back;
-uniform sampler2D albedo_tex : source_color, filter_linear_mipmap;
+uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec3 hole_center = vec3(0.0);
 uniform float hole_radius = 0.0;
 varying vec3 world_pos;
@@ -34,12 +34,10 @@ void fragment() {
 	if (hole_radius > 0.0 && dot(d, d) < hole_radius * hole_radius) {
 		discard;
 	}
-	vec3 col = texture(albedo_tex, UV).rgb;
-	col = pow(max(col, vec3(0.001)), vec3(0.9));
-	ALBEDO = col * vec3(1.14, 1.06, 0.96);
-	ROUGHNESS = 0.78;
+	ALBEDO = texture(albedo_tex, UV).rgb;
+	ROUGHNESS = 1.0;
 	METALLIC = 0.0;
-	SPECULAR = 0.35;
+	SPECULAR = 0.0;
 }
 """
 const PIT_SHADER := """shader_type spatial;
@@ -117,7 +115,6 @@ var score_lbl: Label
 var timer_lbl: Label
 var level_lbl: Label
 var sha_lbl: Label
-var bar_fill: ColorRect
 var over_panel: Control
 var over_lbl: Label
 var debug_lbl: Label
@@ -158,12 +155,24 @@ var continue_btn: Button
 var next_btn: Button
 var double_btn: Button
 var menu_sha: Label
+var ui_font: Font
+var progress_ring: Control
+var name_lbl: Label
+var unlock_layer: CanvasLayer
+var unlock_title: Label
+var unlock_body: Label
+var unlock_ok: Button
+var unlock_queue: Array = []
+const PLAYER_NAME := "You"
 const CatalogScript = preload("res://catalog.gd")
 
 func _ready() -> void:
 	randomize()
 	debug_on = _query_debug()
 	speed_scale = _query_speed()
+	if _query_unlockall():
+		Save.unlock_all()
+	_load_font()
 	body_mat = PhysicsMaterial.new()
 	body_mat.friction = 0.55
 	body_mat.bounce = 0.0
@@ -193,6 +202,19 @@ func _web_search() -> String:
 func _query_debug() -> bool:
 	return _web_search().find("debug=1") != -1
 
+func _query_unlockall() -> bool:
+	return _web_search().find("unlockall=1") != -1
+
+func _load_font() -> void:
+	var file := load("res://assets/fonts/Fredoka.ttf") as Font
+	if file == null:
+		ui_font = ThemeDB.fallback_font
+		return
+	var variation := FontVariation.new()
+	variation.base_font = file
+	variation.variation_opentype = {"wght": 700.0, "wdth": 100.0}
+	ui_font = variation
+
 func _query_speed() -> float:
 	var search := _web_search()
 	var key := "speed="
@@ -217,10 +239,12 @@ func _no_shadow(g: GeometryInstance3D) -> void:
 	g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 func _style(l: Label, size: int) -> void:
+	if ui_font:
+		l.add_theme_font_override("font", ui_font)
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", Color.WHITE)
-	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.88))
-	l.add_theme_constant_override("outline_size", 8)
+	l.add_theme_color_override("font_outline_color", Color(0.1, 0.18, 0.32, 0.9))
+	l.add_theme_constant_override("outline_size", maxi(4, int(size / 5.0)))
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func _load_textures() -> void:
@@ -237,19 +261,19 @@ func _load_textures() -> void:
 	mat_nature = StandardMaterial3D.new()
 	mat_nature.albedo_color = Color.WHITE
 	mat_nature.vertex_color_use_as_albedo = true
-	mat_nature.roughness = 0.62
+	mat_nature.roughness = 1.0
 	mat_nature.metallic = 0.0
-	mat_nature.metallic_specular = 0.28
+	mat_nature.metallic_specular = 0.0
 
 func _tex_mat(tex: Texture2D) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_texture = tex
-	m.albedo_color = Color(1.08, 1.02, 0.96)
+	m.albedo_color = Color.WHITE
 	m.vertex_color_use_as_albedo = true
-	m.roughness = 0.55
+	m.roughness = 1.0
 	m.metallic = 0.0
-	m.metallic_specular = 0.48
-	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	m.metallic_specular = 0.0
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	return m
 
 func _build_world() -> void:
@@ -260,34 +284,28 @@ func _build_world() -> void:
 	sky_mat.sky_horizon_color = Color(1.0, 0.72, 0.48)
 	sky_mat.ground_horizon_color = Color(0.95, 0.78, 0.55)
 	sky_mat.ground_bottom_color = Color(0.36, 0.58, 0.34)
-	sky_mat.sun_angle_max = 22.0
+	sky_mat.sun_angle_max = 0.0
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 	e.background_mode = Environment.BG_SKY
 	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.48, 0.62, 0.92)
-	e.ambient_light_energy = 0.38
-	e.tonemap_mode = Environment.TONE_MAPPER_ACES
-	e.tonemap_exposure = 1.06
-	e.tonemap_white = 5.5
+	e.ambient_light_color = Color(1.0, 0.99, 0.97)
+	e.ambient_light_energy = 0.78
+	e.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+	e.tonemap_exposure = 1.0
 	e.adjustment_enabled = true
-	e.adjustment_brightness = 1.02
-	e.adjustment_contrast = 1.14
+	e.adjustment_brightness = 1.0
+	e.adjustment_contrast = 1.02
 	e.adjustment_saturation = 1.16
-	e.fog_enabled = true
-	e.fog_mode = Environment.FOG_MODE_EXPONENTIAL
-	e.fog_light_color = Color(0.72, 0.82, 1.0)
-	e.fog_density = 0.016
-	e.fog_aerial_perspective = 0.4
-	e.fog_sky_affect = 0.5
+	e.fog_enabled = false
 	world_env = e
 	env.environment = e
 	add_child(env)
 	sun = DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-54, 32, 0)
-	sun.light_color = Color(1.0, 0.74, 0.46)
-	sun.light_energy = 2.05
+	sun.rotation_degrees = Vector3(-62, 32, 0)
+	sun.light_color = Color(1.0, 0.98, 0.94)
+	sun.light_energy = 0.22
 	sun.shadow_enabled = false
 	add_child(sun)
 	var floor := StaticBody3D.new()
@@ -470,27 +488,8 @@ func _load_model(path: String) -> Dictionary:
 	return {"mesh": planted, "size": planted.get_aabb().size}
 
 func _shade_mesh(mesh: Mesh) -> ArrayMesh:
-	var arrays: Array = mesh.surface_get_arrays(0)
-	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-	var cols: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
-	if cols.is_empty():
-		cols.resize(verts.size())
-		cols.fill(Color.WHITE)
-	var aabb := mesh.get_aabb()
-	var h := maxf(aabb.size.y, 0.001)
-	var y0 := aabb.position.y
-	for i in verts.size():
-		var t := clampf((verts[i].y - y0) / h, 0.0, 1.0)
-		var ao := lerpf(0.55, 1.12, smoothstep(0.0, 0.62, t))
-		if i < norms.size():
-			ao *= lerpf(0.82, 1.0, clampf(norms[i].y, 0.0, 1.0))
-		var c: Color = cols[i]
-		cols[i] = Color(c.r * ao, c.g * ao, c.b * ao, 1.0)
-	arrays[Mesh.ARRAY_COLOR] = cols
-	var out := ArrayMesh.new()
-	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return out
+	# Keep the Kenney colors flat. Base darkening read as mud against a high-key scene.
+	return mesh as ArrayMesh
 
 func _collect_mesh(n: Node, parent: Transform3D, st: SurfaceTool) -> void:
 	var xform := parent
@@ -831,7 +830,7 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 	var role := str(spec[5])
 	if role in ["building", "wide", "house", "tower"]:
 		var palette := [Color(1, 0.45, 0.4), Color(0.35, 0.62, 1), Color(1, 0.82, 0.3), Color(0.45, 0.9, 0.55), Color(0.78, 0.48, 1), Color(1, 0.62, 0.25)]
-		tint = Color.WHITE.lerp(palette[randi() % palette.size()], 0.62)
+		tint = Color.WHITE.lerp(palette[randi() % palette.size()], 0.16)
 	var list: Array = kind_lists[ki]
 	var o := {
 		"kind": ki,
@@ -886,8 +885,8 @@ func _build_shadows() -> void:
 	for y in 48:
 		for x in 48:
 			var d := Vector2(float(x) - 23.5, float(y) - 23.5).length() / 23.5
-			var a := clampf(1.0 - smoothstep(0.15, 1.0, d), 0.0, 1.0)
-			img.set_pixel(x, y, Color(0, 0, 0, a * a * 0.72))
+			var a := clampf(1.0 - smoothstep(0.08, 1.0, d), 0.0, 1.0)
+			img.set_pixel(x, y, Color(0.16, 0.22, 0.34, a * 0.46))
 	var tex := ImageTexture.create_from_image(img)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -923,7 +922,7 @@ func _shadow_xform(o: Dictionary) -> Transform3D:
 	var dz := p.z - hole_pos.z
 	if dx * dx + dz * dz < hole_radius * hole_radius * 0.8:
 		return Transform3D(Basis(), Vector3(0, -30, 0))
-	var s := float(o.size) * 2.6
+	var s := float(o.size) * 2.2
 	var basis := Basis()
 	basis.x *= s
 	basis.z *= s
@@ -975,9 +974,15 @@ func _build_ui() -> void:
 	ui.layer = 2
 	hud_layer = ui
 	add_child(ui)
+	progress_ring = Control.new()
+	progress_ring.position = Vector2(16, 14)
+	progress_ring.size = Vector2(104, 104)
+	progress_ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	progress_ring.draw.connect(_draw_progress)
+	ui.add_child(progress_ring)
 	score_lbl = Label.new()
-	score_lbl.position = Vector2(18, 16)
-	_style(score_lbl, 36)
+	score_lbl.position = Vector2(132, 28)
+	_style(score_lbl, 40)
 	ui.add_child(score_lbl)
 	timer_lbl = Label.new()
 	timer_lbl.anchor_left = 1.0
@@ -989,22 +994,16 @@ func _build_ui() -> void:
 	timer_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_style(timer_lbl, 36)
 	ui.add_child(timer_lbl)
-	var bar := ColorRect.new()
-	bar.position = Vector2(18, 68)
-	bar.size = Vector2(250, 18)
-	bar.color = Color(0, 0, 0, 0.35)
-	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(bar)
-	bar_fill = ColorRect.new()
-	bar_fill.position = Vector2(3, 3)
-	bar_fill.size = Vector2(0, 12)
-	bar_fill.color = Color(1.0, 0.78, 0.2)
-	bar_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bar.add_child(bar_fill)
 	level_lbl = Label.new()
-	level_lbl.position = Vector2(18, 96)
-	_style(level_lbl, 26)
+	level_lbl.position = Vector2(132, 78)
+	_style(level_lbl, 24)
 	ui.add_child(level_lbl)
+	name_lbl = Label.new()
+	name_lbl.text = PLAYER_NAME
+	name_lbl.size = Vector2(140, 36)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style(name_lbl, 22)
+	ui.add_child(name_lbl)
 	sha_lbl = Label.new()
 	sha_lbl.anchor_left = 1.0
 	sha_lbl.anchor_right = 1.0
@@ -1056,8 +1055,98 @@ func _build_ui() -> void:
 	joy_ui.draw.connect(_draw_joystick)
 	ui.add_child(joy_ui)
 	_refresh_hud()
+	_build_unlock_popup()
+
+func _draw_progress() -> void:
+	if progress_ring == null:
+		return
+	var c := progress_ring.size * 0.5
+	var radius := 38.0
+	progress_ring.draw_arc(c, radius, 0.0, TAU, 64, Color(1, 1, 1, 0.38), 10.0, true)
+	var amt := _map_progress()
+	if amt > 0.001:
+		progress_ring.draw_arc(c, radius, -PI * 0.5, -PI * 0.5 + TAU * amt, 64, Color(1.0, 0.84, 0.22), 10.0, true)
+	progress_ring.draw_circle(c, 26.0, Color(0.18, 0.55, 0.95, 0.92))
+
+func _build_unlock_popup() -> void:
+	unlock_layer = CanvasLayer.new()
+	unlock_layer.layer = 30
+	unlock_layer.visible = false
+	add_child(unlock_layer)
+	var dim := ColorRect.new()
+	dim.color = Color(0.15, 0.35, 0.7, 0.35)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	unlock_layer.add_child(dim)
+	var card := Panel.new()
+	card.position = Vector2(70, 430)
+	card.size = Vector2(580, 300)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.98, 0.99, 1.0)
+	style.corner_radius_top_left = 24
+	style.corner_radius_top_right = 24
+	style.corner_radius_bottom_left = 24
+	style.corner_radius_bottom_right = 24
+	card.add_theme_stylebox_override("panel", style)
+	unlock_layer.add_child(card)
+	unlock_title = Label.new()
+	unlock_title.text = "New skin unlocked!"
+	unlock_title.position = Vector2(90, 470)
+	unlock_title.size = Vector2(540, 56)
+	unlock_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style(unlock_title, 34)
+	unlock_title.add_theme_color_override("font_color", Color(0.12, 0.28, 0.55))
+	unlock_title.add_theme_constant_override("outline_size", 0)
+	unlock_layer.add_child(unlock_title)
+	unlock_body = Label.new()
+	unlock_body.position = Vector2(90, 540)
+	unlock_body.size = Vector2(540, 50)
+	unlock_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style(unlock_body, 32)
+	unlock_body.add_theme_constant_override("outline_size", 0)
+	unlock_layer.add_child(unlock_body)
+	unlock_ok = _make_button("OK", Vector2(190, 630), Vector2(340, 68), Color(0.2, 0.58, 0.95))
+	unlock_ok.pressed.connect(_dismiss_unlock)
+	unlock_layer.add_child(unlock_ok)
+
+func _announce_skins(found: Array) -> void:
+	for s in found:
+		unlock_queue.append(s)
+	if unlock_layer == null or unlock_layer.visible:
+		return
+	_present_unlock()
+
+func _present_unlock() -> void:
+	if unlock_layer == null:
+		return
+	if unlock_queue.is_empty():
+		unlock_layer.visible = false
+		return
+	var s: Dictionary = unlock_queue[0]
+	unlock_body.text = str(s.name)
+	unlock_body.add_theme_color_override("font_color", s.a)
+	unlock_ok.text = "Next" if unlock_queue.size() > 1 else "OK"
+	unlock_layer.visible = true
+
+func _dismiss_unlock() -> void:
+	if not unlock_queue.is_empty():
+		unlock_queue.pop_front()
+	_present_unlock()
+
+func _place_name_tag() -> void:
+	if name_lbl == null or cam == null or not hole_mesh.visible:
+		return
+	var p := hole_pos + Vector3(0.0, 1.05, 0.0)
+	if cam.is_position_behind(p):
+		name_lbl.visible = false
+		return
+	var sp := cam.unproject_position(p)
+	name_lbl.visible = true
+	name_lbl.position = sp - Vector2(70, 40)
 
 func _input(event: InputEvent) -> void:
+	if unlock_layer and unlock_layer.visible:
+		return
 	if mode != "play" or not playing:
 		return
 	if event is InputEventScreenTouch:
@@ -1146,10 +1235,13 @@ func _sync_level() -> void:
 	var n := level
 	while n + 1 < LEVEL_SCORE.size() and score >= LEVEL_SCORE[n + 1]:
 		n += 1
-	if n != level:
+	var grew := n != level
+	if grew:
 		level = n
 		pop_t = POP_TIME
 	hole_radius = maxf(LEVEL_RADIUS[level], _start_radius())
+	if grew:
+		_announce_skins(Save.note_size(level + 1))
 
 func _map_progress() -> float:
 	return clampf(float(score) / float(maxi(target_score, 1)), 0.0, 1.0)
@@ -1161,7 +1253,8 @@ func _refresh_hud() -> void:
 	var s := sec % 60
 	timer_lbl.text = "%d:%02d" % [m, s]
 	level_lbl.text = "%s  Size %d" % [str(map.get("name", "")), level + 1]
-	bar_fill.size = Vector2(244.0 * _map_progress(), 12.0)
+	if progress_ring:
+		progress_ring.queue_redraw()
 	shown_score = score
 	shown_sec = sec
 	shown_level = level
@@ -1196,6 +1289,7 @@ func _process(delta: float) -> void:
 		ground_mat.set_shader_parameter("hole_radius", vis)
 	_smooth_camera(delta)
 	_tick_floaters(delta)
+	_place_name_tag()
 	var sec := int(ceili(time_left))
 	if score != shown_score or level != shown_level or sec != shown_sec:
 		_refresh_hud()
@@ -1281,7 +1375,8 @@ func _flat_dist(p: Vector3) -> float:
 
 func _wants_body(o: Dictionary, dist: float) -> bool:
 	var size := float(o.size)
-	return dist < hole_radius + size * 0.25
+	# Anything wider than the opening stays a static mesh on solid ground.
+	return _fits(size) and _mostly_over(size, dist)
 
 func _activate_nearby() -> void:
 	var budget := 2
@@ -1355,34 +1450,10 @@ func _drive_body(o: Dictionary) -> void:
 	var dist := sqrt(dx * dx + dz * dz)
 	var size := float(o.size)
 	var committed := p.y < -0.12
-	if dist > hole_radius + 3.2 and not committed:
+	if not _fits(size) or (not committed and not _mostly_over(size, dist)):
 		_release_body(o, p)
 		return
-	var mass := b.mass
-	var inward := Vector3.ZERO
-	if dist > 0.04:
-		inward = Vector3(-dx / dist, 0.0, -dz / dist)
-	var over := _mostly_over(size, dist)
-	if _fits(size) and (over or committed):
-		b.collision_mask = 0
-	elif _fits(size) and dist < hole_radius + size * 0.15:
-		b.collision_mask = 1
-		if dist < hole_radius and dist > 0.04:
-			var axis := inward.cross(Vector3.UP)
-			var lean := clampf((hole_radius - dist) / maxf(hole_radius, 0.2), 0.0, 1.0)
-			b.apply_torque(axis * (4.0 * mass * lean))
-	else:
-		b.collision_mask = 1
-		if not _fits(size) and dist < hole_radius:
-			var push := inward
-			if push.length_squared() < 0.01:
-				push = Vector3(1, 0, 0)
-			b.apply_central_force(-push * (48.0 * mass))
-	var v := b.linear_velocity
-	var hv := Vector2(v.x, v.z)
-	if hv.length() > 4.2:
-		hv = hv.limit_length(4.2)
-		b.linear_velocity = Vector3(hv.x, minf(v.y, 4.0), hv.y)
+	b.collision_mask = 0
 	if bool(o.in_mesh):
 		var mm: MultiMesh = kind_multimeshes[int(o.kind)]
 		var xf := _visual_from_body(o, b)
@@ -1414,6 +1485,7 @@ func _swallow_done(o: Dictionary) -> void:
 	if playing and bool(o.alive):
 		score += int(o.points)
 		_sync_level()
+		_announce_skins(Save.note_eaten(1))
 		_burst(at, int(o.points), o.color)
 	o.alive = false
 	if o.body != null:
@@ -1445,10 +1517,10 @@ func _apply_theme(m: Dictionary) -> void:
 	sky_mat.sky_horizon_color = m.horizon
 	sky_mat.ground_horizon_color = m.horizon
 	sky_mat.ground_bottom_color = m.ground
-	world_env.fog_light_color = m.fog
-	world_env.adjustment_saturation = float(m.sat)
-	sun.light_color = m.sun
-	sun.rotation_degrees = Vector3(-54, float(m.sun_yaw), 0)
+	world_env.adjustment_saturation = clampf(float(m.sat), 1.0, 1.12)
+	sun.light_color = Color(1.0, 0.98, 0.94)
+	sun.light_energy = 0.22
+	sun.rotation_degrees = Vector3(-62, float(m.sun_yaw), 0)
 
 func _apply_skin() -> void:
 	if pit_mat == null:
@@ -1531,7 +1603,7 @@ func _finish_round(cleared: bool) -> void:
 	if coins_earned > 0:
 		Save.add_coins(coins_earned)
 	if cleared:
-		Save.mark_cleared(map_index, score)
+		_announce_skins(Save.mark_cleared(map_index, score))
 	var headline := "Level clear!" if cleared else "Time's up"
 	var pct := int(_map_progress() * 100.0)
 	over_lbl.text = "%s\n%s\n%d / %d  (%d%%)\n+%d coins" % [headline, str(map.name), score, target_score, pct, coins_earned]
@@ -1585,7 +1657,7 @@ func _show_screen(which: String) -> void:
 	for c in menu_layer.get_children():
 		c.queue_free()
 	var bg := ColorRect.new()
-	bg.color = Color(0.08, 0.12, 0.2)
+	bg.color = Color(0.4, 0.72, 0.98)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_STOP
 	menu_layer.add_child(bg)
@@ -1652,7 +1724,7 @@ func _screen_levels() -> void:
 		var best_score := int(Save.best[i]) if i < Save.best.size() else 0
 		var label := "%d  %s    %d pts" % [i + 1, str(m.name), int(m.target)]
 		if locked:
-			label += "    Locked"
+			label += "    Lock — Clear level %d" % i
 		elif best_score > 0:
 			label += "    best %d" % best_score
 		var b := _make_button(label, Vector2.ZERO, Vector2(600, 72), Color(0.16, 0.28, 0.42) if not locked else Color(0.14, 0.15, 0.18))
@@ -1691,10 +1763,14 @@ func _screen_skins() -> void:
 
 func _lock_text(unlock: String) -> String:
 	if unlock.begins_with("coins:"):
-		return unlock.substr(6) + " coins"
+		return "Lock — %s coins" % unlock.substr(6)
 	if unlock.begins_with("level:"):
-		return "Clear level " + unlock.substr(6)
-	return "Locked"
+		return "Lock — Clear level %s" % unlock.substr(6)
+	if unlock.begins_with("eat:"):
+		return "Lock — Eat %s objects" % unlock.substr(4)
+	if unlock.begins_with("size:"):
+		return "Lock — Reach size %s" % unlock.substr(5)
+	return "Lock"
 
 func _on_skin(id: String) -> void:
 	if Save.has_skin(id):
@@ -1706,6 +1782,7 @@ func _on_skin(id: String) -> void:
 	if Save.try_buy_skin(skin):
 		Save.equip(id)
 		_apply_skin()
+		_announce_skins([skin])
 	_show_screen("skins")
 
 func _screen_shop() -> void:
@@ -1778,6 +1855,8 @@ func _make_button(text: String, pos: Vector2, size: Vector2, color: Color) -> Bu
 	b.position = pos
 	b.size = size
 	b.custom_minimum_size = size
+	if ui_font:
+		b.add_theme_font_override("font", ui_font)
 	b.add_theme_font_size_override("font_size", 26)
 	b.add_theme_color_override("font_color", Color.WHITE)
 	b.add_theme_color_override("font_hover_color", Color.WHITE)

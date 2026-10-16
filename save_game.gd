@@ -12,17 +12,19 @@ var size_rank := 0
 var speed_rank := 0
 var time_rank := 0
 var skin_id := "cyan"
-var unlocked_skins: Array = ["cyan", "magenta"]
+var unlocked_skins: Array = ["cyan"]
 var best: Array = []
 var unlocked_level := 0
 var no_ads := false
+var eaten := 0
+var max_size := 1
 
 func _ready() -> void:
 	best.resize(10)
 	for i in best.size():
 		best[i] = 0
 	load_game()
-	grant_level_skins()
+	grant_play_skins()
 
 func load_game() -> void:
 	var cf := ConfigFile.new()
@@ -35,10 +37,12 @@ func load_game() -> void:
 	skin_id = str(cf.get_value("player", "skin", "cyan"))
 	no_ads = bool(cf.get_value("player", "no_ads", false))
 	unlocked_level = clampi(int(cf.get_value("player", "unlocked_level", 0)), 0, 10)
-	var skin_csv := str(cf.get_value("player", "skins", "cyan,magenta"))
+	eaten = maxi(0, int(cf.get_value("player", "eaten", 0)))
+	max_size = clampi(int(cf.get_value("player", "max_size", 1)), 1, 6)
+	var skin_csv := str(cf.get_value("player", "skins", "cyan"))
 	unlocked_skins = skin_csv.split(",", false)
-	if unlocked_skins.is_empty():
-		unlocked_skins = ["cyan", "magenta"]
+	if unlocked_skins.is_empty() or not unlocked_skins.has("cyan"):
+		unlocked_skins.append("cyan")
 	var best_csv := str(cf.get_value("player", "best", ""))
 	if best_csv != "":
 		var parts := best_csv.split(",", false)
@@ -54,6 +58,8 @@ func save_game() -> void:
 	cf.set_value("player", "skin", skin_id)
 	cf.set_value("player", "no_ads", no_ads)
 	cf.set_value("player", "unlocked_level", unlocked_level)
+	cf.set_value("player", "eaten", eaten)
+	cf.set_value("player", "max_size", max_size)
 	cf.set_value("player", "skins", ",".join(unlocked_skins))
 	var bits: PackedStringArray = []
 	for i in best.size():
@@ -67,9 +73,11 @@ func wipe() -> void:
 	speed_rank = 0
 	time_rank = 0
 	skin_id = "cyan"
-	unlocked_skins = ["cyan", "magenta"]
+	unlocked_skins = ["cyan"]
 	unlocked_level = 0
 	no_ads = false
+	eaten = 0
+	max_size = 1
 	for i in best.size():
 		best[i] = 0
 	save_game()
@@ -100,28 +108,64 @@ func grant_skin(id: String) -> void:
 		unlocked_skins.append(id)
 		save_game()
 
-func grant_level_skins() -> void:
-	var changed := false
+func _skin_earned(unlock: String) -> bool:
+	if unlock == "free":
+		return true
+	if unlock.begins_with("level:"):
+		return unlocked_level >= int(unlock.substr(6))
+	if unlock.begins_with("eat:"):
+		return eaten >= int(unlock.substr(4))
+	if unlock.begins_with("size:"):
+		return max_size >= int(unlock.substr(5))
+	return false
+
+func grant_play_skins() -> Array:
+	var fresh: Array = []
 	for s in CatalogSafe.skins():
-		var unlock := str(s.unlock)
-		if unlock.begins_with("level:"):
-			var n := int(unlock.substr(6))
-			if unlocked_level >= n and not has_skin(str(s.id)):
-				unlocked_skins.append(str(s.id))
-				changed = true
+		var id := str(s.id)
+		if has_skin(id):
+			continue
+		if _skin_earned(str(s.unlock)):
+			unlocked_skins.append(id)
+			fresh.append(s)
 	if not has_skin(skin_id):
 		skin_id = "cyan"
-		changed = true
-	if changed:
+	if not fresh.is_empty():
 		save_game()
+	return fresh
 
-func mark_cleared(index: int, score: int) -> void:
+func note_eaten(n: int) -> Array:
+	eaten += n
+	var fresh := grant_play_skins()
+	save_game()
+	return fresh
+
+func note_size(size_n: int) -> Array:
+	if size_n <= max_size:
+		return []
+	max_size = size_n
+	var fresh := grant_play_skins()
+	save_game()
+	return fresh
+
+func unlock_all() -> void:
+	unlocked_level = 10
+	eaten = maxi(eaten, 100)
+	max_size = maxi(max_size, 6)
+	for s in CatalogSafe.skins():
+		var id := str(s.id)
+		if not has_skin(id):
+			unlocked_skins.append(id)
+	save_game()
+
+func mark_cleared(index: int, score: int) -> Array:
 	if index >= 0 and index < best.size() and score > int(best[index]):
 		best[index] = score
 	if index + 1 > unlocked_level:
 		unlocked_level = mini(index + 1, 10)
-	grant_level_skins()
+	var fresh := grant_play_skins()
 	save_game()
+	return fresh
 
 func try_buy_upgrade(which: String) -> bool:
 	var rank := size_rank
