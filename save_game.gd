@@ -181,7 +181,7 @@ func _apply(cf: ConfigFile) -> void:
 	no_ads = bool(cf.get_value("player", "no_ads", false))
 	unlocked_level = clampi(int(cf.get_value("player", "unlocked_level", 0)), 0, 10)
 	eaten = maxi(0, int(cf.get_value("player", "eaten", 0)))
-	max_size = clampi(int(cf.get_value("player", "max_size", 1)), 1, 6)
+	max_size = clampi(int(cf.get_value("player", "max_size", 1)), 1, 7)
 	rounds = maxi(0, int(cf.get_value("player", "rounds", 0)))
 	if cf.has_section_key("player", "clears"):
 		clears = maxi(0, int(cf.get_value("player", "clears", 0)))
@@ -643,7 +643,7 @@ func _refresh_unlocks() -> void:
 func unlock_all() -> void:
 	unlocked_level = 10
 	eaten = maxi(eaten, 20000)
-	max_size = maxi(max_size, 6)
+	max_size = maxi(max_size, 7)
 	rounds = maxi(rounds, 40)
 	clears = maxi(clears, 40)
 	clean_clears = maxi(clean_clears, 20)

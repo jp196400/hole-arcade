@@ -21,8 +21,12 @@ const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
 const SPEED_SCREEN := 1.0
 const POOL := 8
-const FIT_RATIO := 0.92
-const POP_TIME := 0.32
+const FIT_RATIO := 0.84
+const POP_TIME := 0.42
+const GROW_MULTIPLE := 8.0
+const SCREEN_FRAC_START := 0.25
+const SCREEN_FRAC_END := 0.40
+const RIVAL_CAP := 0.70
 const FALL_GRAVITY := 2.15
 const RIM_MASK := 8
 const RIM_COUNT := 16
@@ -51,10 +55,9 @@ const LEVEL_RADIUS := [0.50, 0.78, 1.05, 1.42, 1.9, 2.5]
 const CLEAR_RATIO := 0.95
 const COIN_RATE := 0.012
 const CLEAR_COIN_BONUS := 100
-const RIVAL_GROW := 0.08
-const CAM_WIDEN := 1.72
-const GROW_AT := [0.0, 0.12, 0.28, 0.46, 0.64, 0.82, 1.0]
-const GROW_W := [0.0, 0.16, 0.34, 0.52, 0.70, 0.88, 1.0]
+const RIVAL_GROW := 0.40
+const GROW_AT := [0.0, 0.143, 0.286, 0.429, 0.571, 0.714, 0.857, 1.0]
+const GROW_W := [0.0, 0.143, 0.286, 0.429, 0.571, 0.714, 0.857, 1.0]
 const GROUND_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_back;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -524,6 +527,10 @@ func _ready() -> void:
 		call_deferred("_preview_overview")
 	elif preview == "probe":
 		call_deferred("_probe_maps")
+	elif preview == "growth":
+		call_deferred("_probe_growth")
+	elif preview == "size7":
+		call_deferred("_preview_size")
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
@@ -562,6 +569,48 @@ func _preview_zoom(kind: String) -> void:
 	_set_match_hud(false)
 	if hud_layer:
 		hud_layer.visible = false
+
+func _probe_growth() -> void:
+	for i in CatalogScript.maps().size():
+		start_round(i)
+		var start_r := hole_radius
+		var start_dist := _cam_dist_for(start_r)
+		var guard := 0
+		while clear_total > 0 and _clear_ratio() + 0.0000001 < CLEAR_RATIO and guard < 4000:
+			var step := maxi(int(clear_total / 40), 1)
+			clear_eaten = mini(clear_eaten + step, int(ceil(float(clear_total) * CLEAR_RATIO)))
+			player_eaten = clear_eaten
+			_sync_level()
+			guard += 1
+		shown_radius = hole_radius
+		var end_r := hole_radius
+		var end_dist := _cam_dist_for(end_r)
+		var rival_cap := minf(final_radius * RIVAL_CAP, 0.48 * GROW_MULTIPLE)
+		var fits := map_max_base < end_r * FIT_RATIO
+		print("GROW %s start %.3f end %.3f x%.2f size %d final %.3f maxb %.3f fits %s rival %.2f screen %.0f%% -> %.0f%%" % [str(map.name), start_r, end_r, end_r / maxf(start_r, 0.001), level + 1, final_radius, map_max_base, "yes" if fits else "NO", rival_cap, _screen_frac(start_r, start_dist) * 100.0, _screen_frac(end_r, end_dist) * 100.0])
+	get_tree().quit()
+
+func _preview_size() -> void:
+	quality_locked = true
+	_apply_quality(1.5, Viewport.MSAA_4X, false)
+	start_round(0)
+	playing = false
+	var total := maxi(clear_total, 1)
+	clear_eaten = int(ceil(float(total) * CLEAR_RATIO * 0.86))
+	player_eaten = clear_eaten
+	_sync_level()
+	shown_radius = hole_radius
+	hole_open = hole_radius
+	hole_mesh.scale = Vector3(shown_radius, 1.0, shown_radius)
+	size_banner_t = 30.0
+	pop_t = 0.0
+	if size_lbl:
+		size_lbl.text = "Size %d" % (level + 1)
+		size_lbl.visible = true
+	_snap_camera()
+	_set_chrome(false)
+	_set_match_hud(true)
+	_refresh_hud()
 
 func _probe_maps() -> void:
 	for i in CatalogScript.maps().size():
@@ -866,20 +915,41 @@ func _camera_offset(dist: float) -> Vector3:
 	var pitch := deg_to_rad(cam_pitch)
 	return Vector3(0, sin(pitch) * dist, cos(pitch) * dist)
 
+func _view_aspect() -> float:
+	var vp := get_viewport()
+	if vp == null:
+		return 720.0 / 1280.0
+	var sz := vp.get_visible_rect().size
+	if sz.y < 2.0:
+		return 720.0 / 1280.0
+	return sz.x / sz.y
+
+func _hfov_half_tan() -> float:
+	return tan(deg_to_rad(CAM_FOV) * 0.5) * _view_aspect()
+
+func _screen_frac(radius: float, dist: float) -> float:
+	return (2.0 * radius / maxf(dist, 0.001)) / _hfov_half_tan()
+
+func _dist_for_frac(radius: float, frac: float) -> float:
+	return (2.0 * radius) / maxf(frac * _hfov_half_tan(), 0.001)
+
 func _cam_ref_dist() -> float:
-	return CAM_BASE + LEVEL_RADIUS[0] * CAM_PER_RADIUS
+	return _dist_for_frac(LEVEL_RADIUS[0], SCREEN_FRAC_START)
 
 func _cam_dist_for(radius: float) -> float:
-	# The starting hole keeps today's framing. Distance then grows with the
-	# radius, and full size pulls back a bit more so the wider map stays readable.
+	# Zoom out lags the radius, so the hole grows from about a quarter of the
+	# screen to about 40% by the time the city is cleared.
 	var r := maxf(radius, 0.12)
-	var dist := _cam_ref_dist() * (r / LEVEL_RADIUS[0])
-	var widen := smoothstep(LEVEL_RADIUS[0] + 0.2, 2.6, r)
-	dist *= lerpf(1.0, CAM_WIDEN, widen)
-	return dist * cam_dist_mul
+	var start_r := maxf(_start_radius(), 0.12)
+	var end_r := maxf(final_radius, start_r + 0.2)
+	var grow := clampf((r - start_r) / (end_r - start_r), 0.0, 1.0)
+	var frac := lerpf(SCREEN_FRAC_START, SCREEN_FRAC_END, grow)
+	return _dist_for_frac(r, frac) * cam_dist_mul
 
 func _cam_pitch_for(radius: float) -> float:
-	var t := clampf((radius - LEVEL_RADIUS[0]) / 2.8, 0.0, 1.0)
+	var start_r := maxf(_start_radius(), 0.12)
+	var end_r := maxf(final_radius, start_r + 0.2)
+	var t := clampf((radius - start_r) / (end_r - start_r), 0.0, 1.0)
 	t = t * t * (3.0 - 2.0 * t)
 	return lerpf(CAM_PITCH_DEG, CAM_PITCH_FAR, t)
 
@@ -2931,7 +3001,7 @@ func _draw_joystick() -> void:
 	joy_ui.draw_circle(joy_anchor + offset, 16.0, Color(1, 1, 1, 0.42))
 
 func _smooth_camera(delta: float) -> void:
-	var ease := 1.0 - exp(-2.2 * delta)
+	var ease := 1.0 - exp(-1.45 * delta)
 	var want_d := _cam_dist_for(shown_radius)
 	cam_distance = lerpf(cam_distance, want_d, ease)
 	if cam_dist_mul > 0.9:
@@ -2961,17 +3031,17 @@ func _clear_ratio() -> float:
 	return clampf(float(clear_eaten) / float(clear_total), 0.0, 1.0)
 
 func _player_progress() -> float:
-	var total := float(maxi(clear_total, 1))
-	var personal := float(player_eaten) / (total * 0.55)
-	var city := _clear_ratio()
-	var floor_p := smoothstep(0.48, CLEAR_RATIO, city)
-	return clampf(maxf(personal, floor_p), 0.0, 1.0)
+	if clear_total <= 0:
+		return 0.0
+	return clampf(_clear_ratio() / CLEAR_RATIO, 0.0, 1.0)
 
 func _rival_progress(rival: Dictionary) -> float:
 	var total := float(maxi(clear_total, 1))
 	return clampf(float(rival.get("eaten", 0)) / (total * RIVAL_GROW), 0.0, 1.0)
 
-func _radius_for(start_r: float, progress: float) -> float:
+func _radius_for(start_r: float, progress: float, cap: float = -1.0) -> float:
+	var end_r := final_radius if cap < 0.0 else cap
+	end_r = maxf(end_r, start_r + 0.2)
 	var t := clampf(progress, 0.0, 1.0)
 	var i := 0
 	while i + 1 < GROW_AT.size() and t > float(GROW_AT[i + 1]):
@@ -2979,7 +3049,7 @@ func _radius_for(start_r: float, progress: float) -> float:
 	var span := float(GROW_AT[i + 1]) - float(GROW_AT[i])
 	var u := 0.0 if span <= 0.001 else (t - float(GROW_AT[i])) / span
 	var w := lerpf(float(GROW_W[i]), float(GROW_W[i + 1]), u)
-	return lerpf(start_r, maxf(final_radius, start_r + 0.2), w)
+	return lerpf(start_r, end_r, w)
 
 func _size_index(progress: float) -> int:
 	var n := 0
@@ -2999,8 +3069,9 @@ func _tally_clear() -> void:
 			continue
 		clear_total += 1
 		map_max_base = maxf(map_max_base, float(o.base))
-	var need := map_max_base / FIT_RATIO * 1.04
-	final_radius = maxf(need, _start_radius() + 0.45)
+	var start := _start_radius()
+	var fit_need := map_max_base / FIT_RATIO * 1.04
+	final_radius = maxf(start * GROW_MULTIPLE, fit_need)
 
 func _sync_level() -> void:
 	var progress := _player_progress()
@@ -3009,11 +3080,11 @@ func _sync_level() -> void:
 	if grew:
 		level = n
 		pop_t = POP_TIME
-		size_banner_t = 1.15
-		rim_pulse = 0.2
+		size_banner_t = 1.45
+		rim_pulse = 0.28
 		_sfx("fanfare", 1.0, false)
 		if size_lbl:
-			size_lbl.text = "SIZE UP!"
+			size_lbl.text = "Size %d" % (level + 1)
 	hole_radius = maxf(_radius_for(_start_radius(), progress), _start_radius())
 	hole_open = maxf(hole_open, hole_radius)
 	if grew:
@@ -3128,9 +3199,9 @@ func _tick_feedback(delta: float) -> void:
 		if size_banner_t > 0.0:
 			size_banner_t = maxf(0.0, size_banner_t - delta)
 			size_lbl.visible = true
-			var u := clampf(size_banner_t / 1.15, 0.0, 1.0)
+			var u := clampf(size_banner_t / 1.45, 0.0, 1.0)
 			size_lbl.modulate = Color(1, 0.95, 0.35, u)
-			size_lbl.scale = Vector2.ONE * (1.0 + (1.0 - u) * 0.18)
+			size_lbl.scale = Vector2.ONE * (1.0 + (1.0 - u) * 0.22)
 		else:
 			size_lbl.visible = false
 	if mode == "results" and result_anim < 1.0:
@@ -3412,7 +3483,8 @@ func _credit_rival(rival: Dictionary, bites: int) -> void:
 
 func _apply_rival_radius(rival: Dictionary) -> void:
 	var start_r := float(rival.get("base_radius", 0.34))
-	var rad := _radius_for(start_r, _rival_progress(rival))
+	var cap := minf(final_radius * RIVAL_CAP, maxf(start_r * GROW_MULTIPLE, start_r + 0.2))
+	var rad := _radius_for(start_r, _rival_progress(rival), cap)
 	if rad > float(rival.radius) + 0.004:
 		rival.radius = rad
 		rival.pulse = 0.18
@@ -3563,7 +3635,7 @@ func _process(delta: float) -> void:
 	var pop := 1.0
 	if pop_t > 0.0:
 		var u := 1.0 - clampf(pop_t / POP_TIME, 0.0, 1.0)
-		pop = 1.0 + sin(u * PI) * 0.22
+		pop = 1.0 + sin(u * PI) * 0.36
 		pop_t = maxf(0.0, pop_t - delta)
 	if rim_pulse > 0.0:
 		rim_pulse = maxf(0.0, rim_pulse - delta)
@@ -3928,6 +4000,7 @@ func _swallow_done(o: Dictionary) -> void:
 		var sink := int(o.get("sink", -1))
 		if sink >= 0 and sink < rivals.size() and bool(rivals[sink].alive):
 			_credit_rival(rivals[sink], 1)
+			_sync_level()
 		else:
 			if combo_left > 0.0:
 				combo += 1
