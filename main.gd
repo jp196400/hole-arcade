@@ -14,10 +14,11 @@ const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
 const STOP_RATE := 34.0
 const CAM_PITCH_DEG := 60.0
+const CAM_PITCH_FAR := 68.0
 const CAM_FOV := 56.0
 const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
-const SPEED_SCREEN := 0.84
+const SPEED_SCREEN := 1.0
 const POOL := 8
 const FIT_RATIO := 0.92
 const POP_TIME := 0.32
@@ -367,6 +368,7 @@ var cam_distance := 8.0
 var cam_pitch := CAM_PITCH_DEG
 var cam_dist_mul := 1.0
 var cam_look_lift := 0.0
+var skirt_mat: StandardMaterial3D
 var quality_scale := 1.5
 var quality_render := 1.5
 var quality_msaa := 2
@@ -497,6 +499,8 @@ func _ready() -> void:
 		_show_screen("skins")
 	elif preview == "hole" or preview == "street" or preview == "facade":
 		call_deferred("_preview_shot", preview)
+	elif preview == "small" or preview == "wide":
+		call_deferred("_preview_zoom", preview)
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
@@ -516,6 +520,25 @@ func _preview_results() -> void:
 	playing = true
 	_finish_round(true)
 	_dismiss_unlock()
+
+func _preview_zoom(kind: String) -> void:
+	quality_locked = true
+	_apply_quality(1.5, Viewport.MSAA_4X, false)
+	start_round(0)
+	playing = false
+	if kind == "wide":
+		var total := maxi(clear_total, 1)
+		player_eaten = int(float(total) * 0.55)
+		clear_eaten = int(float(total) * 0.97)
+		_sync_level()
+	shown_radius = hole_radius
+	hole_open = hole_radius
+	hole_mesh.scale = Vector3(shown_radius, 1.0, shown_radius)
+	_snap_camera()
+	_set_chrome(false)
+	_set_match_hud(false)
+	if hud_layer:
+		hud_layer.visible = false
 
 func _preview_progress() -> void:
 	start_round(2)
@@ -684,6 +707,18 @@ func _build_world() -> void:
 	floor.position = Vector3(0, -1.0, 0)
 	floor.add_child(floor_shape)
 	add_child(floor)
+	var skirt := MeshInstance3D.new()
+	var skirt_plane := PlaneMesh.new()
+	skirt_plane.size = Vector2(240, 240)
+	skirt.mesh = skirt_plane
+	skirt_mat = StandardMaterial3D.new()
+	skirt_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	skirt_mat.albedo_color = Color(0.42, 0.68, 0.36)
+	skirt_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	skirt.material_override = skirt_mat
+	skirt.position = Vector3(0, -0.08, 0)
+	skirt.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(skirt)
 	_build_rim()
 	ground_shader = Shader.new()
 	ground_shader.code = GROUND_SHADER
@@ -717,10 +752,7 @@ func _build_world() -> void:
 	cam.fov = CAM_FOV
 	cam.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(cam)
-	cam_distance = _cam_dist_for(hole_radius)
-	cam_look = hole_pos
-	cam.position = hole_pos + _camera_offset(cam_distance)
-	cam.look_at(cam_look, Vector3.UP)
+	_snap_camera()
 
 func _build_pop_fx() -> void:
 	pop_fx = CPUParticles3D.new()
@@ -773,8 +805,30 @@ func _camera_offset(dist: float) -> Vector3:
 	var pitch := deg_to_rad(cam_pitch)
 	return Vector3(0, sin(pitch) * dist, cos(pitch) * dist)
 
+func _cam_ref_dist() -> float:
+	return CAM_BASE + LEVEL_RADIUS[0] * CAM_PER_RADIUS
+
 func _cam_dist_for(radius: float) -> float:
-	return (CAM_BASE + radius * CAM_PER_RADIUS) * cam_dist_mul
+	# The starting hole keeps today's framing. After that, distance grows with
+	# the radius so the opening stays a similar width on screen.
+	var r := maxf(radius, 0.12)
+	var dist := _cam_ref_dist() * (r / LEVEL_RADIUS[0])
+	return dist * cam_dist_mul
+
+func _cam_pitch_for(radius: float) -> float:
+	var t := clampf((radius - LEVEL_RADIUS[0]) / 2.8, 0.0, 1.0)
+	t = t * t * (3.0 - 2.0 * t)
+	return lerpf(CAM_PITCH_DEG, CAM_PITCH_FAR, t)
+
+func _snap_camera() -> void:
+	if cam_dist_mul > 0.9:
+		cam_pitch = _cam_pitch_for(shown_radius)
+	cam_distance = _cam_dist_for(shown_radius)
+	cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
+	if cam == null:
+		return
+	cam.position = hole_pos + _camera_offset(cam_distance)
+	cam.look_at(cam_look, Vector3.UP)
 
 func _build_rival_view() -> void:
 	var sh := Shader.new()
@@ -2516,9 +2570,10 @@ func _start_radius() -> float:
 	return Save.start_radius() + float(Save.time_rank) * 0.04
 
 func _move_speed() -> float:
-	var base := _cam_dist_for(LEVEL_RADIUS[0])
-	var dist := _cam_dist_for(shown_radius)
-	var factor := pow(maxf(dist, 0.001) / base, SPEED_SCREEN)
+	var base := _cam_ref_dist()
+	# Follow the eased camera so a size-up does not kick the stick ahead of the zoom.
+	var dist := cam_distance if cam_distance > 0.5 else base
+	var factor := pow(maxf(dist, 0.001) / maxf(base, 0.001), SPEED_SCREEN)
 	return BASE_SPEED * speed_scale * Save.speed_mul() * factor
 
 func _stick_velocity() -> Vector3:
@@ -2566,8 +2621,11 @@ func _draw_joystick() -> void:
 	joy_ui.draw_circle(joy_anchor + offset, 16.0, Color(1, 1, 1, 0.42))
 
 func _smooth_camera(delta: float) -> void:
+	var ease := 1.0 - exp(-2.2 * delta)
 	var want_d := _cam_dist_for(shown_radius)
-	cam_distance = lerpf(cam_distance, want_d, 1.0 - exp(-2.2 * delta))
+	cam_distance = lerpf(cam_distance, want_d, ease)
+	if cam_dist_mul > 0.9:
+		cam_pitch = lerpf(cam_pitch, _cam_pitch_for(shown_radius), ease)
 	var focus := hole_pos + Vector3(0.0, cam_look_lift, 0.0)
 	var want_pos := hole_pos + _camera_offset(cam_distance)
 	cam.position = cam.position.lerp(want_pos, 1.0 - exp(-5.0 * delta))
@@ -3237,7 +3295,7 @@ func _update_debug(delta: float) -> void:
 	var win := DisplayServer.window_get_size()
 	debug_lbl.text = "FPS %d\nframe %.1f ms\nphysics %.2f ms\ndraws %d\nbodies %d\nview %dx%d\nspeed x%.2f\nscale %.2f render %.2f msaa %d\n%s" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y, speed_scale, quality_scale, quality_render, quality_msaa, _short_sha()]
 	if OS.has_feature("web"):
-		JavaScriptBridge.eval("window.__godotStats={fps:%d,frameMs:%.2f,physMs:%.2f,draws:%d,bodies:%d,vw:%d,vh:%d,coins:%d,level:%d,skin:%s,noAds:%d,music:%d,sfx:%d,size:%d,speed:%d,time:%d,cars:%d,stars:%d,clears:%d,daily:%s,doubled:%d}" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y, Save.coins, Save.unlocked_level, JSON.stringify(str(Save.skin_id)), 1 if Save.no_ads else 0, 1 if Save.music_on else 0, 1 if Save.sfx_on else 0, Save.size_rank, Save.speed_rank, Save.time_rank, int(Save.tallies.get("cars", 0)), Save.total_stars(), Save.clears, JSON.stringify(str(Save.last_daily)), 1 if Save.daily_doubled else 0], true)
+		JavaScriptBridge.eval("window.__godotStats={fps:%d,frameMs:%.2f,physMs:%.2f,draws:%d,bodies:%d,vw:%d,vh:%d,coins:%d,level:%d,skin:%s,noAds:%d,music:%d,sfx:%d,size:%d,speed:%d,time:%d,cars:%d,stars:%d,clears:%d,daily:%s,doubled:%d,dist:%.2f,radius:%.3f,pitch:%.1f,move:%.2f}" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y, Save.coins, Save.unlocked_level, JSON.stringify(str(Save.skin_id)), 1 if Save.no_ads else 0, 1 if Save.music_on else 0, 1 if Save.sfx_on else 0, Save.size_rank, Save.speed_rank, Save.time_rank, int(Save.tallies.get("cars", 0)), Save.total_stars(), Save.clears, JSON.stringify(str(Save.last_daily)), 1 if Save.daily_doubled else 0, cam_distance, shown_radius, cam_pitch, _move_speed()], true)
 
 func _physics_process(_delta: float) -> void:
 	_sync_rim()
@@ -3505,6 +3563,8 @@ func _apply_theme(m: Dictionary) -> void:
 	sky_mat.ground_horizon_color = m.horizon
 	sky_mat.ground_bottom_color = m.ground
 	world_env.adjustment_saturation = clampf(float(m.sat) * 0.82, 0.90, 1.02)
+	if skirt_mat:
+		skirt_mat.albedo_color = m.ground
 	sun.light_color = m.sun
 	sun.light_energy = 0.4
 	sun.rotation_degrees = Vector3(-62, float(m.sun_yaw), 0)
@@ -3589,10 +3649,7 @@ func start_round(index: int) -> void:
 	_close_continue_layer()
 	hole_mesh.visible = true
 	hole_mesh.position = hole_pos
-	cam_distance = _cam_dist_for(hole_radius)
-	cam_look = hole_pos
-	cam.position = hole_pos + _camera_offset(cam_distance)
-	cam.look_at(cam_look, Vector3.UP)
+	_snap_camera()
 	over_panel.visible = false
 	hud_layer.visible = true
 	menu_layer.visible = false
@@ -3639,10 +3696,7 @@ func _enter_attract(index: int) -> void:
 	player_invuln = 0.0
 	hole_mesh.visible = true
 	hole_mesh.position = hole_pos
-	cam_distance = _cam_dist_for(hole_radius)
-	cam_look = hole_pos
-	cam.position = hole_pos + _camera_offset(cam_distance)
-	cam.look_at(cam_look, Vector3.UP)
+	_snap_camera()
 	over_panel.visible = false
 	hud_layer.visible = true
 	if menu_layer:
