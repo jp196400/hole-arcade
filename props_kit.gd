@@ -22,24 +22,25 @@ static func defs() -> Array:
 		_def("tractor", "car", 14, 0.58, _tractor()),
 		_def("forklift", "car", 10, 0.50, _forklift()),
 		_def("boat", "boat", 20, 1.05, _boat()),
-		_def("bus", "bus", 22, 1.15, _bus()),
+		_def("bus", "bus", 22, 1.15, _bus(), 2),
 		_def("locker", "small", 3, 0.16, _locker()),
 		_def("ride", "ride", 36, 1.45, _ride()),
 		_def("tank", "tank", 26, 1.05, _tank()),
 		_def("pipe", "small", 4, 0.62, _pipe()),
 		_def("fence", "small", 2, 0.52, _fence()),
 		_def("barn", "barn", 46, 1.60, _barn()),
-		_def("truck", "truck", 18, 1.08, _truck()),
+		_def("truck", "truck", 18, 1.08, _truck(), 2),
 		_def("bike", "small", 3, 0.36, _bike()),
+		_def("police", "car", 14, 0.40, _police(), 2),
 	]
 
-static func _def(id: String, role: String, points: int, base: float, mesh: ArrayMesh) -> Dictionary:
+static func _def(id: String, role: String, points: int, base: float, mesh: ArrayMesh, mover: int = 0) -> Dictionary:
 	return {
 		"id": id,
 		"role": role,
 		"points": points,
 		"base": base,
-		"mover": 0,
+		"mover": mover,
 		"mesh": mesh,
 		"size": mesh.get_aabb().size,
 	}
@@ -82,7 +83,7 @@ static func _box(st: SurfaceTool, c: Vector3, s: Vector3, col: Color) -> void:
 	_quad(st, Vector3(c.x + hx, y0, c.z + hz), Vector3(c.x + hx, y0, c.z - hz), Vector3(c.x + hx, y1, c.z - hz), Vector3(c.x + hx, y1, c.z + hz), col)
 	_quad(st, Vector3(c.x - hx, y0, c.z - hz), Vector3(c.x - hx, y0, c.z + hz), Vector3(c.x - hx, y1, c.z + hz), Vector3(c.x - hx, y1, c.z - hz), col)
 
-static func _cyl(st: SurfaceTool, base: Vector3, radius: float, height: float, col: Color, sides: int = 7) -> void:
+static func _cyl(st: SurfaceTool, base: Vector3, radius: float, height: float, col: Color, sides: int = 10) -> void:
 	var top := base + Vector3(0, height, 0)
 	for i in sides:
 		var a0 := TAU * float(i) / float(sides)
@@ -95,7 +96,7 @@ static func _cyl(st: SurfaceTool, base: Vector3, radius: float, height: float, c
 		_tri(st, top, t1, t0, col)
 		_tri(st, base, b0, b1, col)
 
-static func _cone(st: SurfaceTool, base: Vector3, radius: float, height: float, col: Color, sides: int = 8) -> void:
+static func _cone(st: SurfaceTool, base: Vector3, radius: float, height: float, col: Color, sides: int = 10) -> void:
 	var apex := base + Vector3(0, height, 0)
 	for i in sides:
 		var a0 := TAU * float(i) / float(sides)
@@ -105,7 +106,7 @@ static func _cone(st: SurfaceTool, base: Vector3, radius: float, height: float, 
 		_tri(st, apex, p1, p0, col)
 		_tri(st, base, p0, p1, col)
 
-static func _wheel(st: SurfaceTool, c: Vector3, radius: float, thick: float, col: Color, sides: int = 8) -> void:
+static func _wheel(st: SurfaceTool, c: Vector3, radius: float, thick: float, col: Color, sides: int = 12) -> void:
 	var x0 := c.x - thick * 0.5
 	var x1 := c.x + thick * 0.5
 	for i in sides:
@@ -272,10 +273,19 @@ static func _boat() -> ArrayMesh:
 
 static func _bus() -> ArrayMesh:
 	var st := _begin()
-	_box(st, Vector3(0, 0.70, 0), Vector3(0.85, 0.85, 2.30), Color(0.90, 0.74, 0.22))
-	_box(st, Vector3(0, 0.85, 0.10), Vector3(0.88, 0.22, 1.70), Color(0.55, 0.75, 0.82))
-	_wheel(st, Vector3(0, 0.22, 0.70), 0.22, 0.90, Color(0.15, 0.16, 0.18))
-	_wheel(st, Vector3(0, 0.22, -0.70), 0.22, 0.90, Color(0.15, 0.16, 0.18))
+	var yellow := Color(0.90, 0.74, 0.22)
+	var glass := Color(0.45, 0.68, 0.82)
+	var dark := Color(0.15, 0.16, 0.18)
+	_box(st, Vector3(0, 0.70, 0), Vector3(0.85, 0.85, 2.30), yellow)
+	_box(st, Vector3(0, 0.92, 0.05), Vector3(0.78, 0.28, 1.85), glass)
+	_box(st, Vector3(0, 0.55, 0.95), Vector3(0.36, 0.48, 0.04), glass)
+	_box(st, Vector3(0, 1.16, 0), Vector3(0.70, 0.06, 2.05), Color(0.82, 0.62, 0.16))
+	_box(st, Vector3(-0.24, 0.38, 1.16), Vector3(0.16, 0.08, 0.04), Color(0.95, 0.92, 0.7))
+	_box(st, Vector3(0.24, 0.38, 1.16), Vector3(0.16, 0.08, 0.04), Color(0.95, 0.92, 0.7))
+	_box(st, Vector3(-0.28, 0.40, -1.16), Vector3(0.14, 0.08, 0.04), Color(0.85, 0.16, 0.14))
+	_box(st, Vector3(0.28, 0.40, -1.16), Vector3(0.14, 0.08, 0.04), Color(0.85, 0.16, 0.14))
+	_wheel(st, Vector3(0, 0.22, 0.72), 0.22, 0.90, dark)
+	_wheel(st, Vector3(0, 0.22, -0.72), 0.22, 0.90, dark)
 	return _commit(st)
 
 static func _locker() -> ArrayMesh:
@@ -335,11 +345,36 @@ static func _barn() -> ArrayMesh:
 
 static func _truck() -> ArrayMesh:
 	var st := _begin()
+	var dark := Color(0.15, 0.16, 0.18)
 	_box(st, Vector3(0, 0.70, 0.15), Vector3(0.90, 0.85, 1.50), Color(0.82, 0.36, 0.32))
 	_box(st, Vector3(0, 0.62, -0.85), Vector3(0.88, 0.70, 0.70), Color(0.90, 0.90, 0.92))
+	_box(st, Vector3(0, 0.78, -0.55), Vector3(0.72, 0.22, 0.28), Color(0.40, 0.58, 0.74))
 	_box(st, Vector3(0, 1.15, 0.15), Vector3(1.05, 0.08, 0.70), Color(0.90, 0.72, 0.30))
-	_wheel(st, Vector3(0, 0.22, 0.55), 0.22, 0.95, Color(0.15, 0.16, 0.18))
-	_wheel(st, Vector3(0, 0.22, -0.70), 0.22, 0.95, Color(0.15, 0.16, 0.18))
+	_box(st, Vector3(-0.26, 0.42, -1.18), Vector3(0.14, 0.08, 0.04), Color(0.95, 0.92, 0.7))
+	_box(st, Vector3(0.26, 0.42, -1.18), Vector3(0.14, 0.08, 0.04), Color(0.95, 0.92, 0.7))
+	_box(st, Vector3(-0.28, 0.42, 0.88), Vector3(0.12, 0.08, 0.04), Color(0.85, 0.16, 0.14))
+	_box(st, Vector3(0.28, 0.42, 0.88), Vector3(0.12, 0.08, 0.04), Color(0.85, 0.16, 0.14))
+	_wheel(st, Vector3(0, 0.22, 0.55), 0.22, 0.95, dark)
+	_wheel(st, Vector3(0, 0.22, -0.70), 0.22, 0.95, dark)
+	return _commit(st)
+
+static func _police() -> ArrayMesh:
+	var st := _begin()
+	var white := Color(0.92, 0.93, 0.95)
+	var dark := Color(0.12, 0.14, 0.18)
+	var glass := Color(0.42, 0.60, 0.78)
+	_box(st, Vector3(0, 0.28, 0.02), Vector3(0.72, 0.28, 1.52), white)
+	_box(st, Vector3(0, 0.32, 0.05), Vector3(0.74, 0.06, 1.20), dark)
+	_box(st, Vector3(0, 0.50, -0.08), Vector3(0.62, 0.22, 0.70), glass)
+	_box(st, Vector3(0, 0.64, -0.06), Vector3(0.30, 0.05, 0.14), dark)
+	_box(st, Vector3(-0.08, 0.68, -0.06), Vector3(0.10, 0.035, 0.10), Color(0.86, 0.16, 0.18))
+	_box(st, Vector3(0.08, 0.68, -0.06), Vector3(0.10, 0.035, 0.10), Color(0.16, 0.32, 0.82))
+	_box(st, Vector3(-0.22, 0.28, 0.76), Vector3(0.12, 0.07, 0.03), Color(0.96, 0.93, 0.72))
+	_box(st, Vector3(0.22, 0.28, 0.76), Vector3(0.12, 0.07, 0.03), Color(0.96, 0.93, 0.72))
+	_box(st, Vector3(-0.24, 0.30, -0.75), Vector3(0.10, 0.06, 0.03), Color(0.85, 0.15, 0.12))
+	_box(st, Vector3(0.24, 0.30, -0.75), Vector3(0.10, 0.06, 0.03), Color(0.85, 0.15, 0.12))
+	_wheel(st, Vector3(0, 0.16, 0.46), 0.16, 0.76, dark)
+	_wheel(st, Vector3(0, 0.16, -0.46), 0.16, 0.76, dark)
 	return _commit(st)
 
 static func _bike() -> ArrayMesh:

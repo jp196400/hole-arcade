@@ -54,13 +54,17 @@ void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 void fragment() {
+	float cover = 0.0;
 	for (int i = 0; i < 8; i++) {
 		if (opening_r[i] > 0.0) {
-			vec2 d = world_pos.xz - openings[i].xz;
-			if (dot(d, d) < opening_r[i] * opening_r[i]) {
-				discard;
-			}
+			float dist = length(world_pos.xz - openings[i].xz);
+			float fw = max(fwidth(dist), 0.0008);
+			float edge = 1.0 - smoothstep(opening_r[i] - fw, opening_r[i] + fw, dist);
+			cover = max(cover, edge);
 		}
+	}
+	if (cover > 0.985) {
+		discard;
 	}
 	vec3 col = texture(albedo_tex, UV).rgb;
 	float luma = dot(col, vec3(0.299, 0.587, 0.114));
@@ -94,12 +98,34 @@ void fragment() {
 	} else if (luma > 0.64 && sat < 0.22) {
 		float walk = clamp((luma - 0.4) / 0.5, 0.0, 1.0);
 		outc = mix(vec3(0.90, 0.70, 0.50), vec3(0.98, 0.91, 0.78), walk);
+		float tile = step(0.93, fract(world_pos.x * 0.85)) + step(0.93, fract(world_pos.z * 0.85));
+		outc *= mix(1.0, 0.82, clamp(tile, 0.0, 1.0));
 	} else if (sat < 0.34) {
 		float road = clamp(luma * 1.1, 0.0, 1.0);
-		outc = mix(vec3(0.16, 0.20, 0.28), vec3(0.34, 0.42, 0.52), road);
+		vec3 asphalt = mix(vec3(0.16, 0.20, 0.28), vec3(0.34, 0.42, 0.52), road);
+		outc = mix(asphalt, col, 0.78);
+		float yellow = smoothstep(0.55, 0.85, col.r) * smoothstep(0.4, 0.75, col.g) * (1.0 - col.b);
+		float paint = smoothstep(0.68, 0.9, luma);
+		outc = mix(outc, vec3(0.96, 0.97, 0.98), paint * 0.8);
+		outc = mix(outc, vec3(0.95, 0.78, 0.2), clamp(yellow, 0.0, 1.0) * 0.85);
+		float groove = step(0.965, fract(world_pos.x * 1.7)) + step(0.965, fract(world_pos.z * 1.7));
+		if (luma > 0.72) {
+			outc *= mix(1.0, 0.78, clamp(groove, 0.0, 1.0));
+		}
+		vec2 cell = floor(world_pos.xz / 5.0);
+		vec2 cap = (cell + vec2(0.5)) * 5.0 + vec2(1.2, 0.35);
+		float md = length(world_pos.xz - cap);
+		float mfw = max(fwidth(md), 0.001);
+		float lid = 1.0 - smoothstep(0.18 - mfw, 0.24 + mfw, md);
+		if (luma < 0.62) {
+			outc = mix(outc, vec3(0.1, 0.11, 0.13), lid * 0.9);
+			float ring = smoothstep(0.16, 0.2, md) * (1.0 - smoothstep(0.22, 0.26, md));
+			outc = mix(outc, vec3(0.55, 0.58, 0.62), ring);
+		}
 	} else {
 		outc = clamp(vec3(luma) + (col - vec3(luma)) * 1.35, vec3(0.0), vec3(1.0));
 	}
+	outc = mix(outc, vec3(0.012, 0.014, 0.02), cover);
 	ALBEDO = outc * grade_tint;
 	ROUGHNESS = 1.0;
 	METALLIC = 0.0;
@@ -110,24 +136,66 @@ const BUILDING_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_back;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 void fragment() {
-	vec3 tex = texture(albedo_tex, UV).rgb;
-	float luma = dot(tex, vec3(0.299, 0.587, 0.114));
-	vec3 candy = COLOR.rgb * mix(0.62, 1.2, clamp(luma, 0.0, 1.0));
-	ALBEDO = mix(tex, candy, 0.55);
-	ROUGHNESS = 1.0;
-	SPECULAR = 0.0;
+	float ao = clamp(NORMAL.y * 0.42 + 0.7, 0.58, 1.05);
+	if (UV.x > 1.5) {
+		vec3 dcol = vec3(0.5, 0.53, 0.56);
+		if (UV.y < 0.15) {
+			dcol = vec3(0.55, 0.58, 0.62);
+		} else if (UV.y < 0.25) {
+			dcol = vec3(0.24, 0.16, 0.12);
+		} else if (UV.y < 0.35) {
+			dcol = vec3(0.82, 0.28, 0.26);
+		} else if (UV.y < 0.45) {
+			dcol = vec3(0.95, 0.93, 0.86);
+		} else if (UV.y < 0.55) {
+			dcol = vec3(0.32, 0.52, 0.70);
+		} else if (UV.y < 0.65) {
+			dcol = COLOR.rgb * 0.72;
+		} else if (UV.y < 0.75) {
+			dcol = vec3(0.42, 0.58, 0.66);
+		} else if (UV.y < 0.85) {
+			dcol = vec3(0.96, 0.90, 0.62);
+		} else {
+			dcol = COLOR.rgb * 0.88;
+		}
+		ALBEDO = dcol * ao;
+		ROUGHNESS = UV.y < 0.55 ? 0.55 : 1.0;
+		SPECULAR = 0.0;
+	} else {
+		vec3 tex = texture(albedo_tex, UV).rgb;
+		float luma = dot(tex, vec3(0.299, 0.587, 0.114));
+		vec3 candy = COLOR.rgb * mix(0.78, 1.12, clamp(luma, 0.0, 1.0));
+		vec3 body = mix(tex, candy, 0.24);
+		body *= mix(0.9, 1.08, luma);
+		ALBEDO = body * ao;
+		ROUGHNESS = mix(0.45, 1.0, luma);
+		SPECULAR = 0.0;
+	}
 	if (COLOR.a < 0.98) {
 		float dots = fract(sin(dot(floor(FRAGCOORD.xy * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
 		if (dots > COLOR.a) {
 			discard;
 		}
 	}
+}
+"""
+const CAR_SHADER := """shader_type spatial;
+render_mode diffuse_lambert, cull_back;
+uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+void fragment() {
+	vec3 tex = texture(albedo_tex, UV).rgb;
+	float luma = dot(tex, vec3(0.299, 0.587, 0.114));
+	float ao = clamp(NORMAL.y * 0.32 + 0.78, 0.64, 1.05);
+	ALBEDO = tex * ao * mix(0.94, 1.06, luma);
+	ROUGHNESS = mix(0.35, 0.95, luma);
+	SPECULAR = 0.08;
 }
 """
 const KIT_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_disabled;
 void fragment() {
-	ALBEDO = COLOR.rgb;
+	float ao = clamp(NORMAL.y * 0.4 + 0.74, 0.58, 1.05);
+	ALBEDO = COLOR.rgb * ao;
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.0;
 	if (COLOR.a < 0.98) {
@@ -138,41 +206,61 @@ void fragment() {
 	}
 }
 """
-const PIT_SHADER := """shader_type spatial;
-render_mode unshaded, cull_disabled;
+const HOLE_SHADER := """shader_type spatial;
+render_mode unshaded, cull_disabled, blend_mix, depth_draw_opaque;
 uniform vec3 rim_color : source_color = vec3(0.05, 0.86, 1.0);
 uniform vec3 rim_color_b : source_color = vec3(0.8, 0.98, 1.0);
 uniform int pattern = 0;
 uniform float glow = 0.9;
+uniform float vertex_rim = 0.0;
 varying vec4 vcol;
-varying vec2 local_xz;
+varying vec2 xz;
 void vertex() {
 	vcol = COLOR;
-	local_xz = VERTEX.xz;
+	xz = VERTEX.xz;
 }
 void fragment() {
-	if (vcol.a > 0.5) {
-		ALBEDO = vcol.rgb;
-		EMISSION = vec3(0.0);
+	float dist = length(xz);
+	float fw = max(fwidth(dist) * 1.5, 0.022);
+	float rim_in = 0.96;
+	float rim_out = 1.14;
+	float alpha = 1.0 - smoothstep(rim_out - fw, rim_out + fw, dist);
+	if (alpha < 0.02) {
+		discard;
+	}
+	float t = clamp(dist, 0.0, 1.0);
+	vec3 pit = mix(vec3(0.012, 0.014, 0.02), vec3(0.18, 0.19, 0.22), smoothstep(0.12, 0.94, t));
+	pit = mix(pit, vec3(0.03, 0.034, 0.04), smoothstep(0.78, 1.0, dist) * 0.25);
+	vec3 rim = rim_color;
+	if (vertex_rim > 0.5) {
+		rim = vcol.rgb;
 	} else {
-		float ang = atan(local_xz.x, local_xz.y);
-		float stripes = step(0.5, fract(ang / 6.2831853 * 8.0));
-		float checks = step(0.5, fract(ang / 6.2831853 * 6.0 + length(local_xz) * 3.5));
+		float ang = atan(xz.x, xz.y);
+		float band = sin(ang * 8.0);
+		float bw = min(fwidth(band), 0.35);
+		float stripes = smoothstep(-bw, bw, band);
+		float checks = smoothstep(-bw, bw, sin(ang * 6.0 + dist * 18.0));
 		float wave = smoothstep(0.15, 0.85, sin(ang * 5.0) * 0.5 + 0.5);
 		float metal = pow(clamp(sin(ang * 3.0) * 0.5 + 0.62, 0.0, 1.0), 1.35);
-		vec3 rc = rim_color;
 		if (pattern == 1) {
-			rc = mix(rim_color, rim_color_b, stripes);
+			rim = mix(rim_color, rim_color_b, stripes);
 		} else if (pattern == 2) {
-			rc = mix(rim_color, rim_color_b, checks);
+			rim = mix(rim_color, rim_color_b, checks);
 		} else if (pattern == 3) {
-			rc = mix(rim_color, rim_color_b, wave);
+			rim = mix(rim_color, rim_color_b, wave);
 		} else if (pattern == 4) {
-			rc = mix(rim_color, rim_color_b, metal);
+			rim = mix(rim_color, rim_color_b, metal);
 		}
-		ALBEDO = rc;
-		EMISSION = rc * glow;
 	}
+	float rim_band = smoothstep(rim_in - fw, rim_in + fw, dist);
+	rim_band *= 1.0 - smoothstep(rim_out - fw, rim_out + fw, dist);
+	float inner = smoothstep(0.90 - fw, 0.97 + fw, dist) * (1.0 - smoothstep(rim_in, rim_in + fw * 1.6, dist));
+	float core = smoothstep(1.0, 1.04, dist) * (1.0 - smoothstep(1.06, 1.12, dist));
+	vec3 col = mix(pit, rim, rim_band);
+	vec3 glow_col = rim * core * glow * 0.16 + rim * inner * 0.14;
+	ALBEDO = col + glow_col;
+	EMISSION = glow_col;
+	ALPHA = alpha;
 }
 """
 
@@ -267,6 +355,20 @@ var floaters: Array = []
 var cam: Camera3D
 var cam_look := Vector3.ZERO
 var cam_distance := 8.0
+var cam_pitch := CAM_PITCH_DEG
+var cam_dist_mul := 1.0
+var cam_look_lift := 0.0
+var quality_scale := 1.5
+var quality_msaa := 2
+var quality_fxaa := false
+var quality_phase := 0
+var quality_warmup := 0.0
+var quality_timer := 0.0
+var quality_acc := 0.0
+var quality_n := 0
+var quality_tries := 0
+var quality_ceiling := 2.05
+var quality_locked := false
 var score_lbl: Label
 var timer_lbl: Label
 var level_lbl: Label
@@ -327,24 +429,6 @@ const RIVAL_COLORS := [
 ]
 const RIVAL_RADIUS := [0.40, 0.58, 0.36, 0.78, 0.46, 0.66]
 const RIVAL_SPEED := [2.55, 2.7, 2.9, 2.4, 2.65, 2.5]
-const RIVAL_PIT_SHADER := """shader_type spatial;
-render_mode unshaded, cull_disabled;
-varying vec4 vcol;
-varying float rimness;
-void vertex() {
-	vcol = COLOR;
-	rimness = VERTEX.y > 0.0 ? 1.0 : 0.0;
-}
-void fragment() {
-	if (rimness > 0.5) {
-		ALBEDO = vcol.rgb;
-		EMISSION = vcol.rgb * 0.55;
-	} else {
-		ALBEDO = vec3(0.015, 0.016, 0.02);
-		EMISSION = vec3(0.0);
-	}
-}
-"""
 const CatalogScript = preload("res://catalog.gd")
 const PropKitScript = preload("res://props_kit.gd")
 
@@ -354,6 +438,7 @@ func _ready() -> void:
 	speed_scale = _query_speed()
 	if _query_unlockall():
 		Save.unlock_all()
+	_boot_quality()
 	_load_font()
 	body_mat = PhysicsMaterial.new()
 	body_mat.friction = 0.42
@@ -381,6 +466,8 @@ func _ready() -> void:
 		call_deferred("_preview_eaten")
 	elif preview == "daily":
 		_show_screen("daily")
+	elif preview == "hole" or preview == "street" or preview == "facade":
+		call_deferred("_preview_shot", preview)
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
@@ -561,9 +648,11 @@ func _build_world() -> void:
 	hole_mesh = MeshInstance3D.new()
 	hole_mesh.mesh = _build_pit_mesh()
 	var pshader := Shader.new()
-	pshader.code = PIT_SHADER
+	pshader.code = HOLE_SHADER
 	pit_mat = ShaderMaterial.new()
 	pit_mat.shader = pshader
+	pit_mat.render_priority = 2
+	pit_mat.set_shader_parameter("vertex_rim", 0.0)
 	hole_mesh.material_override = pit_mat
 	_apply_skin()
 	_no_shadow(hole_mesh)
@@ -608,80 +697,40 @@ func _build_pop_fx() -> void:
 	add_child(pop_fx)
 
 func _build_pit_mesh() -> ArrayMesh:
+	# Flat quad. Local length 1 is the hole radius. The shader draws the rim.
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var seg := 24
-	var rings := [
-		[0.98, 0.015, Color(0.09, 0.1, 0.13)],
-		[0.86, -0.45, Color(0.035, 0.038, 0.05)],
-		[0.68, -1.25, Color(0.012, 0.012, 0.016)],
-		[0.5, -2.55, Color(0, 0, 0)],
-	]
-	for r in rings.size() - 1:
-		var a: Array = rings[r]
-		var b: Array = rings[r + 1]
-		var r0 := float(a[0])
-		var y0 := float(a[1])
-		var c0: Color = a[2]
-		var r1 := float(b[0])
-		var y1 := float(b[1])
-		var c1: Color = b[2]
-		for i in seg:
-			var a0 := TAU * float(i) / float(seg)
-			var a1 := TAU * float(i + 1) / float(seg)
-			var p00 := Vector3(cos(a0) * r0, y0, sin(a0) * r0)
-			var p01 := Vector3(cos(a1) * r0, y0, sin(a1) * r0)
-			var p10 := Vector3(cos(a0) * r1, y1, sin(a0) * r1)
-			var p11 := Vector3(cos(a1) * r1, y1, sin(a1) * r1)
-			st.set_color(c0); st.add_vertex(p00)
-			st.set_color(c1); st.add_vertex(p10)
-			st.set_color(c0); st.add_vertex(p01)
-			st.set_color(c0); st.add_vertex(p01)
-			st.set_color(c1); st.add_vertex(p10)
-			st.set_color(c1); st.add_vertex(p11)
-	var bottom_y := -2.55
-	var bottom_r := 0.5
-	for i in seg:
-		var a0 := TAU * float(i) / float(seg)
-		var a1 := TAU * float(i + 1) / float(seg)
-		st.set_color(Color(0, 0, 0))
-		st.add_vertex(Vector3(0, bottom_y, 0))
-		st.set_color(Color(0, 0, 0))
-		st.add_vertex(Vector3(cos(a1) * bottom_r, bottom_y, sin(a1) * bottom_r))
-		st.set_color(Color(0, 0, 0))
-		st.add_vertex(Vector3(cos(a0) * bottom_r, bottom_y, sin(a0) * bottom_r))
-	var inner := 0.94
-	var outer := 1.16
-	var rim_y := 0.05
-	for i in seg:
-		var a0 := TAU * float(i) / float(seg)
-		var a1 := TAU * float(i + 1) / float(seg)
-		var i0 := Vector3(cos(a0) * inner, rim_y, sin(a0) * inner)
-		var i1 := Vector3(cos(a1) * inner, rim_y, sin(a1) * inner)
-		var o0 := Vector3(cos(a0) * outer, rim_y, sin(a0) * outer)
-		var o1 := Vector3(cos(a1) * outer, rim_y, sin(a1) * outer)
-		var rim_mark := Color(1, 1, 1, 0)
-		st.set_color(rim_mark); st.add_vertex(i0)
-		st.set_color(rim_mark); st.add_vertex(o0)
-		st.set_color(rim_mark); st.add_vertex(i1)
-		st.set_color(rim_mark); st.add_vertex(i1)
-		st.set_color(rim_mark); st.add_vertex(o0)
-		st.set_color(rim_mark); st.add_vertex(o1)
-	st.generate_normals()
+	var y := 0.04
+	var e := 1.36
+	var c := Color(1, 1, 1, 1)
+	var uv := Vector2(0.5, 0.5)
+	var n := Vector3.UP
+	var p00 := Vector3(-e, y, -e)
+	var p10 := Vector3(e, y, -e)
+	var p11 := Vector3(e, y, e)
+	var p01 := Vector3(-e, y, e)
+	for p in [p00, p10, p11, p00, p11, p01]:
+		st.set_color(c)
+		st.set_uv(uv)
+		st.set_normal(n)
+		st.add_vertex(p)
 	return st.commit()
 
 func _camera_offset(dist: float) -> Vector3:
-	var pitch := deg_to_rad(CAM_PITCH_DEG)
+	var pitch := deg_to_rad(cam_pitch)
 	return Vector3(0, sin(pitch) * dist, cos(pitch) * dist)
 
 func _cam_dist_for(radius: float) -> float:
-	return CAM_BASE + radius * CAM_PER_RADIUS
+	return (CAM_BASE + radius * CAM_PER_RADIUS) * cam_dist_mul
 
 func _build_rival_view() -> void:
 	var sh := Shader.new()
-	sh.code = RIVAL_PIT_SHADER
+	sh.code = HOLE_SHADER
 	var mat := ShaderMaterial.new()
 	mat.shader = sh
+	mat.render_priority = 2
+	mat.set_shader_parameter("vertex_rim", 1.0)
+	mat.set_shader_parameter("glow", 0.75)
 	rival_mm = MultiMesh.new()
 	rival_mm.transform_format = MultiMesh.TRANSFORM_3D
 	rival_mm.use_colors = true
@@ -851,6 +900,123 @@ func _contact_half(mesh: Mesh) -> float:
 		half = maxf(aabb.size.x, aabb.size.z) * 0.22
 	return half
 
+func _dress_structure(mesh: ArrayMesh, role: String) -> ArrayMesh:
+	# Roof and facade extras stay off the ground-contact band, so swallow size
+	# is unchanged. UV.x > 1.5 marks them for the flat detail palette.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.append_from(mesh, 0, Transform3D.IDENTITY)
+	var aabb := mesh.get_aabb()
+	var sz := aabb.size
+	var p := aabb.position
+	var cx := p.x + sz.x * 0.5
+	var cz := p.z + sz.z * 0.5
+	var top := p.y + sz.y
+	var u := minf(sz.x, sz.z)
+	var ledge_h := clampf(u * 0.045, 0.03, 0.12)
+	_detail_box(st, Vector3(cx, top - ledge_h * 0.35, cz), Vector3(sz.x * 0.985, ledge_h, sz.z * 0.985), 0.60)
+	_detail_box(st, Vector3(cx + sz.x * 0.22, top + u * 0.055, cz - sz.z * 0.18), Vector3(u * 0.28, u * 0.11, u * 0.22), 0.10)
+	_detail_box(st, Vector3(cx + sz.x * 0.22, top + u * 0.12, cz - sz.z * 0.18), Vector3(u * 0.16, u * 0.025, u * 0.10), 0.80)
+	if role == "tower" or role == "building":
+		_detail_cyl(st, Vector3(cx - sz.x * 0.22, top, cz + sz.z * 0.12), u * 0.11, u * 0.16, 0.70)
+		_detail_box(st, Vector3(cx - sz.x * 0.22, top + u * 0.16, cz + sz.z * 0.12), Vector3(u * 0.16, u * 0.03, u * 0.16), 0.10)
+	if role == "tower":
+		_detail_box(st, Vector3(cx, top, cz), Vector3(u * 0.035, u * 0.55, u * 0.035), 0.10)
+		_detail_box(st, Vector3(cx, top + u * 0.52, cz), Vector3(u * 0.16, u * 0.02, u * 0.035), 0.10)
+	var door_w := clampf(u * 0.22, 0.12, sz.x * 0.28)
+	var door_h := clampf(sz.y * 0.28, 0.2, sz.y * 0.42)
+	var front_z := p.z + sz.z - 0.012
+	_detail_box(st, Vector3(cx, p.y + door_h * 0.5 + 0.02, front_z), Vector3(door_w, door_h, 0.02), 0.20)
+	var awning_y := p.y + door_h + u * 0.06
+	if role != "tower":
+		_detail_box(st, Vector3(cx, awning_y, p.z + sz.z + u * 0.06), Vector3(door_w * 1.7, u * 0.035, u * 0.16), 0.30)
+		_detail_box(st, Vector3(cx, awning_y + u * 0.08, p.z + sz.z - 0.01), Vector3(door_w * 1.35, u * 0.1, 0.02), 0.40)
+	_facade_windows(st, aabb, role)
+	return st.commit()
+
+func _facade_windows(st: SurfaceTool, aabb: AABB, role: String) -> void:
+	var sz := aabb.size
+	var p := aabb.position
+	var cols := 2 if role == "house" or role == "wide" else 3
+	var rows := 2 if role == "house" else mini(4, maxi(2, int(sz.y / maxf(sz.x, 0.2))))
+	var win_w := sz.x * 0.12
+	var win_h := clampf(sz.y * 0.08, 0.06, sz.y * 0.12)
+	for face in 4:
+		for row in rows:
+			for col in cols:
+				var fx := (float(col) + 0.5) / float(cols) - 0.5
+				var fy := 0.38 + float(row) * 0.16
+				if fy > 0.86:
+					continue
+				var y := p.y + sz.y * fy
+				var c := Vector3.ZERO
+				var s := Vector3.ZERO
+				if face == 0:
+					c = Vector3(p.x + sz.x * 0.5 + fx * sz.x * 0.7, y, p.z + sz.z + 0.01)
+					s = Vector3(win_w, win_h, 0.02)
+				elif face == 1:
+					c = Vector3(p.x + sz.x * 0.5 + fx * sz.x * 0.7, y, p.z - 0.01)
+					s = Vector3(win_w, win_h, 0.02)
+				elif face == 2:
+					c = Vector3(p.x + sz.x + 0.01, y, p.z + sz.z * 0.5 + fx * sz.z * 0.7)
+					s = Vector3(0.02, win_h, win_w)
+				else:
+					c = Vector3(p.x - 0.01, y, p.z + sz.z * 0.5 + fx * sz.z * 0.7)
+					s = Vector3(0.02, win_h, win_w)
+				_detail_box(st, c, s, 0.50)
+				var frame := s * Vector3(1.18, 1.22, 1.0)
+				if face >= 2:
+					frame = s * Vector3(1.0, 1.22, 1.18)
+				_detail_box(st, c, frame, 0.10)
+
+func _detail_box(st: SurfaceTool, c: Vector3, s: Vector3, uv_y: float) -> void:
+	var hx := s.x * 0.5
+	var hy := s.y * 0.5
+	var hz := s.z * 0.5
+	var y0 := c.y - hy
+	var y1 := c.y + hy
+	_detail_quad(st, Vector3(c.x - hx, y1, c.z + hz), Vector3(c.x + hx, y1, c.z + hz), Vector3(c.x + hx, y1, c.z - hz), Vector3(c.x - hx, y1, c.z - hz), uv_y)
+	_detail_quad(st, Vector3(c.x - hx, y0, c.z - hz), Vector3(c.x + hx, y0, c.z - hz), Vector3(c.x + hx, y0, c.z + hz), Vector3(c.x - hx, y0, c.z + hz), uv_y)
+	_detail_quad(st, Vector3(c.x - hx, y0, c.z + hz), Vector3(c.x + hx, y0, c.z + hz), Vector3(c.x + hx, y1, c.z + hz), Vector3(c.x - hx, y1, c.z + hz), uv_y)
+	_detail_quad(st, Vector3(c.x + hx, y0, c.z - hz), Vector3(c.x - hx, y0, c.z - hz), Vector3(c.x - hx, y1, c.z - hz), Vector3(c.x + hx, y1, c.z - hz), uv_y)
+	_detail_quad(st, Vector3(c.x + hx, y0, c.z + hz), Vector3(c.x + hx, y0, c.z - hz), Vector3(c.x + hx, y1, c.z - hz), Vector3(c.x + hx, y1, c.z + hz), uv_y)
+	_detail_quad(st, Vector3(c.x - hx, y0, c.z - hz), Vector3(c.x - hx, y0, c.z + hz), Vector3(c.x - hx, y1, c.z + hz), Vector3(c.x - hx, y1, c.z - hz), uv_y)
+
+func _detail_cyl(st: SurfaceTool, base: Vector3, radius: float, height: float, uv_y: float) -> void:
+	var sides := 10
+	var top := base + Vector3(0, height, 0)
+	for i in sides:
+		var a0 := TAU * float(i) / float(sides)
+		var a1 := TAU * float(i + 1) / float(sides)
+		var b0 := base + Vector3(cos(a0) * radius, 0, sin(a0) * radius)
+		var b1 := base + Vector3(cos(a1) * radius, 0, sin(a1) * radius)
+		var t0 := b0 + Vector3(0, height, 0)
+		var t1 := b1 + Vector3(0, height, 0)
+		_detail_quad(st, b0, t0, t1, b1, uv_y)
+		_detail_tri(st, top, t1, t0, uv_y)
+		_detail_tri(st, base, b0, b1, uv_y)
+
+func _detail_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, uv_y: float) -> void:
+	_detail_tri(st, a, b, c, uv_y)
+	_detail_tri(st, a, c, d, uv_y)
+
+func _detail_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, uv_y: float) -> void:
+	var n := (b - a).cross(c - a)
+	n = Vector3.UP if n.length_squared() < 0.000001 else n.normalized()
+	var uv := Vector2(2.0, uv_y)
+	st.set_normal(n)
+	st.set_color(Color.WHITE)
+	st.set_uv(uv)
+	st.add_vertex(a)
+	st.set_normal(n)
+	st.set_color(Color.WHITE)
+	st.set_uv(uv)
+	st.add_vertex(b)
+	st.set_normal(n)
+	st.set_color(Color.WHITE)
+	st.set_uv(uv)
+	st.add_vertex(c)
+
 func _collect_mesh(n: Node, parent: Transform3D, st: SurfaceTool) -> void:
 	var xform := parent
 	if n is Node3D:
@@ -895,14 +1061,155 @@ func _kind_material(spec: Array) -> Material:
 		return kit_mat
 	var role := str(spec[5])
 	if role in ["building", "wide", "house", "tower"]:
-		var sm := ShaderMaterial.new()
-		var sh := Shader.new()
-		sh.code = BUILDING_SHADER
-		sm.shader = sh
-		var src: StandardMaterial3D = spec[1]
-		sm.set_shader_parameter("albedo_tex", src.albedo_texture)
-		return sm
+		return _textured_shader(BUILDING_SHADER, spec[1])
+	if role == "car":
+		return _textured_shader(CAR_SHADER, spec[1])
 	return spec[1]
+
+func _textured_shader(code: String, src_mat: Material) -> ShaderMaterial:
+	var sm := ShaderMaterial.new()
+	var sh := Shader.new()
+	sh.code = code
+	sm.shader = sh
+	var src := src_mat as StandardMaterial3D
+	if src:
+		sm.set_shader_parameter("albedo_tex", src.albedo_texture)
+	return sm
+
+func _boot_quality() -> void:
+	var preview := _query_preview()
+	if preview in ["hole", "street", "facade"]:
+		quality_locked = true
+	_apply_quality(1.5, Viewport.MSAA_4X, false)
+
+func _apply_quality(scale: float, msaa: Viewport.MSAA, fxaa: bool) -> void:
+	quality_scale = scale
+	quality_msaa = int(msaa)
+	quality_fxaa = fxaa
+	var vp := get_viewport()
+	if vp == null:
+		return
+	vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+	vp.scaling_3d_scale = scale
+	vp.msaa_3d = msaa
+	vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA if fxaa else Viewport.SCREEN_SPACE_AA_DISABLED
+
+func _tick_quality(delta: float) -> void:
+	if quality_locked:
+		return
+	if quality_phase == 0:
+		quality_warmup += delta
+		if quality_warmup >= 1.6:
+			quality_phase = 1
+			quality_timer = 0.0
+			quality_acc = 0.0
+			quality_n = 0
+		return
+	quality_timer += delta
+	quality_acc += delta
+	quality_n += 1
+	if quality_timer < 1.0:
+		return
+	var fps := float(quality_n) / maxf(quality_acc, 0.001)
+	quality_tries += 1
+	var steps: Array = [1.0, 1.25, 1.5, 2.0]
+	var idx := 0
+	var best := 99.0
+	for i in steps.size():
+		var d := absf(float(steps[i]) - quality_scale)
+		if d < best:
+			best = d
+			idx = i
+	if fps < 55.0:
+		if idx > 0:
+			quality_ceiling = float(steps[idx])
+			_apply_quality(float(steps[idx - 1]), Viewport.MSAA_4X, false)
+		else:
+			_apply_quality(1.0, Viewport.MSAA_2X, true)
+			quality_locked = true
+	elif fps > 58.0 and idx + 1 < steps.size() and float(steps[idx + 1]) < quality_ceiling and quality_tries < 4:
+		_apply_quality(float(steps[idx + 1]), Viewport.MSAA_4X, false)
+	else:
+		quality_locked = true
+	quality_timer = 0.0
+	quality_acc = 0.0
+	quality_n = 0
+
+func _preview_shot(kind: String) -> void:
+	quality_locked = true
+	_apply_quality(1.5, Viewport.MSAA_4X, false)
+	_set_chrome(false)
+	_set_match_hud(false)
+	if hud_layer:
+		hud_layer.visible = false
+	if kind == "street":
+		hole_pos = Vector3(0.05, 0.0, 0.35)
+		cam_pitch = 50.0
+		cam_dist_mul = 0.44
+		cam_look_lift = 0.85
+		_stage_showcase()
+	elif kind == "facade":
+		hole_pos = Vector3(2.5, 0.0, 5.25)
+		cam_pitch = 38.0
+		cam_dist_mul = 0.48
+		cam_look_lift = 2.6
+	else:
+		hole_pos = Vector3.ZERO
+		cam_pitch = 54.0
+		cam_dist_mul = 0.34
+		cam_look_lift = 0.05
+	shown_radius = hole_radius
+	hole_open = hole_radius
+	hole_mesh.position = hole_pos
+	hole_mesh.scale = Vector3(hole_radius, 1.0, hole_radius)
+	cam_distance = _cam_dist_for(shown_radius)
+	cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
+	cam.position = hole_pos + _camera_offset(cam_distance)
+	cam.look_at(cam_look, Vector3.UP)
+
+func _stage_showcase() -> void:
+	var spots: Array = [
+		Vector3(0.22, 0, -1.15),
+		Vector3(-0.28, 0, -2.35),
+		Vector3(0.18, 0, -3.55),
+		Vector3(-0.24, 0, -4.85),
+		Vector3(0.26, 0, -6.15),
+	]
+	var headings: Array = [
+		Vector3(0, 0, -1),
+		Vector3(0, 0, -1),
+		Vector3(0, 0, 1),
+		Vector3(0, 0, -1),
+		Vector3(0, 0, -1),
+	]
+	var used := {}
+	var n := 0
+	for o in props:
+		if n >= spots.size():
+			break
+		var role := str(o.role)
+		if role != "car" and role != "bus" and role != "truck":
+			continue
+		var ki := int(o.kind)
+		if used.has(ki):
+			continue
+		used[ki] = true
+		var p: Vector3 = spots[n]
+		var dir: Vector3 = headings[n]
+		o.pos = p
+		o.dir = dir
+		o.mover = 0
+		o.speed = 0.0
+		o.yaw = atan2(dir.x, dir.z)
+		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
+		var xform := Transform3D(basis, p)
+		o.xform = xform
+		var mm: MultiMesh = kind_multimeshes[ki]
+		if mm:
+			mm.set_instance_transform(int(o.index), xform)
+		_set_shadow(o)
+		_bucket_move(o)
+		n += 1
 
 func _ensure_models() -> void:
 	if not prop_defs.is_empty():
@@ -942,6 +1249,13 @@ func _ensure_models() -> void:
 	var ids := ["cone", "barrier", "person_a", "person_b", "person_c", "lamp", "bush", "planter", "tree_small", "dumpster", "tree_large", "tree_simple", "sedan", "taxi", "hatch", "van", "bld_a", "bld_b", "bld_c", "bld_d", "wide", "house_a", "house_b", "house_c", "tower_a", "tower_c"]
 	for d in prop_defs:
 		var info := _load_model(str(d[0]))
+		var role := str(d[5])
+		if role in ["building", "wide", "house", "tower"]:
+			var base := float(info.base)
+			var dressed := _dress_structure(info.mesh, role)
+			info.mesh = dressed
+			info.size = dressed.get_aabb().size
+			info.base = base
 		kind_lists.append([])
 		kind_meshes.append(info.mesh)
 		kind_native.append(info.size)
@@ -951,7 +1265,7 @@ func _ensure_models() -> void:
 	for i in ids.size():
 		kind_by_id[ids[i]] = i
 	for item in PropKitScript.defs():
-		var spec := ["", kit_mat, 1.0, 1.0, int(item.points), str(item.role), 0, 0.0]
+		var spec := ["", kit_mat, 1.0, 1.0, int(item.points), str(item.role), int(item.mover), 0.0]
 		prop_defs.append(spec)
 		kind_lists.append([])
 		kind_meshes.append(item.mesh)
@@ -1334,7 +1648,7 @@ func _crowd(count: int) -> void:
 			made += 1
 
 func _traffic(moving: int, parked: int) -> void:
-	var ids := ["sedan", "taxi", "hatch", "van"]
+	var ids := ["sedan", "taxi", "hatch", "van", "police", "sedan", "taxi", "hatch", "truck", "bus"]
 	var spots: Array = []
 	var n := GRID_MAX - GRID_MIN + 1
 	for j in range(2, n - 2, 2):
@@ -1358,7 +1672,11 @@ func _traffic(moving: int, parked: int) -> void:
 			at += Vector3(0, 0, 0.22) if along_x else Vector3(0.22, 0, 0)
 		var use_dir := Vector3.ZERO if parked_now else dir
 		var mover := 0 if parked_now else -1
-		if _place_id(ids[made % 4], at, use_dir, -1.0, 1.0, Color.WHITE, -1, mover):
+		var traffic_id := str(ids[made % ids.size()])
+		var traffic_grow := 1.0
+		if traffic_id == "bus" or traffic_id == "truck":
+			traffic_grow = 0.82
+		if _place_id(traffic_id, at, use_dir, -1.0, traffic_grow, Color.WHITE, -1, mover):
 			made += 1
 
 func _lamps(cap: int) -> void:
@@ -1565,13 +1883,14 @@ func _build_shadows() -> void:
 			var d := Vector2(float(x) - 23.5, float(y) - 23.5).length() / 23.5
 			var a := clampf(1.0 - smoothstep(0.08, 1.0, d), 0.0, 1.0)
 			img.set_pixel(x, y, Color(0.16, 0.22, 0.34, a * 0.46))
+	img.generate_mipmaps()
 	var tex := ImageTexture.create_from_image(img)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_texture = tex
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	var quad := PlaneMesh.new()
 	quad.size = Vector2(1, 1)
 	shadow_mm = MultiMesh.new()
@@ -2009,9 +2328,10 @@ func _draw_joystick() -> void:
 func _smooth_camera(delta: float) -> void:
 	var want_d := _cam_dist_for(shown_radius)
 	cam_distance = lerpf(cam_distance, want_d, 1.0 - exp(-2.2 * delta))
+	var focus := hole_pos + Vector3(0.0, cam_look_lift, 0.0)
 	var want_pos := hole_pos + _camera_offset(cam_distance)
 	cam.position = cam.position.lerp(want_pos, 1.0 - exp(-5.0 * delta))
-	cam_look = cam_look.lerp(hole_pos, 1.0 - exp(-6.0 * delta))
+	cam_look = cam_look.lerp(focus, 1.0 - exp(-6.0 * delta))
 	cam.look_at(cam_look, Vector3.UP)
 	if shake_t > 0.0:
 		shake_t = maxf(0.0, shake_t - delta)
@@ -2468,6 +2788,7 @@ func _feel(points: int, heavy: bool, sound: bool = true) -> void:
 
 func _process(delta: float) -> void:
 	var frame_delta := delta
+	_tick_quality(frame_delta)
 	delta = minf(delta, 1.0 / 20.0)
 	if mode != "play" and mode != "results" and mode != "attract":
 		if debug_on:
@@ -2587,7 +2908,7 @@ func _update_debug(delta: float) -> void:
 	var bodies := int(Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS))
 	var fps := Engine.get_frames_per_second()
 	var win := DisplayServer.window_get_size()
-	debug_lbl.text = "FPS %d\nframe %.1f ms\nphysics %.2f ms\ndraws %d\nbodies %d\nview %dx%d\nspeed x%.2f\n%s" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y, speed_scale, _short_sha()]
+	debug_lbl.text = "FPS %d\nframe %.1f ms\nphysics %.2f ms\ndraws %d\nbodies %d\nview %dx%d\nspeed x%.2f\nscale %.2f msaa %d\n%s" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y, speed_scale, quality_scale, quality_msaa, _short_sha()]
 	if OS.has_feature("web"):
 		JavaScriptBridge.eval("window.__godotStats={fps:%d,frameMs:%.2f,physMs:%.2f,draws:%d,bodies:%d,vw:%d,vh:%d}" % [fps, frame_ms, phys_ms, draws, bodies, win.x, win.y], true)
 
