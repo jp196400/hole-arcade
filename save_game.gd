@@ -648,10 +648,10 @@ func unlock_all() -> void:
 	clears = maxi(clears, 40)
 	clean_clears = maxi(clean_clears, 20)
 	sweeps = maxi(sweeps, 20)
-	rival_eats = maxi(rival_eats, 80)
+	rival_eats = maxi(rival_eats, 200)
 	streak = maxi(streak, 10)
 	for k in TALLY_KEYS:
-		tallies[k] = maxi(int(tallies.get(k, 0)), 5000)
+		tallies[k] = maxi(int(tallies.get(k, 0)), 20000)
 	for i in maps_cleared.size():
 		maps_cleared[i] = 1
 	for i in stars.size():
