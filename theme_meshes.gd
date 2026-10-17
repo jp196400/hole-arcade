@@ -17,7 +17,7 @@ static func defs() -> Array:
 		_def("grainsilo", "barn", 28, 1.15, _silo()),
 		_def("redbarn", "barn", 48, 1.85, _barn()),
 		_def("raptord", "ride", 14, 0.95, _raptor()),
-		_def("trike", "ride", 22, 1.25, _trike()),
+		_def("trike", "ride", 22, 1.0, _trike()),
 		_def("tyrant", "barn", 36, 1.55, _trex()),
 		_def("brachio", "barn", 42, 1.85, _brachio()),
 		_def("jhut", "barn", 20, 1.35, _hut()),
@@ -57,6 +57,8 @@ static func defs() -> Array:
 		_def("solarpanel", "small", 10, 0.85, _solar()),
 		_def("satprobe", "small", 4, 0.36, _sat_probe()),
 		_def("candybench", "small", 5, 0.62, _candy_bench()),
+		_def("pier", "small", 8, 0.6, _pier()),
+		_def("skiff", "small", 10, 0.55, _skiff()),
 		_def("toybench", "small", 5, 0.6, _toy_bench()),
 		_def("blossom", "clutter", 1, 0.2, _blossom()),
 		_def("pebbles", "clutter", 1, 0.22, _pebbles()),
@@ -1012,6 +1014,28 @@ static func _candy_bench() -> ArrayMesh:
 		_cyl(st, Vector3(side * 0.42, 0.3, 0.08), 0.045, 0.12, red, 6)
 		_box(st, Vector3(side * 0.42, 0.48, -0.02), Vector3(0.08, 0.08, 0.16), white)
 		_box(st, Vector3(side * 0.42, 0.56, -0.1), Vector3(0.08, 0.12, 0.08), red)
+	return _commit(st)
+
+static func _pier() -> ArrayMesh:
+	var st := _begin()
+	var wood := Color(0.52, 0.34, 0.16)
+	var post := Color(0.32, 0.22, 0.12)
+	for i in 5:
+		_box(st, Vector3(-0.7 + float(i) * 0.35, 0.22, 0), Vector3(0.28, 0.06, 0.7), wood)
+	_box(st, Vector3(-0.62, 0.1, 0.28), Vector3(0.08, 0.2, 0.08), post)
+	_box(st, Vector3(0.62, 0.1, 0.28), Vector3(0.08, 0.2, 0.08), post)
+	_box(st, Vector3(-0.62, 0.1, -0.28), Vector3(0.08, 0.2, 0.08), post)
+	_box(st, Vector3(0.62, 0.1, -0.28), Vector3(0.08, 0.2, 0.08), post)
+	return _commit(st)
+
+static func _skiff() -> ArrayMesh:
+	var st := _begin()
+	var hull := Color(0.55, 0.32, 0.16)
+	var sail := Color(0.9, 0.9, 0.84)
+	_box(st, Vector3(0, 0.16, 0), Vector3(0.55, 0.14, 1.15), hull)
+	_box(st, Vector3(0, 0.26, 0.35), Vector3(0.4, 0.08, 0.28), Color(0.72, 0.48, 0.24))
+	_box(st, Vector3(0, 0.55, -0.05), Vector3(0.04, 0.55, 0.04), Color(0.35, 0.24, 0.14))
+	_box(st, Vector3(0.16, 0.7, -0.05), Vector3(0.28, 0.36, 0.04), sail)
 	return _commit(st)
 
 static func _toy_bench() -> ArrayMesh:

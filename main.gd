@@ -329,13 +329,13 @@ void fragment() {
 				float rim = smoothstep(0.28, 0.38, length(cf)) * (1.0 - smoothstep(0.38, 0.5, length(cf)));
 				outc = mix(outc, min(outc * 1.45, vec3(0.55)), rim);
 			}
-			float glow = step(0.965, thash(floor(xz * 3.4)));
+			float glow = step(0.9, thash(floor(xz * 2.6)));
 			vec3 lamp = thash(floor(xz * 3.4) + vec2(2.0, 5.0)) > 0.5 ? vec3(0.35, 0.78, 0.9) : vec3(0.92, 0.68, 0.32);
 			outc = mix(outc, lamp, glow * 0.7);
 		}
 		if (paint_mode < 2.5 && motif > 3.5 && motif < 4.5) {
 			float drift = vnoise(xz * 0.08);
-			outc = mix(outc, vec3(0.78, 0.86, 0.98), (1.0 - drift) * 0.34);
+			outc = mix(outc, vec3(0.84, 0.91, 1.0), (1.0 - drift) * 0.2);
 			float flake = step(0.88, ph);
 			outc = mix(outc, vec3(0.93, 0.97, 1.0), flake * pebble * 0.4);
 		}
@@ -371,8 +371,8 @@ void fragment() {
 	} else if (paint_mode > 5.5 && paint_mode < 6.5 && motif > 5.5 && motif < 6.5) {
 		float seam = step(0.93, fract(xz.y * 1.05));
 		float board = thash(vec2(floor(xz.x * 0.28), floor(xz.y * 1.05)));
-		outc *= mix(0.78, 1.08, board);
-		outc = mix(outc, outc * 0.48, seam);
+		outc *= mix(0.72, 1.12, board);
+		outc = mix(outc, vec3(0.28, 0.16, 0.08), seam * 0.85);
 	}
 	float edge = max(abs(xz.x), abs(xz.y));
 	float rim = smoothstep(70.5, 77.0, edge);
@@ -3373,6 +3373,8 @@ func _surf_jungle(x: int, z: int) -> int:
 		return SURF_WATER
 	if absf(fz + 8.0 - cos(fx * 0.04) * 3.0) < 1.3 and fx > -28.0 and fx < 16.0:
 		return SURF_DIRT
+	if absf(fx) < 2.4 and fz > 3.4 and fz < 9.0:
+		return SURF_WATER
 	if fx * fx + fz * fz < 36.0 * 36.0:
 		return SURF_DIRT
 	if _pond(x, z, -28.0, -30.0, 12.0, 10.0) or _pond(x, z, 8.0, -40.0, 10.0, 9.0) or _pond(x, z, -40.0, 16.0, 14.0, 12.0):
@@ -3382,6 +3384,22 @@ func _surf_jungle(x: int, z: int) -> int:
 func _surf_pirate(x: int, z: int) -> int:
 	var fx := float(x)
 	var fz := float(z)
+	# The opening camera only sees about x ±6 and z -14 to +10.
+	# Water sits in that window, with plank docks, and the hole stays on grass.
+	if absf(fx) < 8.0 and fz > 3.2 and fz < 18.0:
+		if absf(fz - 6.2) < 1.35 or (absf(absf(fx) - 3.6) < 0.9 and fz < 12.0):
+			return SURF_WOOD
+		return SURF_WATER
+	if absf(fx) < 7.0 and fz < -3.6 and fz > -18.0:
+		if absf(fz + 8.0) < 1.15:
+			return SURF_WOOD
+		return SURF_WATER
+	if absf(fx) < 8.0 and fz > 2.2 and fz < 3.4:
+		return SURF_SAND
+	if absf(fx) < 7.0 and fz < -2.6 and fz > -3.8:
+		return SURF_SAND
+	if absf(fx) < 8.0 and fz > -2.4 and fz < 2.4:
+		return SURF_GRASS
 	# Harbor in the opening view, with docks along both banks.
 	if fz < -7.0 and fz > -34.0:
 		if absf(absf(fx) - 17.5) < 2.4:
@@ -3805,6 +3823,7 @@ func _theme_ids(layout: String) -> Array:
 func _populate() -> void:
 	forward_tall = 0
 	var layout := str(map.get("layout", "farm"))
+	_dress_opening(layout)
 	_place_signatures(layout)
 	_place_near_icons(layout)
 	_spawn_life()
@@ -4330,6 +4349,63 @@ func _dress_farm_vista() -> void:
 	_vista_spot("fflower", Vector3(-8.0, 0.0, -8.0))
 	_vista_spot("fwheat", Vector3(-6.0, 0.0, 18.0))
 	_vista_spot("scare", Vector3(12.0, 0.0, -28.0))
+
+func _dress_opening(layout: String) -> void:
+	# Round start frames only x ±5 and z -13 to +9. Heroes go in that window.
+	var land := [SURF_DIRT, SURF_GRASS, SURF_FIELD]
+	match layout:
+		"jungle":
+			_vista_mover("tyrant", Vector3(-4.0, 0, -12.5), land, 1.35)
+			_vista_mover("brachio", Vector3(2.4, 0, -12.8), land, 0.85)
+			_vista_spot("lavacone", Vector3(4.6, 0, -12.2), 0.4)
+			_vista_mover("trike", Vector3(-2.6, 0, -8.6), land, 0.35)
+			_vista_mover("raptord", Vector3(2.4, 0, -7.4), land, 1.55)
+			_vista_mover("raptord", Vector3(-3.2, 0, -6.6), land, 0.5)
+			_vista_spot("dinonest", Vector3(-1.8, 0, -4.2), 0.4)
+			_vista_spot("spottedegg", Vector3(1.6, 0, -3.2))
+			_vista_spot("spottedegg", Vector3(2.3, 0, -3.8))
+			_vista_spot("dinobone", Vector3(3.0, 0, -5.4), 0.7)
+			_vista_spot("dinobone", Vector3(-0.8, 0, -6.2), 1.1)
+			_vista_spot("fernleaf", Vector3(-3.6, 0, -7.6))
+			_vista_spot("fernleaf", Vector3(0.8, 0, -8.2))
+			_vista_spot("fernleaf", Vector3(3.4, 0, -4.6))
+			_vista_spot("jvine", Vector3(-4.2, 0, -5.2))
+			_vista_spot("jvine", Vector3(4.0, 0, -6.4))
+		"space":
+			var pad := [SURF_SAND, SURF_CONCRETE, SURF_DIRT]
+			_vista_spot("stackrocket", Vector3(4.0, 0, -12.4), 0.15)
+			_vista_spot("habitat", Vector3(-4.2, 0, -12.4), 0.4)
+			_vista_spot("antenna", Vector3(2.2, 0, -12.8), 0.2)
+			_vista_mover("astro", Vector3(-2.6, 0, -7.6), pad, 2.6)
+			_vista_spot("solarpanel", Vector3(3.2, 0, -7.8), 0.5)
+			_vista_spot("solarpanel", Vector3(-3.4, 0, -8.2), 1.1)
+			_vista_spot("satdish", Vector3(-2.2, 0, -12.6), 0.7)
+			_vista_spot("satprobe", Vector3(1.6, 0, -3.6), 0.5)
+			_vista_spot("satprobe", Vector3(-1.6, 0, -4.2), 1.2)
+			_vista_mover("spacerover", Vector3(4.4, 0, -12.2), pad, 0.6)
+		"pirate":
+			_vista_spot("pier", Vector3(0.2, 0, 6.2), 0.0)
+			_vista_spot("pier", Vector3(-3.5, 0, 7.0), 1.57)
+			_vista_spot("pier", Vector3(3.5, 0, 7.0), 1.57)
+			_vista_spot("pier", Vector3(-1.2, 0, -8.0), 0.2)
+			_place_id("skiff", Vector3(2.2, 0, 8.6), Vector3.ZERO, 0.3, 1.0, Color.WHITE, -1, 0, [SURF_WATER])
+			_vista_spot("pflag", Vector3(3.6, 0, -1.4))
+		"candy":
+			_vista_spot("candybench", Vector3(2.2, 0, -5.0), 0.25)
+			_vista_spot("candybench", Vector3(-2.6, 0, -6.2), 0.1)
+			_vista_spot("canecandy", Vector3(-1.4, 0, -3.8))
+			_vista_spot("donut", Vector3(3.2, 0, -3.6))
+		"toy":
+			_vista_spot("toybench", Vector3(2.4, 0, -5.2), 0.3)
+			_vista_spot("teddybear", Vector3(-2.2, 0, -6.4))
+			_vista_spot("tblock", Vector3(-3.4, 0, -4.2))
+		"farm":
+			_vista_spot("chicken", Vector3(1.8, 0, -4.0))
+			_vista_spot("chicken", Vector3(-2.2, 0, -4.8))
+			_vista_spot("chicken", Vector3(2.6, 0, 3.4))
+			_vista_spot("chicken", Vector3(-1.4, 0, 4.2))
+		_:
+			pass
 
 func _dress_vista(layout: String) -> void:
 	match layout:
@@ -7801,7 +7877,7 @@ func _theme_light(layout: String) -> Dictionary:
 		"pirate":
 			return {"sun_e": 1.06, "amb": Color(0.94, 0.9, 0.84), "amb_e": 0.32, "fill": Color(0.96, 0.9, 0.82), "fill_e": 0.08, "grade": Vector3(1.02, 1.0, 0.97), "sat": 1.08, "contrast": 1.06, "bright": 1.0, "expo": 1.02}
 		"snow":
-			return {"sun_e": 0.72, "amb": Color(0.9, 0.93, 0.98), "amb_e": 0.22, "fill": Color(0.92, 0.94, 0.98), "fill_e": 0.05, "grade": Vector3(0.99, 1.0, 1.01), "sat": 1.02, "contrast": 1.02, "bright": 1.0, "expo": 0.96}
+			return {"sun_e": 0.98, "amb": Color(0.94, 0.96, 1.0), "amb_e": 0.34, "fill": Color(0.94, 0.96, 1.0), "fill_e": 0.08, "grade": Vector3(0.99, 1.0, 1.02), "sat": 1.02, "contrast": 1.02, "bright": 1.0, "expo": 1.02}
 		"desert":
 			return {"sun_e": 1.06, "amb": Color(0.96, 0.9, 0.82), "amb_e": 0.32, "fill": Color(0.96, 0.9, 0.8), "fill_e": 0.06, "grade": Vector3(1.02, 1.0, 0.96), "sat": 1.08, "contrast": 1.06, "bright": 1.0, "expo": 1.02}
 		"toy":
