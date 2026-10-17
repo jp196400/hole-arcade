@@ -1124,6 +1124,41 @@ func _preview_size() -> void:
 		player_invuln = 99.0
 		for rv in rivals:
 			rv.alive = false
+		_hide_drag_hint()
+		var target := _topple_shot_target()
+		if not target.is_empty():
+			var base := float(target.base)
+			var rad := clampf(base / FIT_RATIO + 0.55, 2.0, 3.6)
+			hole_radius = rad
+			shown_radius = rad
+			shown_vel = 0.0
+			hole_open = rad
+			var at: Vector3 = target.pos
+			var dist := rad + base * 0.62
+			hole_pos = Vector3(at.x - dist, 0.0, at.z)
+			velocity = Vector3.ZERO
+			hole_mesh.position = hole_pos
+			hole_mesh.scale = Vector3(rad, 1.0, rad)
+			_snap_camera()
+
+func _topple_shot_target() -> Dictionary:
+	var best: Dictionary = {}
+	var best_d := 80.0
+	for o in props:
+		if not bool(o.get("alive", false)):
+			continue
+		var role := str(o.get("role", ""))
+		if not (role in ["barn", "building", "house", "tower", "wide", "landmark"]):
+			continue
+		if float(o.get("height", 0.0)) < 1.8:
+			continue
+		var d := (o.pos as Vector3).length()
+		if d < 10.0 or d > 36.0:
+			continue
+		if d < best_d:
+			best = o
+			best_d = d
+	return best
 
 func _probe_topple() -> void:
 	start_round(0)
