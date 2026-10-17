@@ -48,7 +48,7 @@ const DROP_SNAP := 0.16
 const DROP_VY := -8.0
 const RIM_MASK := 8
 const RIM_COUNT := 16
-const COMBO_WINDOW := 1.15
+const COMBO_WINDOW := 3.0
 const BUILD_SHA := "__BUILD_SHA__"
 const FIRST_AD_SECONDS := 120.0  # cumulative play before the first interstitial; the only first-ad threshold
 const AD_COOLDOWN := 90.0
@@ -159,7 +159,12 @@ float road_dist(vec2 xz) {
 	} else if (bowl <= 7.6) {
 		best = 0.0;
 	}
-	if (abs(xz.x) < 7.0 && abs(xz.y) < 7.0) {
+	if (abs(xz.y - 4.0) <= 1.45 && abs(xz.x) <= 16.5) {
+		best = min(best, abs(xz.y - 4.0));
+	}
+	if (abs(xz.x) < 3.0 && abs(xz.y) < 3.0) {
+		best = 90.0;
+	} else if (abs(xz.x) < 7.0 && abs(xz.y) < 7.0 && abs(xz.y - 4.0) > 1.45) {
 		best = 90.0;
 	}
 	return best;
@@ -193,8 +198,8 @@ vec3 themed_road(vec2 xz, vec2 uv, float which) {
 		col = vec3(0.18, 0.2, 0.24);
 		stripe = mix(vec3(0.75, 0.22, 0.2), vec3(0.2, 0.42, 0.78), step(0.5, fract(xz.x * 0.2)));
 	} else if (which < 7.5) {
-		col = vec3(0.1, 0.12, 0.18);
-		stripe = mix(vec3(0.25, 0.78, 0.86), vec3(0.92, 0.55, 0.18), step(0.5, fract(xz.y * 0.15)));
+		col = vec3(0.11, 0.13, 0.17);
+		stripe = vec3(0.28, 0.48, 0.55);
 	} else if (which < 8.5) {
 		vec2 cell = abs(fract(xz * 1.1) - 0.5);
 		float seam = step(0.42, max(cell.x, cell.y));
@@ -332,10 +337,7 @@ void fragment() {
 		outc = themed_road(xz, uv, motif);
 		if (motif > 6.5 && motif < 7.5) {
 			float glow = smoothstep(0.08, 0.0, abs(uv.y - 0.5));
-			vec3 lamp = fract(xz.x * 0.17) > 0.5 ? vec3(0.3, 0.85, 0.92) : vec3(0.95, 0.58, 0.2);
-			outc = mix(outc, lamp, glow * 0.85);
-			float win = step(0.82, thash(floor(xz * 1.7)));
-			outc = mix(outc, vec3(0.95, 0.78, 0.35), win * 0.35);
+			outc = mix(outc, vec3(0.22, 0.42, 0.5), glow * 0.28);
 		}
 	}
 	if (paint_mode > 6.5 && paint_mode < 7.5 && motif > 5.5 && motif < 6.5) {
@@ -346,6 +348,15 @@ void fragment() {
 		float fringe = step(0.4, max(rc.x, rc.y));
 		outc = mix(outc, outc * vec3(0.72, 0.55, 0.4), fringe * 0.4);
 	} else if ((paint_mode > 0.5 && paint_mode < 1.5) || (paint_mode > 6.5 && paint_mode < 7.5)) {
+		if (motif > 1.5 && motif < 2.5) {
+			float moss = vnoise(xz * 0.17 + vec2(1.3, 4.4));
+			float duff = vnoise(xz * 0.46 + vec2(8.2, 2.1));
+			outc = mix(outc, outc * vec3(0.82, 1.02, 0.78), smoothstep(0.32, 0.78, moss) * 0.4);
+			outc = mix(outc, vec3(0.2, 0.32, 0.12), smoothstep(0.55, 0.9, duff) * 0.28);
+			float litter = smoothstep(0.66, 0.9, vnoise(xz * 1.15 + vec2(5.0, 9.0)));
+			vec3 leaf = duff > 0.5 ? vec3(0.36, 0.24, 0.1) : vec3(0.14, 0.34, 0.12);
+			outc = mix(outc, leaf, litter * 0.32);
+		} else {
 		vec2 gc = floor(xz * 0.85);
 		float gh = thash(gc);
 		vec2 gf = fract(xz * 0.85) - 0.5;
@@ -373,6 +384,7 @@ void fragment() {
 			float stalk = smoothstep(0.2, 0.04, row) * gap;
 			outc = mix(outc, vec3(0.62, 0.58, 0.28), stalk * 0.35);
 		}
+		}
 	} else if (paint_mode > 1.5 && paint_mode < 3.5) {
 		vec2 pc = floor(xz * 1.5);
 		float ph = thash(pc);
@@ -383,19 +395,10 @@ void fragment() {
 		}
 		if (paint_mode > 2.5 && paint_mode < 3.5) {
 			if (motif > 1.5 && motif < 2.5) {
-				vec2 lc = floor(xz * 2.1);
-				float lh = thash(lc);
-				vec2 lf = fract(xz * 2.1) - 0.5;
-				float leaf = 1.0 - smoothstep(0.02, 0.42, length(lf));
-				if (lh > 0.4) {
-					vec3 litter = vec3(0.46, 0.3, 0.12);
-					if (lh > 0.72) {
-						litter = vec3(0.16, 0.38, 0.14);
-					} else if (lh > 0.58) {
-						litter = vec3(0.55, 0.42, 0.16);
-					}
-					outc = mix(outc, litter, leaf * 0.62);
-				}
+				float lh = vnoise(xz * 0.8);
+				float leaf = smoothstep(0.55, 0.88, vnoise(xz * 1.35));
+				vec3 litter = mix(vec3(0.4, 0.26, 0.12), vec3(0.16, 0.34, 0.12), step(0.5, lh));
+				outc = mix(outc, litter, leaf * 0.32);
 			} else {
 				vec2 wc = floor(xz * 0.22 + vec2(3.0, 1.0));
 				float wh = thash(wc);
@@ -411,14 +414,9 @@ void fragment() {
 			float ch = thash(cc + vec2(8.0, 3.0));
 			vec2 cf = fract(xz * 0.2) - 0.5;
 			float crater = 1.0 - smoothstep(0.1, 0.4, length(cf));
-			if (ch > 0.7) {
-				outc = mix(outc, outc * 0.42, crater * 0.85);
-				float rim = smoothstep(0.28, 0.38, length(cf)) * (1.0 - smoothstep(0.38, 0.5, length(cf)));
-				outc = mix(outc, min(outc * 1.45, vec3(0.55)), rim);
+			if (ch > 0.84) {
+				outc = mix(outc, outc * 0.78, crater * 0.35);
 			}
-			float glow = step(0.9, thash(floor(xz * 2.6)));
-			vec3 lamp = thash(floor(xz * 3.4) + vec2(2.0, 5.0)) > 0.5 ? vec3(0.35, 0.78, 0.9) : vec3(0.92, 0.68, 0.32);
-			outc = mix(outc, lamp, glow * 0.7);
 		}
 		if (paint_mode < 2.5 && motif > 3.5 && motif < 4.5) {
 			float drift = vnoise(xz * 0.08);
@@ -498,25 +496,17 @@ void fragment() {
 		}
 		outc = mix(outc, vec3(0.36, 0.28, 0.16), shore * 0.75);
 		if (paint_mode > 0.5 && paint_mode < 1.5) {
-			float moss = vnoise(xz * 0.22);
-			outc = mix(outc, outc * vec3(0.72, 1.05, 0.7), smoothstep(0.45, 0.8, moss) * 0.45);
-			float litter = step(0.78, thash(floor(xz * 2.4)));
-			vec3 leaf = thash(floor(xz * 1.3)) > 0.5 ? vec3(0.42, 0.28, 0.12) : vec3(0.16, 0.4, 0.14);
-			outc = mix(outc, leaf, litter * 0.4);
+			float moss2 = vnoise(xz * 0.22);
+			outc = mix(outc, outc * vec3(0.78, 1.04, 0.74), smoothstep(0.4, 0.82, moss2) * 0.22);
+			float litter2 = smoothstep(0.7, 0.92, vnoise(xz * 0.9 + vec2(2.0, 7.0)));
+			vec3 leaf2 = vnoise(xz * 0.33) > 0.5 ? vec3(0.4, 0.26, 0.12) : vec3(0.15, 0.36, 0.12);
+			outc = mix(outc, leaf2, litter2 * 0.22);
 		}
 	}
 	if (motif > 6.5 && motif < 7.5 && paint_mode > 0.5) {
-		float speck = step(0.9, thash(floor(xz * 2.2)));
-		vec3 lamp = thash(floor(xz * 3.1)) > 0.55 ? vec3(0.3, 0.82, 0.9) : vec3(0.95, 0.58, 0.22);
-		outc = mix(outc, lamp, speck * 0.75);
-		float lane = 1.0 - smoothstep(0.12, 0.48, abs(abs(xz.x) - 3.35));
-		lane *= 1.0 - smoothstep(9.0, 13.5, abs(xz.y));
-		vec3 glow = xz.x > 0.0 ? vec3(0.22, 0.86, 0.95) : vec3(0.98, 0.55, 0.18);
-		outc = mix(outc, glow, lane * 0.9);
-		if (paint_mode > 4.5 && paint_mode < 5.5) {
-			float win = step(0.72, thash(floor(xz * 1.4)));
-			outc = mix(outc, vec3(0.95, 0.82, 0.45), win * 0.55);
-		}
+		vec2 panel = abs(fract(xz * 0.22) - 0.5);
+		float seam = smoothstep(0.46, 0.5, max(panel.x, panel.y));
+		outc = mix(outc, outc * 0.62, seam * 0.7);
 	}
 	float edge = max(abs(xz.x), abs(xz.y));
 	float rim = smoothstep(70.5, 77.0, edge);
@@ -1116,6 +1106,8 @@ func _ready() -> void:
 		call_deferred("_probe_facing")
 	elif preview == "snowmenu":
 		call_deferred("_enter_attract", 4)
+	elif preview == "toast":
+		call_deferred("_preview_toast")
 	elif preview.begins_with("road"):
 		var road_rest := preview.substr(4)
 		var road_idx := 0
@@ -1150,6 +1142,37 @@ func _preview_results() -> void:
 	playing = true
 	_finish_round(true)
 	_dismiss_unlock()
+
+func _preview_toast() -> void:
+	start_round(0)
+	var snacks: Array = []
+	for o in props:
+		if not bool(o.alive) or int(o.mover) == 2:
+			continue
+		if float(o.base) > 0.75:
+			continue
+		var p: Vector3 = o.pos
+		if p.length() > 7.5:
+			continue
+		snacks.append(o)
+		if snacks.size() >= 2:
+			break
+	for o in snacks:
+		_swallow_done(o)
+	combo_left = 30.0
+	mile_t = 30.0
+	if combo_lbl:
+		combo_lbl.visible = combo >= 2
+		combo_lbl.text = "Combo x%.1f" % _combo_mult()
+	var mile := ""
+	if mile_lbl:
+		mile = mile_lbl.text
+		mile_lbl.visible = true
+		mile_lbl.modulate.a = 1.0
+	if mile_pill:
+		mile_pill.visible = true
+		mile_pill.modulate.a = 1.0
+	print("TOAST combo %d snacks %d mile %s" % [combo, snacks.size(), mile])
 
 func _preview_road(idx: int) -> void:
 	quality_locked = true
@@ -4075,6 +4098,7 @@ func _populate() -> void:
 	treats = []
 	var layout := str(map.get("layout", "farm"))
 	_dress_opening(layout)
+	_dress_jungle_canopy()
 	_place_signatures(layout)
 	_place_near_icons(layout)
 	_spawn_life()
@@ -4117,7 +4141,7 @@ func _treat_id(layout: String) -> String:
 
 func _place_treats(layout: String) -> void:
 	var id := _treat_id(layout)
-	var spots: Array = [Vector3(5.4, 0, -6.2), Vector3(-7.5, 0, 8.4), Vector3(16.0, 0, 14.0), Vector3(-20.0, 0, -24.0), Vector3(28.0, 0, -18.0)]
+	var spots: Array = [Vector3(1.4, 0, 2.2), Vector3(-2.2, 0, 2.4), Vector3(3.2, 0, 1.6), Vector3(-1.8, 0, -5.4), Vector3(16.0, 0, 14.0), Vector3(-20.0, 0, -24.0), Vector3(28.0, 0, -18.0)]
 	var made := 0
 	var tries := 0
 	while made < 4 and tries < spots.size() + 24 and props.size() < PROP_CAP:
@@ -4125,11 +4149,14 @@ func _place_treats(layout: String) -> void:
 		var p := Vector3(randf_range(-36.0, 36.0), 0.0, randf_range(-36.0, 36.0))
 		if tries <= spots.size():
 			p = spots[tries - 1]
-		if p.length() < 4.2:
+		if tries > 3 and p.length() < 4.2:
 			continue
-		if _surf_f(p.x, p.z) == SURF_WATER:
+		if p.length() < 2.2:
 			continue
-		if _place_id(id, p, Vector3.ZERO, randf() * TAU, 1.0):
+		if _surf_f(p.x, p.z) == SURF_WATER or _surf_f(p.x, p.z) == SURF_ROAD:
+			continue
+		var near := made == 0
+		if _place_id(id, p, Vector3.ZERO, randf() * TAU, 1.0, Color.WHITE, -1, -1, [], near):
 			var o: Dictionary = props[props.size() - 1]
 			o["treat"] = true
 			treats.append(o)
@@ -4283,9 +4310,29 @@ func _dress_streets(layout: String) -> void:
 
 func _audit_opening() -> void:
 	var layout := str(map.get("layout", ""))
+	print("OPEN ROAD %s cell %d surf %d" % [layout, RoadScript.cell(0, 4), _surf_f(0.0, 4.0)])
+	var cars := 0
+	for o in props:
+		if int(o.mover) != 2:
+			continue
+		var p: Vector3 = o.pos
+		if absf(p.x) < 6.5 and p.z > 2.0 and p.z < 6.2:
+			cars += 1
+			print("OPEN CAR %s %s at %.1f %.1f route %d" % [layout, kind_id_of(int(o.kind)), p.x, p.z, int(o.route)])
+	if cars < 1:
+		print("OPEN MISS %s car" % layout)
+	var treat_near := false
+	for o in treats:
+		var tp: Vector3 = o.pos
+		if absf(tp.x) < 6.0 and tp.z > -8.0 and tp.z < 6.0:
+			treat_near = true
+			print("OPEN TREAT %s %s at %.1f %.1f" % [layout, kind_id_of(int(o.kind)), tp.x, tp.z])
+			break
+	if not treat_near:
+		print("OPEN MISS %s treat" % layout)
 	var want: Array = []
 	if layout == "jungle":
-		want = ["tyrant", "lavacone", "miniraptor", "trike", "raptord"]
+		want = ["tyrant", "lavacone", "miniraptor", "trike", "raptord", "jpalmtall", "jpalm", "fernleaf"]
 	elif layout == "space":
 		want = ["stackrocket", "habitat", "astro", "spacerover"]
 	elif layout == "pirate":
@@ -4863,11 +4910,136 @@ func _dress_farm_vista() -> void:
 	_vista_spot("fwheat", Vector3(-6.0, 0.0, 18.0))
 	_vista_spot("scare", Vector3(12.0, 0.0, -28.0))
 
+func _opening_car_ids(layout: String) -> Array:
+	match layout:
+		"candy":
+			return ["van", "taxi"]
+		"pirate":
+			return ["sedan", "van"]
+		"snow":
+			return ["snowmobile", "sedan"]
+		"desert":
+			return ["sedan", "hatch"]
+		"toy":
+			return ["tracer", "ttruck"]
+		"space":
+			return ["spacerover", "spacerover"]
+		"haunt":
+			return ["hcart", "sedan"]
+		"fair":
+			return ["fbumper", "sedan"]
+		"jungle":
+			return ["sedan", "hatch"]
+		_:
+			return ["sedan", "hatch"]
+
+func _opening_bite(layout: String) -> String:
+	match layout:
+		"candy":
+			return "lollypop"
+		"jungle":
+			return "spottedegg"
+		"pirate":
+			return "pbarrel"
+		"snow":
+			return "hpresent"
+		"desert":
+			return "drock"
+		"toy":
+			return "tblock"
+		"space":
+			return "moonlet"
+		"haunt":
+			return "hcandle"
+		"fair":
+			return "fteacup"
+		_:
+			return "fapple"
+
+func _place_opening_cars(layout: String) -> void:
+	# Placed while the city is built, not from a frame counter, so a slow
+	# machine still has cars in the first painted frame.
+	if road_routes.is_empty():
+		return
+	var ri := road_routes.size() - 1
+	var route: Dictionary = road_routes[ri]
+	var ids: Array = _opening_car_ids(layout)
+	var spots: Array = [
+		{"x": -4.2, "lane": 0.42},
+		{"x": 4.4, "lane": -0.42},
+	]
+	for i in spots.size():
+		var spot: Dictionary = spots[i]
+		var prog := float(spot.x) + 14.0
+		var lane := float(spot.lane)
+		var sample := _sample_route(route, prog)
+		var dir: Vector3 = sample.dir
+		if lane < 0.0:
+			dir = -dir
+		var side := Vector3(-dir.z, 0.0, dir.x)
+		var pos: Vector3 = sample.pos + side * absf(lane)
+		if _place_id(str(ids[i]), pos, dir, -1.0, 1.0, Color.WHITE, -1, 2, [SURF_ROAD], true):
+			var o: Dictionary = props[props.size() - 1]
+			o["route"] = ri
+			o["prog"] = prog
+			o["lane"] = lane
+			o["walk"] = [SURF_ROAD]
+
+func _place_opening_bites(layout: String) -> void:
+	var id := _opening_bite(layout)
+	var spots: Array = [
+		Vector3(2.2, 0, -2.4), Vector3(-2.4, 0, -2.6), Vector3(0.6, 0, -3.4),
+		Vector3(-0.8, 0, -4.2), Vector3(3.4, 0, -4.6), Vector3(-3.6, 0, -3.6),
+	]
+	for p in spots:
+		if _surf_f(p.x, p.z) == SURF_WATER or _surf_f(p.x, p.z) == SURF_ROAD:
+			continue
+		_place_id(id, p, Vector3.ZERO, randf() * TAU, 1.0, Color.WHITE, -1, -1, [], true)
+
+func _place_open(id: String, p: Vector3, yaw: float = -1.0, grow: float = 1.0) -> bool:
+	if _place_id(id, p, Vector3.ZERO, yaw, grow, Color.WHITE, -1, -1, [], true):
+		return true
+	return _place_id(id, p + Vector3(0.7, 0, -0.5), Vector3.ZERO, yaw, grow, Color.WHITE, -1, -1, [], true)
+
+func _dress_jungle_canopy() -> void:
+	if str(map.get("layout", "")) != "jungle":
+		return
+	var ids: Array = ["jpalmtall", "jpalm", "jpalm", "fernleaf"]
+	var made := 0
+	var n := 0
+	var x := -56
+	while x <= 56 and made < 28:
+		var z := -56
+		while z <= 56 and made < 28:
+			n += 1
+			var p := Vector3(float(x) + float(n % 3) - 1.0, 0.0, float(z))
+			var surf := _surf_f(p.x, p.z)
+			var close := absf(p.x) < 12.0 and p.z > -16.0 and p.z < 12.0
+			if not close and surf != SURF_WATER and surf != SURF_ROAD:
+				var id := str(ids[made % ids.size()])
+				var grow := 1.12
+				if id == "jpalmtall":
+					grow = 1.2
+				elif id == "fernleaf":
+					grow = 2.35
+				if _place_id(id, p, Vector3.ZERO, float(n) * 0.7, grow):
+					made += 1
+			z += 13
+		x += 16
+
 func _dress_opening(layout: String) -> void:
 	# Round start frames only x ±5 and z -13 to +9. Heroes go in that window.
+	_place_opening_cars(layout)
 	var land := [SURF_DIRT, SURF_GRASS, SURF_FIELD]
 	match layout:
 		"jungle":
+			_place_open("jpalmtall", Vector3(-4.2, 0, -7.2), 0.4, 1.28)
+			_place_open("jpalm", Vector3(3.8, 0, -5.8), 1.1, 1.22)
+			_place_open("jpalm", Vector3(-1.6, 0, -10.4), 0.6, 1.16)
+			_place_open("fernleaf", Vector3(2.6, 0, -3.0), 0.2, 4.2)
+			_place_open("fernleaf", Vector3(-3.2, 0, -2.5), 1.2, 3.8)
+			_place_open("jvine", Vector3(0.5, 0, -6.4), 0.8, 3.4)
+			_place_open("fernwide", Vector3(3.4, 0, -4.2), 0.5, 3.3)
 			_vista_mover("tyrant", Vector3(-4.4, 0, -12.6), land, 1.2)
 			_vista_spot("lavacone", Vector3(4.7, 0, -12.5), 0.35)
 			_vista_mover("brachio", Vector3(2.6, 0, -14.4), land, 0.7)
@@ -4883,21 +5055,19 @@ func _dress_opening(layout: String) -> void:
 			_vista_spot("dinobone", Vector3(3.2, 0, -5.2), 0.6)
 			_vista_spot("fernleaf", Vector3(-3.8, 0, -5.4))
 			_vista_spot("fernleaf", Vector3(0.6, 0, -6.4))
-			_vista_spot("fernleaf", Vector3(3.6, 0, -3.6))
-			_vista_spot("fernleaf", Vector3(-1.2, 0, -7.2))
 			_vista_spot("fflower", Vector3(2.8, 0, -2.4))
 			_vista_spot("fflower", Vector3(-3.0, 0, -2.6))
-			_vista_spot("blossom", Vector3(0.9, 0, 3.2))
-			_vista_spot("jvine", Vector3(-4.4, 0, -6.6))
-			_vista_spot("jpalm", Vector3(4.8, 0, -9.6))
+			_vista_spot("blossom", Vector3(0.9, 0, 1.8))
 		"space":
 			var pad := [SURF_SAND, SURF_CONCRETE, SURF_DIRT, SURF_ROAD]
-			_vista_spot("stackrocket", Vector3(-4.7, 0, -12.5), 0.2)
-			_vista_spot("habitat", Vector3(4.6, 0, -12.6), 0.5)
-			_vista_mover("astro", Vector3(2.6, 0, -8.4), pad, 2.4)
-			_vista_mover("spacerover", Vector3(-3.2, 0, -8.8), pad, 0.8)
-			_vista_spot("solarpanel", Vector3(3.6, 0, -5.2), 0.4)
-			_vista_spot("solarpanel", Vector3(-3.8, 0, -4.6), 1.0)
+			_place_id("stackrocket", Vector3(-3.4, 0, -8.0), Vector3.ZERO, 0.2, 1.0, Color.WHITE, -1, -1, [], true)
+			_place_id("habitat", Vector3(3.4, 0, -7.2), Vector3.ZERO, 0.5, 1.0, Color.WHITE, -1, -1, [], true)
+			if _place_id("astro", Vector3(1.2, 0, -5.0), Vector3(0.3, 0, 0.9), -1.0, 1.0, Color.WHITE, -1, 1, pad, true):
+				props[props.size() - 1]["walk"] = pad
+			if _place_id("astro", Vector3(-1.5, 0, -5.8), Vector3(-0.4, 0, 0.8), -1.0, 1.0, Color.WHITE, -1, 1, pad, true):
+				props[props.size() - 1]["walk"] = pad
+			_vista_spot("solarpanel", Vector3(4.4, 0, -3.2), 0.4)
+			_vista_spot("solarpanel", Vector3(-4.2, 0, -3.4), 1.0)
 			_vista_spot("satdish", Vector3(2.8, 0, -13.5), 0.6)
 			_vista_spot("antenna", Vector3(-2.6, 0, -13.6), 0.3)
 			_vista_spot("satprobe", Vector3(1.6, 0, -2.6), 0.4)
@@ -4922,10 +5092,11 @@ func _dress_opening(layout: String) -> void:
 		"farm":
 			_vista_spot("chicken", Vector3(1.8, 0, -4.0))
 			_vista_spot("chicken", Vector3(-2.2, 0, -4.8))
-			_vista_spot("chicken", Vector3(2.6, 0, 3.4))
-			_vista_spot("chicken", Vector3(-1.4, 0, 4.2))
+			_vista_spot("chicken", Vector3(3.2, 0, 6.8))
+			_vista_spot("chicken", Vector3(-2.4, 0, 7.0))
 		_:
 			pass
+	_place_opening_bites(layout)
 
 func _dress_vista(layout: String) -> void:
 	match layout:
@@ -5447,12 +5618,12 @@ func _spawn_ok(id: String, p: Vector3, grow: float) -> bool:
 			return false
 	return true
 
-func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float = -1.0, grow: float = 1.0, tint: Color = Color.WHITE, points: int = -1, mover: int = -1, allow: Array = []) -> bool:
+func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float = -1.0, grow: float = 1.0, tint: Color = Color.WHITE, points: int = -1, mover: int = -1, allow: Array = [], opening: bool = false) -> bool:
 	if props.size() >= PROP_CAP or not kind_by_id.has(id):
 		return false
-	if p.length() < 2.15:
+	if p.length() < (1.6 if opening else 2.15):
 		return false
-	if not _spawn_ok(id, p, grow):
+	if not opening and not _spawn_ok(id, p, grow):
 		return false
 	if absf(p.x) > CITY_HALF - 0.45 or absf(p.z) > CITY_HALF - 0.45:
 		return false
@@ -8654,6 +8825,10 @@ func _swallow_done(o: Dictionary) -> void:
 			score += gained
 			player_eaten += 1
 			_sync_level()
+			if combo == 2:
+				_toast("Combo x%.1f" % _combo_mult())
+			elif player_eaten == 8 and level == 0:
+				_toast("8 bites!")
 			_announce_skins(Save.note_swallow(_swallow_bucket(kind_id_of(int(o.kind)))))
 			_burst(at, gained, o.color)
 			_feel(gained, gained >= 14)

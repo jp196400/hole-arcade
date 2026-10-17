@@ -1,11 +1,15 @@
 extends RefCounted
 
 # One street plan for every theme. The map is about ±78.
-# Lines sit off the hole so the opening ground stays the theme's own floor.
+# A short spur crosses the opening view. The hole itself stays on theme ground.
 
 const LINES: Array = [-54, -36, -18, 18, 36, 54]
 
 static func cell(x: int, z: int) -> int:
+	if _pad(x, z):
+		return 0
+	if _spur(x, z):
+		return 1
 	if absi(x) < 7 and absi(z) < 7:
 		return 0
 	if _island(x, z):
@@ -27,7 +31,14 @@ static func routes() -> Array:
 	out.append(_pack(_horizontal_dead(), false))
 	out.append(_pack(_stub(), false))
 	out.append(_pack(_circle(Vector3(18, 0, -36), 6.3), true))
+	out.append(_pack(_opening_spur(), false))
 	return out
+
+static func _pad(x: int, z: int) -> bool:
+	return absi(x) < 3 and absi(z) < 3
+
+static func _spur(x: int, z: int) -> bool:
+	return absi(z - 4) <= 1 and absi(x) <= 16
 
 static func _road(x: int, z: int) -> bool:
 	if _ring(x, z):
@@ -145,6 +156,11 @@ static func _horizontal_dead() -> PackedVector3Array:
 static func _stub() -> PackedVector3Array:
 	var pts := PackedVector3Array()
 	_line(pts, Vector3(-18, 0, 0), Vector3(-42, 0, 0))
+	return pts
+
+static func _opening_spur() -> PackedVector3Array:
+	var pts := PackedVector3Array()
+	_line(pts, Vector3(-14, 0, 4), Vector3(14, 0, 4))
 	return pts
 
 static func _circle(center: Vector3, radius: float) -> PackedVector3Array:
