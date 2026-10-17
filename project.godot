@@ -32,6 +32,9 @@ common/physics_interpolation=false
 driver/driver="Dummy"
 
 [rendering]
+; Web exports ship with threads off. Past this many 3D instances Godot
+; takes a threaded cull that draws nothing, so the world goes blank.
+limits/spatial_indexer/threaded_cull_minimum_instances=100000
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.11, 0.16, 0.29, 1)
