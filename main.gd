@@ -13,16 +13,14 @@ const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?s
 const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
 const STOP_RATE := 34.0
-# Vertical field. A wide lens bent towers inward.
+const CAM_PITCH_DEG := 62.0
+const CAM_PITCH_FAR := 62.0
+# Vertical field. A wide lens bent towers inward and opened a big sky band.
 const CAM_FOV := 40.0
 # Stick speed still uses the previous framing so a pulled-back camera does not race.
 const STICK_FOV := 56.0
-# Share of the screen above the horizon. A 62 degree look at the hole leaves
-# that horizon outside a 40 degree lens, so the rig is the steepest view that
-# keeps this strip and keeps the hole on screen.
-const CAM_SKY_SLIVER := 0.055
-# Hole center, measured from the top. Low in the frame so the rig stays steep.
-const CAM_HOLE_Y := 0.80
+# A real horizon does not fit in this lens. The hint is a screen gradient, not geometry.
+const HAZE_FRAC := 0.06
 const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
 const SPEED_SCREEN := 1.0
@@ -442,6 +440,9 @@ var center_pill: Panel
 var next_bg: ColorRect
 var goal_hold := 0.0
 var goal_seen := ""
+var sky_haze: Control
+var sky_haze_top := Color(0.42, 0.74, 0.98)
+var sky_haze_edge := Color(0.78, 0.90, 0.72)
 var kept_lbl: Label
 var kept_pulse := false
 var ui_swallow_frames := 0
@@ -505,7 +506,7 @@ var floaters: Array = []
 var cam: Camera3D
 var cam_look := Vector3.ZERO
 var cam_distance := 8.0
-var cam_pitch := 29.4
+var cam_pitch := CAM_PITCH_DEG
 var cam_dist_mul := 1.0
 var cam_look_lift := 0.0
 var skirt_mat: StandardMaterial3D
@@ -802,14 +803,9 @@ func _probe_cam() -> void:
 				shown_radius = hole_radius
 			_snap_camera()
 			var frac := _screen_frac(shown_radius, cam_distance)
-			var look := _look_depression()
-			var strip := _sky_strip(look, cam.fov)
-			var vp := get_viewport().get_visible_rect().size
-			var hole_y := 0.5
-			if cam != null and vp.y > 2.0:
-				hole_y = cam.unproject_position(hole_pos).y / vp.y
-			print("CAM %s aspect %.2f %s fov %.1f pitch %.1f look %.1f dist %.2f frac %.3f sky %.3f hole_y %.3f speed %.2f" % [str(sz[0]), aspect_lock, "grown" if grown else "start", cam.fov, cam_pitch, look, cam_distance, frac, strip, hole_y, _move_speed()])
-			if absf(cam.fov - CAM_FOV) > 0.2 or strip < 0.05 or strip > 0.08 or absf(hole_y - CAM_HOLE_Y) > 0.04:
+			var strip := _sky_strip(cam_pitch, cam.fov)
+			print("CAM %s aspect %.2f %s fov %.1f pitch %.1f dist %.2f frac %.3f sky %.3f speed %.2f" % [str(sz[0]), aspect_lock, "grown" if grown else "start", cam.fov, cam_pitch, cam_distance, frac, strip, _move_speed()])
+			if absf(cam.fov - CAM_FOV) > 0.2 or absf(cam_pitch - CAM_PITCH_DEG) > 0.2 or strip > 0.001:
 				bad += 1
 	if bad == 0:
 		print("CAM_OK")
@@ -2149,14 +2145,8 @@ func _cam_frac_for(radius: float) -> float:
 func _cam_fov_for() -> float:
 	return CAM_FOV
 
-func _look_depression() -> float:
-	# Center ray, degrees below the horizon, so the top sliver is sky.
-	return CAM_FOV * (0.5 - CAM_SKY_SLIVER)
-
 func _cam_pitch_for(_radius: float) -> float:
-	# Elevation of the camera from the hole. Steeper than the look ray
-	# because the hole sits below center.
-	return _look_depression() + (CAM_HOLE_Y - 0.5) * CAM_FOV
+	return lerpf(CAM_PITCH_DEG, CAM_PITCH_FAR, 0.0)
 
 func _sky_strip(pitch: float, fov: float) -> float:
 	# Share of the frame above the horizon. Zero means the sky sits just off the top.
@@ -2165,24 +2155,17 @@ func _sky_strip(pitch: float, fov: float) -> float:
 		return 0.0
 	return clampf((-top_down) / maxf(fov, 0.001), 0.0, 1.0)
 
-func _aim_camera() -> void:
-	if cam == null:
-		return
-	cam.fov = _cam_fov_for()
-	cam.position = hole_pos + _camera_offset(cam_distance)
-	if cam_dist_mul > 0.9:
-		var dep := deg_to_rad(_look_depression())
-		cam_look = cam.position + Vector3(0.0, -sin(dep), -cos(dep))
-	else:
-		cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
-	cam.look_at(cam_look, Vector3.UP)
-
 func _snap_camera() -> void:
 	if cam_dist_mul > 0.9:
 		cam_pitch = _cam_pitch_for(shown_radius)
 	cam_distance = _cam_dist_for(shown_radius)
 	shown_vel = 0.0
-	_aim_camera()
+	cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
+	if cam == null:
+		return
+	cam.fov = _cam_fov_for()
+	cam.position = hole_pos + _camera_offset(cam_distance)
+	cam.look_at(cam_look, Vector3.UP)
 
 func _build_rival_view() -> void:
 	var sh := Shader.new()
@@ -4656,6 +4639,15 @@ func _build_ui() -> void:
 	ui.layer = 2
 	hud_layer = ui
 	add_child(ui)
+	sky_haze = Control.new()
+	sky_haze.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sky_haze.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	sky_haze.anchor_bottom = HAZE_FRAC
+	sky_haze.offset_bottom = 0
+	sky_haze.visible = false
+	sky_haze.draw.connect(_draw_sky_haze)
+	sky_haze.resized.connect(sky_haze.queue_redraw)
+	ui.add_child(sky_haze)
 	var hud_ink := Color(0.14, 0.18, 0.30, 0.90)
 	score_pill = _make_hud_panel(hud_ink, 22)
 	score_pill.anchor_left = 0.0
@@ -5409,7 +5401,10 @@ func _smooth_camera(delta: float) -> void:
 		cam_pitch = _cam_pitch_for(shown_radius)
 	if cam_hold or cam == null:
 		return
-	_aim_camera()
+	cam.fov = _cam_fov_for()
+	cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
+	cam.position = hole_pos + _camera_offset(cam_distance)
+	cam.look_at(cam_look, Vector3.UP)
 
 func _fits(size: float) -> bool:
 	return size < hole_radius * OPEN_FIT
@@ -7228,11 +7223,34 @@ func _theme_light(layout: String) -> Dictionary:
 		_:
 			return {"sun_e": 1.05, "amb": Color(1.0, 0.96, 0.86), "amb_e": 0.56, "fill": Color(0.68, 0.84, 1.0), "fill_e": 0.26}
 
+func _draw_sky_haze() -> void:
+	if sky_haze == null:
+		return
+	var h := sky_haze.size.y
+	var w := sky_haze.size.x
+	if h < 2.0 or w < 2.0:
+		return
+	var steps := 14
+	var band := h / float(steps)
+	for i in steps:
+		var t := (float(i) + 0.5) / float(steps)
+		var col := sky_haze_top.lerp(sky_haze_edge, t)
+		var fade := (1.0 - t) * (1.0 - t)
+		col.a = fade * 0.55
+		sky_haze.draw_rect(Rect2(0.0, float(i) * band, w, band + 1.0), col, true)
+
+func _tint_sky_haze(m: Dictionary) -> void:
+	sky_haze_top = m.sky_top
+	sky_haze_edge = m.horizon
+	if sky_haze:
+		sky_haze.queue_redraw()
+
 func _apply_theme(m: Dictionary) -> void:
 	sky_mat.sky_top_color = m.sky_top
 	sky_mat.sky_horizon_color = m.horizon
 	sky_mat.ground_horizon_color = m.horizon
 	sky_mat.ground_bottom_color = m.ground
+	_tint_sky_haze(m)
 	world_env.adjustment_saturation = clampf(float(m.sat) * 0.96, 1.0, 1.10)
 	if skirt_mat:
 		skirt_mat.albedo_color = m.ground
@@ -8091,7 +8109,7 @@ func _resume_after_eaten() -> void:
 
 func _set_match_hud(on: bool) -> void:
 	match_hud = on
-	for n in [score_pill, map_pill, center_pill, clear_track, clear_lbl, score_lbl, level_lbl, next_lbl, next_bg, size_badge]:
+	for n in [sky_haze, score_pill, map_pill, center_pill, clear_track, clear_lbl, score_lbl, level_lbl, next_lbl, next_bg, size_badge]:
 		if n:
 			n.visible = on
 	if next_fill:
