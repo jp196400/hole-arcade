@@ -49,6 +49,15 @@ static func defs() -> Array:
 		_def("carousel", "ride", 40, 1.75, _carousel(), 4),
 		_def("ferris", "ride", 60, 2.20, _ferris()),
 		_def("roundtree", "tree", 8, 0.72, _round_tree()),
+		_def("spottedegg", "small", 2, 0.22, _spotted_egg()),
+		_def("dinonest", "small", 6, 0.7, _dino_nest()),
+		_def("dinobone", "small", 3, 0.55, _dino_bone()),
+		_def("jvine", "palm", 4, 0.28, _vine()),
+		_def("antenna", "ride", 12, 0.45, _antenna()),
+		_def("solarpanel", "small", 10, 0.85, _solar()),
+		_def("satprobe", "small", 4, 0.36, _sat_probe()),
+		_def("candybench", "small", 5, 0.62, _candy_bench()),
+		_def("toybench", "small", 5, 0.6, _toy_bench()),
 		_def("blossom", "clutter", 1, 0.2, _blossom()),
 		_def("pebbles", "clutter", 1, 0.22, _pebbles()),
 		_def("puddle", "clutter", 1, 0.32, _puddle()),
@@ -182,22 +191,25 @@ static func _legs4(st: SurfaceTool, y: float, x: float, z: float, h: float, col:
 
 static func _chicken() -> ArrayMesh:
 	var st := _begin()
-	var body := Color(0.96, 0.94, 0.88)
-	var red := Color(0.86, 0.16, 0.14)
-	var beak := Color(0.95, 0.62, 0.12)
-	var leg := Color(0.9, 0.55, 0.16)
-	_ellip(st, Vector3(0, 0.32, 0), Vector3(0.22, 0.16, 0.28), body)
-	_ellip(st, Vector3(0, 0.46, 0.24), Vector3(0.12, 0.11, 0.12), body)
-	_cone(st, Vector3(0, 0.44, 0.32), 0.045, 0.1, beak, 6)
-	_box(st, Vector3(0, 0.58, 0.22), Vector3(0.04, 0.1, 0.08), red)
-	_box(st, Vector3(0, 0.5, 0.34), Vector3(0.08, 0.05, 0.04), red)
-	_box(st, Vector3(-0.2, 0.34, 0), Vector3(0.16, 0.05, 0.22), Color(0.92, 0.9, 0.84))
-	_box(st, Vector3(0.2, 0.34, 0), Vector3(0.16, 0.05, 0.22), Color(0.92, 0.9, 0.84))
-	_box(st, Vector3(0, 0.36, -0.28), Vector3(0.12, 0.1, 0.1), Color(0.9, 0.55, 0.2))
-	_box(st, Vector3(-0.08, 0.1, 0.08), Vector3(0.04, 0.2, 0.04), leg)
-	_box(st, Vector3(0.08, 0.1, 0.08), Vector3(0.04, 0.2, 0.04), leg)
-	_eye(st, Vector3(-0.06, 0.48, 0.34), 0.035)
-	_eye(st, Vector3(0.06, 0.48, 0.34), 0.035)
+	var body := Color(0.99, 0.98, 0.93)
+	var wing := Color(0.97, 0.95, 0.88)
+	var red := Color(0.9, 0.08, 0.08)
+	var beak := Color(0.98, 0.52, 0.08)
+	var leg := Color(0.96, 0.46, 0.1)
+	_ellip(st, Vector3(0, 0.38, 0), Vector3(0.26, 0.2, 0.34), body)
+	_ellip(st, Vector3(0, 0.56, 0.28), Vector3(0.15, 0.14, 0.15), body)
+	_cone(st, Vector3(0, 0.54, 0.4), 0.055, 0.14, beak, 6)
+	_box(st, Vector3(0, 0.76, 0.24), Vector3(0.055, 0.18, 0.1), red)
+	_box(st, Vector3(-0.045, 0.68, 0.22), Vector3(0.04, 0.12, 0.07), red)
+	_box(st, Vector3(0.045, 0.66, 0.22), Vector3(0.04, 0.1, 0.06), red)
+	_box(st, Vector3(0, 0.5, 0.42), Vector3(0.11, 0.07, 0.05), red)
+	_box(st, Vector3(-0.24, 0.4, 0), Vector3(0.18, 0.06, 0.26), wing)
+	_box(st, Vector3(0.24, 0.4, 0), Vector3(0.18, 0.06, 0.26), wing)
+	_box(st, Vector3(0, 0.42, -0.32), Vector3(0.14, 0.12, 0.12), Color(0.95, 0.48, 0.14))
+	_box(st, Vector3(-0.09, 0.12, 0.08), Vector3(0.045, 0.24, 0.045), leg)
+	_box(st, Vector3(0.09, 0.12, 0.08), Vector3(0.045, 0.24, 0.045), leg)
+	_eye(st, Vector3(-0.07, 0.58, 0.4), 0.04)
+	_eye(st, Vector3(0.07, 0.58, 0.4), 0.04)
 	return _commit(st)
 
 static func _round_tree() -> ArrayMesh:
@@ -883,6 +895,137 @@ static func _ferris() -> ArrayMesh:
 	_box(st, hub, Vector3(0.28, 0.28, 0.28), red)
 	_box(st, Vector3(0, 0.08, 0.05), Vector3(1.8, 0.14, 1.15), Color(0.22, 0.24, 0.3))
 	_box(st, Vector3(0, 0.2, 0.55), Vector3(0.7, 0.16, 0.16), Color(0.9, 0.28, 0.32))
+	return _commit(st)
+
+static func _spotted_egg() -> ArrayMesh:
+	var st := _begin()
+	var shell := Color(0.96, 0.9, 0.78)
+	var spot := Color(0.55, 0.36, 0.22)
+	_ellip(st, Vector3(0, 0.22, 0), Vector3(0.16, 0.22, 0.14), shell, 8, 6)
+	_ellip(st, Vector3(0.06, 0.3, 0.08), Vector3(0.035, 0.03, 0.03), spot, 5, 3)
+	_ellip(st, Vector3(-0.05, 0.22, 0.1), Vector3(0.03, 0.025, 0.025), spot, 5, 3)
+	_ellip(st, Vector3(0.02, 0.16, -0.08), Vector3(0.028, 0.022, 0.022), spot, 5, 3)
+	return _commit(st)
+
+static func _dino_nest() -> ArrayMesh:
+	var st := _begin()
+	var twig := Color(0.42, 0.28, 0.14)
+	var dry := Color(0.62, 0.5, 0.24)
+	var shell := Color(0.96, 0.9, 0.78)
+	var spot := Color(0.52, 0.34, 0.2)
+	for i in 10:
+		var a := TAU * float(i) / 10.0
+		var p := Vector3(cos(a) * 0.55, 0.08, sin(a) * 0.42)
+		_box(st, p, Vector3(0.28, 0.08, 0.1), twig if i % 2 == 0 else dry)
+	_ellip(st, Vector3(0, 0.16, 0), Vector3(0.42, 0.06, 0.3), dry, 8, 4)
+	_ellip(st, Vector3(-0.12, 0.28, 0.02), Vector3(0.14, 0.18, 0.12), shell, 7, 5)
+	_ellip(st, Vector3(0.14, 0.26, -0.04), Vector3(0.13, 0.16, 0.11), shell, 7, 5)
+	_ellip(st, Vector3(0.02, 0.3, 0.12), Vector3(0.11, 0.14, 0.1), shell, 7, 5)
+	_ellip(st, Vector3(-0.08, 0.38, 0.06), Vector3(0.03, 0.025, 0.02), spot, 4, 3)
+	_ellip(st, Vector3(0.16, 0.34, -0.02), Vector3(0.028, 0.02, 0.02), spot, 4, 3)
+	return _commit(st)
+
+static func _dino_bone() -> ArrayMesh:
+	var st := _begin()
+	var bone := Color(0.93, 0.9, 0.8)
+	var knob := Color(0.86, 0.82, 0.72)
+	_beam(st, Vector3(-0.55, 0.12, -0.28), Vector3(0.55, 0.14, 0.28), 0.08, bone)
+	_beam(st, Vector3(-0.5, 0.14, 0.26), Vector3(0.5, 0.12, -0.26), 0.07, bone)
+	_ellip(st, Vector3(-0.58, 0.16, -0.3), Vector3(0.1, 0.08, 0.1), knob, 6, 4)
+	_ellip(st, Vector3(0.58, 0.16, 0.3), Vector3(0.1, 0.08, 0.1), knob, 6, 4)
+	_ellip(st, Vector3(-0.52, 0.16, 0.28), Vector3(0.09, 0.07, 0.09), knob, 6, 4)
+	_ellip(st, Vector3(0.52, 0.16, -0.28), Vector3(0.09, 0.07, 0.09), knob, 6, 4)
+	return _commit(st)
+
+static func _vine() -> ArrayMesh:
+	var st := _begin()
+	var wood := Color(0.4, 0.26, 0.14)
+	var leaf := Color(0.18, 0.5, 0.18)
+	var lite := Color(0.32, 0.62, 0.22)
+	_cyl(st, Vector3(0, 0, 0), 0.06, 1.35, wood, 6)
+	_beam(st, Vector3(0, 1.2, 0), Vector3(0.35, 0.7, 0.1), 0.045, leaf)
+	_beam(st, Vector3(0.15, 1.05, 0.05), Vector3(0.45, 0.4, -0.1), 0.04, lite)
+	_beam(st, Vector3(0, 0.9, 0), Vector3(-0.32, 0.35, 0.12), 0.04, leaf)
+	_ellip(st, Vector3(0.38, 0.62, 0.08), Vector3(0.16, 0.08, 0.1), leaf, 6, 4)
+	_ellip(st, Vector3(0.48, 0.34, -0.08), Vector3(0.14, 0.07, 0.09), lite, 6, 4)
+	_ellip(st, Vector3(-0.34, 0.3, 0.12), Vector3(0.15, 0.07, 0.1), leaf, 6, 4)
+	_ellip(st, Vector3(0.1, 1.15, 0.05), Vector3(0.18, 0.08, 0.12), lite, 6, 4)
+	return _commit(st)
+
+static func _antenna() -> ArrayMesh:
+	var st := _begin()
+	var mast := Color(0.72, 0.76, 0.82)
+	var dark := Color(0.22, 0.26, 0.32)
+	var lamp := Color(0.95, 0.55, 0.18)
+	_cyl(st, Vector3(0, 0, 0), 0.08, 2.4, mast, 6)
+	_box(st, Vector3(0, 0.08, 0), Vector3(0.55, 0.08, 0.55), dark)
+	_box(st, Vector3(0, 1.7, 0), Vector3(0.7, 0.04, 0.04), mast)
+	_box(st, Vector3(0, 1.35, 0), Vector3(0.04, 0.04, 0.55), mast)
+	_cyl(st, Vector3(0, 2.35, 0), 0.06, 0.12, lamp, 6)
+	_cone(st, Vector3(0.28, 1.85, 0), 0.16, 0.08, Color(0.55, 0.78, 0.9), 8)
+	_box(st, Vector3(0.28, 1.82, 0), Vector3(0.04, 0.16, 0.04), dark)
+	return _commit(st)
+
+static func _solar() -> ArrayMesh:
+	var st := _begin()
+	var cell := Color(0.15, 0.32, 0.62)
+	var line := Color(0.08, 0.16, 0.32)
+	var frame := Color(0.75, 0.78, 0.82)
+	var leg := Color(0.45, 0.48, 0.52)
+	_box(st, Vector3(0, 0.72, 0), Vector3(1.5, 0.06, 0.9), cell)
+	for i in 3:
+		_box(st, Vector3(-0.5 + float(i) * 0.5, 0.76, 0), Vector3(0.03, 0.02, 0.82), line)
+	_box(st, Vector3(0, 0.76, 0), Vector3(1.4, 0.02, 0.03), line)
+	_box(st, Vector3(0, 0.7, 0.46), Vector3(1.55, 0.05, 0.05), frame)
+	_box(st, Vector3(0, 0.7, -0.46), Vector3(1.55, 0.05, 0.05), frame)
+	_box(st, Vector3(-0.55, 0.36, 0), Vector3(0.06, 0.7, 0.06), leg)
+	_box(st, Vector3(0.55, 0.36, 0), Vector3(0.06, 0.7, 0.06), leg)
+	_box(st, Vector3(0, 0.06, 0), Vector3(0.9, 0.06, 0.4), frame)
+	return _commit(st)
+
+static func _sat_probe() -> ArrayMesh:
+	var st := _begin()
+	var body := Color(0.82, 0.84, 0.88)
+	var panel := Color(0.16, 0.34, 0.68)
+	var dish := Color(0.7, 0.74, 0.8)
+	_box(st, Vector3(0, 0.28, 0), Vector3(0.22, 0.22, 0.22), body)
+	_box(st, Vector3(-0.32, 0.28, 0), Vector3(0.38, 0.04, 0.18), panel)
+	_box(st, Vector3(0.32, 0.28, 0), Vector3(0.38, 0.04, 0.18), panel)
+	_box(st, Vector3(-0.32, 0.3, 0), Vector3(0.02, 0.01, 0.16), Color(0.08, 0.16, 0.32))
+	_cone(st, Vector3(0, 0.38, 0.12), 0.1, 0.08, dish, 8)
+	_cyl(st, Vector3(0, 0.46, 0), 0.03, 0.12, Color(0.9, 0.72, 0.28), 5)
+	return _commit(st)
+
+static func _candy_bench() -> ArrayMesh:
+	var st := _begin()
+	var wafer := Color(0.96, 0.86, 0.58)
+	var choc := Color(0.55, 0.3, 0.16)
+	var red := Color(0.86, 0.16, 0.18)
+	var white := Color(0.97, 0.95, 0.9)
+	for i in 5:
+		_box(st, Vector3(-0.44 + float(i) * 0.22, 0.42, 0), Vector3(0.18, 0.07, 0.36), wafer if i % 2 == 0 else choc)
+	for i in 4:
+		_box(st, Vector3(-0.36 + float(i) * 0.24, 0.64, -0.14), Vector3(0.16, 0.22, 0.06), wafer if i % 2 == 0 else choc)
+	for side in [-1.0, 1.0]:
+		_cyl(st, Vector3(side * 0.42, 0.0, 0.08), 0.045, 0.16, red, 6)
+		_cyl(st, Vector3(side * 0.42, 0.16, 0.08), 0.045, 0.14, white, 6)
+		_cyl(st, Vector3(side * 0.42, 0.3, 0.08), 0.045, 0.12, red, 6)
+		_box(st, Vector3(side * 0.42, 0.48, -0.02), Vector3(0.08, 0.08, 0.16), white)
+		_box(st, Vector3(side * 0.42, 0.56, -0.1), Vector3(0.08, 0.12, 0.08), red)
+	return _commit(st)
+
+static func _toy_bench() -> ArrayMesh:
+	var st := _begin()
+	var red := Color(0.82, 0.24, 0.22)
+	var yellow := Color(0.9, 0.74, 0.22)
+	var blue := Color(0.28, 0.46, 0.78)
+	var colors := [red, yellow, blue, red]
+	for i in 4:
+		_box(st, Vector3(0, 0.4, -0.12 + float(i) * 0.08), Vector3(1.05, 0.05, 0.055), colors[i])
+	_box(st, Vector3(0, 0.58, -0.16), Vector3(1.05, 0.16, 0.05), yellow)
+	_box(st, Vector3(0, 0.72, -0.16), Vector3(1.05, 0.08, 0.05), blue)
+	_box(st, Vector3(-0.42, 0.22, 0), Vector3(0.08, 0.4, 0.28), red)
+	_box(st, Vector3(0.42, 0.22, 0), Vector3(0.08, 0.4, 0.28), blue)
 	return _commit(st)
 
 static func _blossom() -> ArrayMesh:

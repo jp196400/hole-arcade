@@ -251,7 +251,14 @@ void fragment() {
 		float crack = step(0.975, crack_h) * step(0.42, crack_f.x) * step(crack_f.y, 0.08);
 		outc = mix(outc, outc * 0.62, crack);
 	}
-	if ((paint_mode > 0.5 && paint_mode < 1.5) || (paint_mode > 6.5 && paint_mode < 7.5)) {
+	if (paint_mode > 6.5 && paint_mode < 7.5 && motif > 5.5 && motif < 6.5) {
+		float wx = step(0.5, fract(xz.x * 2.2));
+		float wz = step(0.5, fract(xz.y * 2.2));
+		outc = mix(outc * 0.84, outc * 1.05, abs(wx - wz));
+		vec2 rc = abs(fract(xz * 0.07) - 0.5);
+		float fringe = step(0.4, max(rc.x, rc.y));
+		outc = mix(outc, outc * vec3(0.72, 0.55, 0.4), fringe * 0.4);
+	} else if ((paint_mode > 0.5 && paint_mode < 1.5) || (paint_mode > 6.5 && paint_mode < 7.5)) {
 		vec2 gc = floor(xz * 0.85);
 		float gh = thash(gc);
 		vec2 gf = fract(xz * 0.85) - 0.5;
@@ -288,12 +295,28 @@ void fragment() {
 			outc = mix(outc, outc * vec3(0.62, 0.58, 0.52), pebble * 0.85);
 		}
 		if (paint_mode > 2.5 && paint_mode < 3.5) {
-			vec2 wc = floor(xz * 0.22 + vec2(3.0, 1.0));
-			float wh = thash(wc);
-			vec2 wf = fract(xz * 0.22 + vec2(3.0, 1.0)) - 0.5;
-			float pud = 1.0 - smoothstep(0.04, 0.3, length(wf));
-			if (wh > 0.84) {
-				outc = mix(outc, vec3(0.18, 0.52, 0.82), pud * 0.8);
+			if (motif > 1.5 && motif < 2.5) {
+				vec2 lc = floor(xz * 2.1);
+				float lh = thash(lc);
+				vec2 lf = fract(xz * 2.1) - 0.5;
+				float leaf = 1.0 - smoothstep(0.02, 0.42, length(lf));
+				if (lh > 0.4) {
+					vec3 litter = vec3(0.46, 0.3, 0.12);
+					if (lh > 0.72) {
+						litter = vec3(0.16, 0.38, 0.14);
+					} else if (lh > 0.58) {
+						litter = vec3(0.55, 0.42, 0.16);
+					}
+					outc = mix(outc, litter, leaf * 0.62);
+				}
+			} else {
+				vec2 wc = floor(xz * 0.22 + vec2(3.0, 1.0));
+				float wh = thash(wc);
+				vec2 wf = fract(xz * 0.22 + vec2(3.0, 1.0)) - 0.5;
+				float pud = 1.0 - smoothstep(0.04, 0.3, length(wf));
+				if (wh > 0.84) {
+					outc = mix(outc, vec3(0.18, 0.52, 0.82), pud * 0.8);
+				}
 			}
 		}
 		if (paint_mode < 2.5 && motif > 6.5 && motif < 7.5) {
@@ -302,12 +325,19 @@ void fragment() {
 			vec2 cf = fract(xz * 0.2) - 0.5;
 			float crater = 1.0 - smoothstep(0.1, 0.4, length(cf));
 			if (ch > 0.7) {
-				outc = mix(outc, outc * 0.55, crater * 0.75);
+				outc = mix(outc, outc * 0.42, crater * 0.85);
+				float rim = smoothstep(0.28, 0.38, length(cf)) * (1.0 - smoothstep(0.38, 0.5, length(cf)));
+				outc = mix(outc, min(outc * 1.45, vec3(0.55)), rim);
 			}
+			float glow = step(0.965, thash(floor(xz * 3.4)));
+			vec3 lamp = thash(floor(xz * 3.4) + vec2(2.0, 5.0)) > 0.5 ? vec3(0.35, 0.78, 0.9) : vec3(0.92, 0.68, 0.32);
+			outc = mix(outc, lamp, glow * 0.7);
 		}
 		if (paint_mode < 2.5 && motif > 3.5 && motif < 4.5) {
-			float flake = step(0.9, ph);
-			outc = mix(outc, vec3(1.0), flake * pebble * 0.35);
+			float drift = vnoise(xz * 0.08);
+			outc = mix(outc, vec3(0.78, 0.86, 0.98), (1.0 - drift) * 0.34);
+			float flake = step(0.88, ph);
+			outc = mix(outc, vec3(0.93, 0.97, 1.0), flake * pebble * 0.4);
 		}
 	} else if (paint_mode > 3.5 && paint_mode < 4.5) {
 		vec2 drift = xz * 0.9 + vec2(TIME * 0.24, -TIME * 0.17);
@@ -317,7 +347,11 @@ void fragment() {
 		float glint = step(0.84, n2) * smoothstep(0.25, 0.8, n1);
 		outc = mix(outc, vec3(0.84, 0.95, 1.0), glint * 0.4);
 	} else if (paint_mode > 4.5 && paint_mode < 5.5) {
-		if (motif < 0.5) {
+		if (motif > 5.5 && motif < 6.5) {
+			float wx = step(0.5, fract(xz.x * 1.8));
+			float wz = step(0.5, fract(xz.y * 1.8));
+			outc = mix(outc * 0.86, outc * 1.04, abs(wx - wz));
+		} else if (motif < 0.5) {
 			vec2 sc = floor(xz * 1.15);
 			float sh = thash(sc);
 			vec2 sf = fract(xz * 1.15) - 0.5;
@@ -334,6 +368,11 @@ void fragment() {
 			float crack = step(0.97, ch) * step(0.44, cf.y) * step(cf.x, 0.07);
 			outc = mix(outc, outc * 0.66, crack);
 		}
+	} else if (paint_mode > 5.5 && paint_mode < 6.5 && motif > 5.5 && motif < 6.5) {
+		float seam = step(0.93, fract(xz.y * 1.05));
+		float board = thash(vec2(floor(xz.x * 0.28), floor(xz.y * 1.05)));
+		outc *= mix(0.78, 1.08, board);
+		outc = mix(outc, outc * 0.48, seam);
 	}
 	float edge = max(abs(xz.x), abs(xz.y));
 	float rim = smoothstep(70.5, 77.0, edge);
@@ -476,7 +515,7 @@ const LIFE_AMP := {
 	"ppalm": 0.045, "dpalm": 0.045, "hpine": 0.04, "htree": 0.05, "dcactus": 0.03,
 	"dtallcac": 0.028, "fwheat": 0.1, "fflower": 0.12, "blossom": 0.1, "pflag": 0.16,
 	"fballoon": 0.11, "hsnowman": 0.03, "gbread": 0.045, "skier": 0.04,
-	"roundtree": 0.035,
+	"roundtree": 0.035, "jvine": 0.12,
 }
 const HOLE_SHADER := """shader_type spatial;
 render_mode unshaded, cull_disabled, blend_mix, depth_draw_opaque;
@@ -619,6 +658,7 @@ var hash_taps := 0
 var hash_tap_ms := 0
 var test_badge: Button
 var play_btn: Button
+var level_lock_note: Label
 var block_start_until_up := false
 var hole_swirl := 0.28
 var shadow_slide := Vector3(0.28, 0.0, 0.16)
@@ -3328,17 +3368,26 @@ func _surf_candy(x: int, z: int) -> int:
 func _surf_jungle(x: int, z: int) -> int:
 	var fx := float(x)
 	var fz := float(z)
-	if absf(fx - sin(fz * 0.05) * 28.0) < 3.4:
+	# River sits to the right of the opening so the hole stands on leaf litter.
+	if absf(fx - 24.0 - sin(fz * 0.045) * 5.0) < 3.2 and fz > -52.0 and fz < 28.0:
 		return SURF_WATER
-	if absf(fz - cos(fx * 0.045) * 18.0) < 1.6:
+	if absf(fz + 8.0 - cos(fx * 0.04) * 3.0) < 1.3 and fx > -28.0 and fx < 16.0:
 		return SURF_DIRT
-	if _pond(x, z, -20.0, -24.0, 14.0, 12.0) or _pond(x, z, 34.0, 18.0, 12.0, 10.0) or _pond(x, z, 8.0, -48.0, 10.0, 10.0):
+	if fx * fx + fz * fz < 36.0 * 36.0:
+		return SURF_DIRT
+	if _pond(x, z, -28.0, -30.0, 12.0, 10.0) or _pond(x, z, 8.0, -40.0, 10.0, 9.0) or _pond(x, z, -40.0, 16.0, 14.0, 12.0):
 		return SURF_GRASS
 	return SURF_FIELD
 
 func _surf_pirate(x: int, z: int) -> int:
 	var fx := float(x)
 	var fz := float(z)
+	# Harbor in the opening view, with docks along both banks.
+	if fz < -7.0 and fz > -34.0:
+		if absf(absf(fx) - 17.5) < 2.4:
+			return SURF_WOOD
+		if absf(fx) < 14.0:
+			return SURF_WATER
 	var coast := 6.0 + sin(fx * 0.06) * 18.0
 	if fx >= -46.0 and fx <= -34.0 and fz > coast - 16.0 and fz < coast + 14.0:
 		return SURF_WOOD
@@ -3350,9 +3399,9 @@ func _surf_pirate(x: int, z: int) -> int:
 		return SURF_WATER
 	if fz > coast - 6.0:
 		return SURF_SAND
-	if _pond(x, z, -22.0, -40.0, 12.0, 10.0):
+	if _pond(x, z, -28.0, -40.0, 10.0, 8.0):
 		return SURF_CONCRETE
-	if absf(fx + 10.0 - sin(fz * 0.08) * 12.0) < 1.5 and fz < coast:
+	if absf(fx + 22.0) < 1.4 and fz < -34.0:
 		return SURF_DIRT
 	return SURF_GRASS
 
@@ -3393,18 +3442,23 @@ func _surf_desert(x: int, z: int) -> int:
 func _surf_toy(x: int, z: int) -> int:
 	if absi(x) >= 70 or absi(z) >= 70:
 		return SURF_WOOD
+	# Rug in front of the hole, and a smaller carpet off to the side.
+	if _pond(x, z, 0.0, -10.0, 12.0, 8.5):
+		return SURF_FIELD
+	if _pond(x, z, 18.0, -8.0, 6.5, 5.0):
+		return SURF_CONCRETE
 	var fx := float(x)
 	var fz := float(z)
-	if fx * fx + fz * fz < 18.0 * 18.0:
-		return SURF_GRASS
 	var ring := sqrt(fx * fx + fz * fz)
-	if ring > 40.0 and ring < 44.0:
+	if ring < 56.0:
 		return SURF_WOOD
+	if ring > 62.0 and ring < 66.0:
+		return SURF_FIELD
 	var bx := int(floor((fx + 66.0) / 12.0))
 	var bz := int(floor((fz + 66.0) / 12.0))
 	if (bx + bz) % 2 == 0:
 		return SURF_FIELD
-	return SURF_CONCRETE
+	return SURF_WOOD
 
 func _surf_space(x: int, z: int) -> int:
 	if _pond(x, z, 22.0, -26.0, 5.2, 4.0):
@@ -3728,9 +3782,9 @@ func _seed_ladder() -> void:
 func _theme_ids(layout: String) -> Array:
 	match layout:
 		"candy":
-			return ["lollypop", "donut", "canecandy", "gbread", "sweetcup", "coneic", "partycake", "ghouse", "ccastle"]
+			return ["lollypop", "donut", "canecandy", "gbread", "sweetcup", "coneic", "partycake", "candybench", "ghouse", "ccastle"]
 		"jungle":
-			return ["dinoegg", "fernleaf", "redshroom", "jrock", "raptord", "jpalm", "trike", "jpalmtall", "jhut", "tyrant", "brachio", "lavacone"]
+			return ["spottedegg", "dinonest", "dinobone", "fernleaf", "jvine", "redshroom", "raptord", "jpalm", "trike", "jpalmtall", "jhut", "tyrant", "brachio", "lavacone"]
 		"pirate":
 			return ["pbarrel", "pcrate", "pchest", "pcannon", "panchor", "ppalm", "prowboat", "pdock", "tavern", "pship", "plight"]
 		"snow":
@@ -3738,9 +3792,9 @@ func _theme_ids(layout: String) -> Array:
 		"desert":
 			return ["drock", "dcactus", "dpot", "dtallcac", "dcamel", "dtent", "dpalm", "dstall", "dadobe", "dpyramid", "dsphinx"]
 		"toy":
-			return ["tblock", "tball", "tracer", "teddybear", "ttruck", "bot", "toytrain", "twagon", "toyhouse", "blockfort"]
+			return ["tblock", "tball", "tracer", "teddybear", "ttruck", "bot", "toybench", "toytrain", "twagon", "toyhouse", "blockfort"]
 		"space":
-			return ["moonlet", "spacecrate", "astro", "spacerover", "satdish", "habitat", "stackrocket", "gantry"]
+			return ["satprobe", "astro", "antenna", "solarpanel", "spacerover", "satdish", "habitat", "stackrocket", "gantry"]
 		"haunt":
 			return ["hcandle", "hbat", "hcrow", "hpumpkin", "htomb", "hghost", "htree", "hcart", "hhouse", "hcrypt", "hmansion"]
 		"fair":
@@ -3853,10 +3907,10 @@ func _spawn_life() -> void:
 			_spawn_wander(["dcamel", "dcamel", "person_a"], 8, [SURF_SAND, SURF_DIRT], true)
 			_spawn_wander(people, 4, [SURF_CONCRETE, SURF_GRASS], true)
 		"toy":
-			_spawn_drive(["tracer", "ttruck", "tracer"], 7, [SURF_CONCRETE, SURF_FIELD])
-			_spawn_wander(["bot", "bot", "teddybear"], 6, [SURF_GRASS, SURF_CONCRETE, SURF_FIELD], true)
+			_spawn_drive(["tracer", "ttruck", "tracer"], 7, [SURF_WOOD, SURF_FIELD, SURF_CONCRETE])
+			_spawn_wander(["bot", "bot", "teddybear"], 6, [SURF_WOOD, SURF_CONCRETE, SURF_FIELD], true)
 		"space":
-			_spawn_drive(["spacerover"], 5, [SURF_CONCRETE])
+			_spawn_drive(["spacerover"], 5, [SURF_SAND, SURF_CONCRETE, SURF_DIRT])
 			_spawn_wander(["astro"], 7, [SURF_SAND, SURF_CONCRETE, SURF_DIRT], true)
 		"haunt":
 			_spawn_wander(["hghost", "hghost", "person_a"], 7, [SURF_GRASS, SURF_DIRT], true)
@@ -3876,9 +3930,9 @@ func _scatter_theme(layout: String) -> void:
 			_scatter_on(["sweetcup", "coneic"], 4, [SURF_GRASS, SURF_CONCRETE], 1.0)
 			_scatter_on(["ghouse"], 2, [SURF_GRASS], 1.0)
 		"jungle":
-			_scatter_on(["dinoegg", "fernleaf", "redshroom"], 12, [SURF_FIELD, SURF_GRASS], 1.0)
-			_scatter_on(["jpalm", "raptord"], 4, [SURF_GRASS, SURF_DIRT], 1.0)
-			_scatter_on(["jhut"], 2, [SURF_GRASS], 1.0)
+			_scatter_on(["spottedegg", "dinonest", "fernleaf", "jvine", "redshroom"], 12, [SURF_DIRT, SURF_FIELD, SURF_GRASS], 1.0)
+			_scatter_on(["jpalm", "raptord", "dinobone"], 5, [SURF_DIRT, SURF_GRASS], 1.0)
+			_scatter_on(["jhut"], 2, [SURF_DIRT, SURF_GRASS], 1.0)
 		"pirate":
 			_scatter_on(["pbarrel", "pcrate", "pchest", "pflag"], 10, [SURF_SAND, SURF_WOOD, SURF_GRASS], 1.0)
 			_scatter_on(["pcannon", "prowboat", "ppalm"], 4, [SURF_SAND, SURF_WOOD], 1.0)
@@ -3892,12 +3946,12 @@ func _scatter_theme(layout: String) -> void:
 			_scatter_on(["dtallcac", "dtent", "dpalm"], 4, [SURF_SAND], 1.0)
 			_scatter_on(["dstall"], 2, [SURF_SAND, SURF_DIRT], 1.0)
 		"toy":
-			_scatter_on(["tblock", "tball", "tracer"], 10, [SURF_FIELD, SURF_CONCRETE, SURF_GRASS], 1.0)
-			_scatter_on(["teddybear", "bot", "twagon"], 4, [SURF_GRASS, SURF_CONCRETE], 1.0)
-			_scatter_on(["toyhouse"], 2, [SURF_FIELD, SURF_CONCRETE], 1.0)
+			_scatter_on(["tblock", "tball", "tracer"], 10, [SURF_WOOD, SURF_FIELD, SURF_CONCRETE], 1.0)
+			_scatter_on(["teddybear", "bot", "twagon", "toybench"], 4, [SURF_WOOD, SURF_CONCRETE, SURF_FIELD], 1.0)
+			_scatter_on(["toyhouse"], 2, [SURF_WOOD, SURF_FIELD], 1.0)
 		"space":
-			_scatter_on(["moonlet", "spacecrate", "astro"], 8, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0)
-			_scatter_on(["spacerover", "satdish"], 3, [SURF_SAND, SURF_CONCRETE], 1.0)
+			_scatter_on(["satprobe", "astro", "solarpanel"], 8, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0)
+			_scatter_on(["spacerover", "satdish", "antenna"], 4, [SURF_SAND, SURF_CONCRETE], 1.0)
 			_scatter_on(["habitat"], 2, [SURF_CONCRETE, SURF_SAND], 1.0)
 		"haunt":
 			_scatter_on(["hcandle", "hbat", "hcrow", "hpumpkin"], 10, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
@@ -3931,9 +3985,9 @@ func _scatter_detail(layout: String) -> void:
 			_scatter_on(["pebbles", "blossom"], 7, [SURF_SAND, SURF_DIRT], 1.0)
 			_scatter_on(["puddle"], 2, [SURF_SAND], 1.0, Color(0.35, 0.72, 0.78))
 		"toy":
-			_scatter_on(["blossom", "pebbles"], 7, [SURF_FIELD, SURF_CONCRETE, SURF_GRASS], 1.0)
+			_scatter_on(["blossom", "pebbles"], 7, [SURF_WOOD, SURF_FIELD, SURF_CONCRETE], 1.0)
 		"space":
-			_scatter_on(["pebbles"], 6, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0, Color(0.72, 0.76, 0.84))
+			_scatter_on(["pebbles"], 6, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0, Color(0.42, 0.46, 0.54))
 		"haunt":
 			_scatter_on(["pebbles"], 6, [SURF_GRASS, SURF_DIRT], 1.0, Color(0.42, 0.4, 0.36))
 			_scatter_on(["puddle"], 3, [SURF_GRASS, SURF_DIRT], 1.0, Color(0.32, 0.42, 0.3))
@@ -3948,7 +4002,7 @@ func _signature_ids(layout: String) -> Array:
 		"candy":
 			return ["sweetcup", "coneic", "partycake", "ghouse"]
 		"jungle":
-			return ["raptord", "jpalm", "trike", "tyrant"]
+			return ["tyrant", "brachio", "trike", "jpalmtall"]
 		"pirate":
 			return ["pcannon", "ppalm", "prowboat", "pship"]
 		"snow":
@@ -3958,7 +4012,7 @@ func _signature_ids(layout: String) -> Array:
 		"toy":
 			return ["tracer", "teddybear", "bot", "toytrain"]
 		"space":
-			return ["astro", "spacerover", "satdish", "stackrocket"]
+			return ["stackrocket", "habitat", "satdish", "spacerover"]
 		"haunt":
 			return ["hpumpkin", "htomb", "hghost", "hhouse"]
 		"fair":
@@ -3993,9 +4047,9 @@ func _near_icons(layout: String) -> Array:
 	# Small bites only. Tall heroes are placed further out.
 	match layout:
 		"candy":
-			return ["lollypop", "donut", "gbread", "canecandy"]
+			return ["lollypop", "donut", "gbread", "canecandy", "candybench"]
 		"jungle":
-			return ["dinoegg", "redshroom", "jrock"]
+			return ["spottedegg", "dinobone", "fernleaf", "redshroom"]
 		"pirate":
 			return ["pbarrel", "pcrate", "pflag", "pchest"]
 		"snow":
@@ -4003,9 +4057,9 @@ func _near_icons(layout: String) -> Array:
 		"desert":
 			return ["drock", "dpot", "dcactus"]
 		"toy":
-			return ["tblock", "tball"]
+			return ["tblock", "tball", "toybench"]
 		"space":
-			return ["moonlet", "spacecrate"]
+			return ["satprobe", "solarpanel"]
 		"haunt":
 			return ["hcandle", "hbat", "hcrow", "hpumpkin"]
 		"fair":
@@ -4225,6 +4279,21 @@ func _vista_spot(id: String, p: Vector3, yaw: float = -1.0) -> void:
 		return
 	_place_id(id, p + Vector3(1.7, 0.0, 1.1), Vector3.ZERO, use)
 
+func _vista_mover(id: String, p: Vector3, surfs: Array, yaw: float = -1.0) -> void:
+	var use := yaw if yaw >= 0.0 else randf() * TAU
+	var dir := Vector3(sin(use), 0.0, cos(use))
+	if not _place_id(id, p, dir, use, 1.0, Color.WHITE, -1, 1, surfs):
+		p += Vector3(1.7, 0.0, 1.1)
+		if not _place_id(id, p, dir, use, 1.0, Color.WHITE, -1, 1, surfs):
+			return
+	props[props.size() - 1]["walk"] = surfs
+
+func _vista_boat(id: String, p: Vector3, yaw: float) -> void:
+	var dir := Vector3(sin(yaw), 0.0, cos(yaw))
+	if _place_id(id, p, dir, yaw, 1.0, Color.WHITE, -1, 2, [SURF_WATER]):
+		props[props.size() - 1]["walk"] = [SURF_WATER]
+		props[props.size() - 1].speed = 0.55
+
 func _dress_farm_vista() -> void:
 	var x0 := -26.0
 	var x1 := -14.0
@@ -4246,6 +4315,8 @@ func _dress_farm_vista() -> void:
 	_vista_spot("piglet", Vector3(-16.0, 0.0, -13.0))
 	_vista_spot("piglet", Vector3(-19.0, 0.0, -19.0))
 	_vista_spot("chicken", Vector3(-15.5, 0.0, -16.5))
+	_vista_spot("chicken", Vector3(6.4, 0.0, -6.6))
+	_vista_spot("chicken", Vector3(9.6, 0.0, -11.2))
 	_vista_spot("redbarn", Vector3(-28.0, 0.0, -16.0), 0.6)
 	_vista_spot("farmtractor", Vector3(20.0, 0.0, -8.0), 0.9)
 	_vista_spot("haybale", Vector3(7.0, 0.0, 12.0))
@@ -4270,21 +4341,40 @@ func _dress_vista(layout: String) -> void:
 			_vista_spot("canecandy", Vector3(-10, 0, -20))
 			_vista_spot("sweetcup", Vector3(22, 0, -8))
 			_vista_spot("coneic", Vector3(-8, 0, 16))
+			_vista_spot("candybench", Vector3(10, 0, -12), 0.4)
+			_vista_spot("candybench", Vector3(-14, 0, -8), 0.2)
 		"jungle":
-			_vista_spot("jpalmtall", Vector3(18, 0, -16))
-			_vista_spot("jpalm", Vector3(-18, 0, -14))
-			_vista_spot("fernleaf", Vector3(12, 0, -22))
-			_vista_spot("fernleaf", Vector3(-12, 0, -20))
-			_vista_spot("redshroom", Vector3(20, 0, -8))
-			_vista_spot("jhut", Vector3(-24, 0, -10))
-			_vista_spot("roundtree", Vector3(26, 0, -24))
+			_vista_mover("tyrant", Vector3(-18, 0, -16), [SURF_DIRT, SURF_GRASS, SURF_FIELD], 1.4)
+			_vista_mover("brachio", Vector3(-28, 0, -20), [SURF_DIRT, SURF_GRASS, SURF_FIELD], 1.2)
+			_vista_mover("trike", Vector3(12, 0, -15), [SURF_DIRT, SURF_GRASS, SURF_FIELD], 0.3)
+			_vista_mover("raptord", Vector3(-10, 0, -12), [SURF_DIRT, SURF_GRASS, SURF_FIELD], 1.6)
+			_vista_mover("raptord", Vector3(8, 0, -22), [SURF_DIRT, SURF_GRASS, SURF_FIELD], 0.8)
+			_vista_spot("dinonest", Vector3(-7, 0, -9), 0.4)
+			_vista_spot("spottedegg", Vector3(5.5, 0, -8), 0.2)
+			_vista_spot("spottedegg", Vector3(7.2, 0, -7.2), 1.1)
+			_vista_spot("dinobone", Vector3(14, 0, -10), 0.6)
+			_vista_spot("dinobone", Vector3(-6, 0, -18), 0.9)
+			_vista_spot("fernleaf", Vector3(-12, 0, -8))
+			_vista_spot("fernleaf", Vector3(6, 0, -16))
+			_vista_spot("fernleaf", Vector3(16, 0, -20))
+			_vista_spot("jpalm", Vector3(-16, 0, -22))
+			_vista_spot("jpalmtall", Vector3(16, 0, -26))
+			_vista_spot("jvine", Vector3(-14, 0, -10))
+			_vista_spot("jvine", Vector3(10, 0, -12))
+			_vista_spot("redshroom", Vector3(4, 0, -14))
+			_vista_spot("jhut", Vector3(-26, 0, -14))
+			_vista_spot("lavacone", Vector3(30, 0, -32), 0.5)
 		"pirate":
-			_vista_spot("ppalm", Vector3(16, 0, -14))
-			_vista_spot("ppalm", Vector3(-18, 0, -16))
-			_vista_spot("pbarrel", Vector3(12, 0, -8))
-			_vista_spot("pcrate", Vector3(-12, 0, -10))
-			_vista_spot("pflag", Vector3(22, 0, -20))
-			_vista_spot("tavern", Vector3(-24, 0, -12))
+			_vista_spot("pdock", Vector3(17.5, 0, -16), 1.57)
+			_vista_spot("pdock", Vector3(-17.5, 0, -22), 1.57)
+			_vista_spot("pdock", Vector3(17.5, 0, -26), 1.57)
+			_vista_boat("prowboat", Vector3(12, 0, -16), 0.4)
+			_vista_boat("prowboat", Vector3(-12, 0, -24), 2.6)
+			_vista_spot("ppalm", Vector3(24, 0, -14))
+			_vista_spot("ppalm", Vector3(-24, 0, -16))
+			_vista_spot("pbarrel", Vector3(20, 0, -12))
+			_vista_spot("pflag", Vector3(26, 0, -20))
+			_vista_spot("tavern", Vector3(-26, 0, -12))
 		"snow":
 			_vista_spot("hpine", Vector3(16, 0, -16))
 			_vista_spot("hpine", Vector3(-18, 0, -14))
@@ -4305,15 +4395,18 @@ func _dress_vista(layout: String) -> void:
 			_vista_spot("tball", Vector3(10, 0, -8))
 			_vista_spot("teddybear", Vector3(-18, 0, -8))
 			_vista_spot("toyhouse", Vector3(22, 0, -18))
-			_vista_spot("bot", Vector3(-10, 0, 12))
+			_vista_spot("bot", Vector3(-10, 0, -12))
+			_vista_spot("toybench", Vector3(8, 0, -16), 0.3)
 		"space":
-			_vista_spot("habitat", Vector3(-20, 0, -14))
-			_vista_spot("spacerover", Vector3(12, 0, -8))
-			_vista_spot("satdish", Vector3(16, 0, -18))
-			_vista_spot("moonlet", Vector3(-10, 0, -18))
-			_vista_spot("spacecrate", Vector3(-14, 0, 10))
-			_vista_spot("stackrocket", Vector3(26, 0, -12))
-			_vista_spot("astro", Vector3(8, 0, -14))
+			_vista_spot("habitat", Vector3(-22, 0, -16), 0.6)
+			_vista_mover("spacerover", Vector3(14, 0, -12), [SURF_SAND, SURF_CONCRETE, SURF_DIRT], 0.8)
+			_vista_spot("satdish", Vector3(-16, 0, -24), 0.4)
+			_vista_spot("stackrocket", Vector3(24, 0, -18), 0.3)
+			_vista_mover("astro", Vector3(10, 0, -14), [SURF_SAND, SURF_CONCRETE, SURF_DIRT], 2.4)
+			_vista_spot("antenna", Vector3(18, 0, -14), 0.2)
+			_vista_spot("solarpanel", Vector3(-12, 0, -14), 0.5)
+			_vista_spot("solarpanel", Vector3(8, 0, -20), 0.9)
+			_vista_spot("satprobe", Vector3(6, 0, -9), 0.7)
 		"haunt":
 			_vista_spot("htree", Vector3(16, 0, -16))
 			_vista_spot("htree", Vector3(-18, 0, -14))
@@ -4340,7 +4433,7 @@ func _coat_for(id: String) -> Color:
 		"cow":
 			return Color(1.02, 1.0, 0.98)
 		"chicken":
-			return Color(1.02, 1.0, 0.94)
+			return Color(1.06, 1.04, 0.98)
 		"farmtractor":
 			return Color(0.9, 1.06, 0.88)
 		"redbarn":
@@ -4367,7 +4460,7 @@ func _tint_animals() -> void:
 func _swallow_bucket(id: String) -> String:
 	if id in ["sedan", "taxi", "hatch", "van", "police", "truck", "bus", "tractor", "forklift", "rover", "toycar", "bumper", "farmtractor", "pickup", "tracer", "ttruck", "spacerover", "fbumper", "snowmobile", "hsled"]:
 		return "cars"
-	if id in ["tree_small", "tree_large", "tree_simple", "palm", "pine", "fern", "cactus", "jpalm", "jpalmtall", "ppalm", "hpine", "dcactus", "dtallcac", "dpalm", "fernleaf", "htree", "roundtree"]:
+	if id in ["tree_small", "tree_large", "tree_simple", "palm", "pine", "fern", "cactus", "jpalm", "jpalmtall", "ppalm", "hpine", "dcactus", "dtallcac", "dpalm", "fernleaf", "htree", "roundtree", "jvine"]:
 		return "trees"
 	if id in ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "house_a", "house_b", "house_c", "tower_a", "tower_c", "barn", "shop", "apartment", "warehouse", "gazebo", "cabana", "landmark", "windmill", "crane", "silo", "coop", "candyhouse", "candycastle", "cabin", "igloo", "chapel", "pyramid", "oasisgate", "dollhouse", "brickfort", "dome", "station", "crypt", "mansion", "fort", "volcano", "booth", "redbarn", "grainsilo", "farmmill", "ghouse", "ccastle", "jhut", "lavacone", "tavern", "plight", "hcabin", "skilift", "icecastle", "dadobe", "dpyramid", "dsphinx", "toyhouse", "blockfort", "habitat", "stackrocket", "gantry", "hhouse", "hcrypt", "hmansion", "carousel", "ferris"]:
 		return "buildings"
@@ -4450,18 +4543,18 @@ func _dress_districts() -> void:
 	match layout:
 		"candy":
 			_place_landmark("ccastle", [SURF_GRASS, SURF_FIELD, SURF_CONCRETE])
-			_cluster(["lollypop", "donut", "canecandy", "sweetcup", "bench", "planter"], 32, _district_center(4), 12.0, [SURF_GRASS, SURF_CONCRETE, SURF_FIELD])
+			_cluster(["lollypop", "donut", "canecandy", "sweetcup", "candybench"], 32, _district_center(4), 12.0, [SURF_GRASS, SURF_CONCRETE, SURF_FIELD])
 			_cluster(["ghouse", "partycake", "coneic", "lamp"], 14, _district_center(0), 11.0, [SURF_GRASS, SURF_FIELD])
-			_cluster(["crate", "bin", "planter"], 16, _district_center(8), 10.0, [SURF_CONCRETE, SURF_GRASS])
+			_cluster(["candybench", "sweetcup", "donut"], 16, _district_center(8), 10.0, [SURF_CONCRETE, SURF_GRASS])
 		"jungle":
 			_place_landmark("lavacone", land)
-			_cluster(["fernleaf", "jpalm", "redshroom", "jrock", "bush"], 28, _district_center(4), 13.0, land)
-			_cluster(["jhut", "jpalmtall", "raptord"], 12, _district_center(2), 12.0, [SURF_GRASS, SURF_DIRT])
-			_cluster(["tree_large", "fernleaf"], 14, _district_center(6), 12.0, [SURF_GRASS, SURF_FIELD])
+			_cluster(["fernleaf", "jpalm", "jvine", "redshroom", "dinonest", "spottedegg"], 28, _district_center(4), 13.0, [SURF_DIRT, SURF_GRASS, SURF_FIELD])
+			_cluster(["jhut", "jpalmtall", "raptord", "trike", "dinobone"], 14, _district_center(2), 12.0, [SURF_DIRT, SURF_GRASS])
+			_cluster(["jpalm", "fernleaf", "jvine"], 14, _district_center(6), 12.0, [SURF_GRASS, SURF_FIELD, SURF_DIRT])
 		"pirate":
 			_place_landmark("plight", [SURF_SAND, SURF_GRASS, SURF_WOOD, SURF_DIRT])
-			_cluster(["pbarrel", "pcrate", "pchest", "pcannon", "crate"], 26, _district_center(4), 12.0, [SURF_SAND, SURF_WOOD, SURF_GRASS])
-			_cluster(["ppalm", "pflag", "bench"], 14, _district_center(2), 12.0, [SURF_SAND, SURF_GRASS])
+			_cluster(["pbarrel", "pcrate", "pchest", "pcannon", "pdock"], 26, _district_center(4), 12.0, [SURF_SAND, SURF_WOOD, SURF_GRASS])
+			_cluster(["ppalm", "pflag", "pbarrel"], 14, _district_center(2), 12.0, [SURF_SAND, SURF_GRASS])
 			_cluster(["tavern", "panchor", "lamp"], 10, _district_center(6), 11.0, [SURF_GRASS, SURF_DIRT, SURF_WOOD])
 		"snow":
 			_place_landmark("icecastle", [SURF_SAND, SURF_GRASS, SURF_CONCRETE])
@@ -4474,15 +4567,15 @@ func _dress_districts() -> void:
 			_cluster(["dpalm", "dtent", "dstall"], 12, _district_center(2), 12.0, [SURF_SAND, SURF_GRASS])
 			_cluster(["dadobe", "crate", "lamp"], 10, _district_center(8), 11.0, [SURF_DIRT, SURF_CONCRETE, SURF_SAND])
 		"toy":
-			_place_landmark("blockfort", [SURF_FIELD, SURF_CONCRETE, SURF_GRASS])
-			_cluster(["tblock", "tball", "teddybear", "bench"], 26, _district_center(4), 12.0, [SURF_FIELD, SURF_CONCRETE, SURF_GRASS])
-			_cluster(["toyhouse", "twagon", "planter"], 12, _district_center(0), 11.0, [SURF_FIELD, SURF_CONCRETE])
-			_cluster(["bot", "crate", "lamp"], 12, _district_center(8), 10.0, [SURF_GRASS, SURF_CONCRETE])
+			_place_landmark("blockfort", [SURF_WOOD, SURF_FIELD, SURF_CONCRETE])
+			_cluster(["tblock", "tball", "teddybear", "toybench"], 26, _district_center(4), 12.0, [SURF_WOOD, SURF_FIELD, SURF_CONCRETE])
+			_cluster(["toyhouse", "twagon", "toybench"], 12, _district_center(0), 11.0, [SURF_WOOD, SURF_FIELD, SURF_CONCRETE])
+			_cluster(["bot", "tblock", "lamp"], 12, _district_center(8), 10.0, [SURF_WOOD, SURF_CONCRETE])
 		"space":
 			_place_landmark("gantry", [SURF_SAND, SURF_CONCRETE, SURF_DIRT])
-			_cluster(["moonlet", "spacecrate", "satdish"], 20, _district_center(4), 12.0, [SURF_SAND, SURF_CONCRETE, SURF_DIRT])
-			_cluster(["habitat", "spacerover", "lamp"], 12, _district_center(2), 11.0, [SURF_CONCRETE, SURF_SAND])
-			_cluster(["crate", "bin", "planter"], 12, _district_center(6), 10.0, [SURF_CONCRETE, SURF_DIRT])
+			_cluster(["satdish", "solarpanel", "antenna", "satprobe"], 20, _district_center(4), 12.0, [SURF_SAND, SURF_CONCRETE, SURF_DIRT])
+			_cluster(["habitat", "spacerover", "astro"], 12, _district_center(2), 11.0, [SURF_CONCRETE, SURF_SAND, SURF_DIRT])
+			_cluster(["antenna", "solarpanel", "satprobe"], 12, _district_center(6), 10.0, [SURF_CONCRETE, SURF_DIRT, SURF_SAND])
 		"haunt":
 			_place_landmark("hmansion", [SURF_GRASS, SURF_DIRT, SURF_FIELD])
 			_cluster(["htomb", "hpumpkin", "hcandle", "htree"], 24, _district_center(4), 12.0, [SURF_GRASS, SURF_DIRT])
@@ -5175,8 +5268,8 @@ func _build_ui() -> void:
 	next_lbl = Label.new()
 	next_lbl.anchor_left = 0.5
 	next_lbl.anchor_right = 0.5
-	next_lbl.offset_left = -300
-	next_lbl.offset_right = 300
+	next_lbl.offset_left = -340
+	next_lbl.offset_right = 340
 	next_lbl.offset_top = 178
 	next_lbl.offset_bottom = 214
 	next_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -5594,6 +5687,12 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if ad_hold:
+		return
+	# A picker or menu sheet is up. A missed button must not fall through into a round.
+	if menu_layer != null and menu_layer.visible and (event is InputEventMouseButton or event is InputEventScreenTouch or event is InputEventScreenDrag or event is InputEventMouseMotion):
+		get_viewport().set_input_as_handled()
+		ui_swallow_frames = 4
+		joy_held = false
 		return
 	if block_start_until_up:
 		var released := false
@@ -6052,6 +6151,14 @@ func _wake_goal() -> void:
 	if next_bg:
 		next_bg.modulate.a = 1.0
 
+func _skin_goal_banner(p: Dictionary) -> String:
+	var label := str(p.get("label", "Challenge"))
+	var cur := int(p.get("cur", 0))
+	var need := maxi(int(p.get("need", 1)), 1)
+	if str(p.get("unit", "")) == "" or need <= 1:
+		return "Skin goal: %s" % label
+	return "Skin goal: %s %s / %s" % [label, _grouped(mini(cur, need)), _grouped(need)]
+
 func _refresh_next_skin() -> void:
 	if next_lbl == null:
 		return
@@ -6072,7 +6179,7 @@ func _refresh_next_skin() -> void:
 		return
 	var skin: Dictionary = nxt.skin
 	var prog: Dictionary = nxt.progress
-	var line := _goal_line(prog)
+	var line := _skin_goal_banner(prog)
 	var key := "%s|%d" % [line, int(round(float(prog.ratio) * 100.0))]
 	if key != goal_seen:
 		goal_seen = key
@@ -8766,8 +8873,8 @@ func _build_chrome() -> void:
 	hand_icon.anchor_bottom = 1.0
 	hand_icon.offset_left = -28
 	hand_icon.offset_right = 28
-	hand_icon.offset_top = -(SAFE_BOTTOM + 156)
-	hand_icon.offset_bottom = -(SAFE_BOTTOM + 100)
+	hand_icon.offset_top = -(SAFE_BOTTOM + 186)
+	hand_icon.offset_bottom = -(SAFE_BOTTOM + 130)
 	hand_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hand_icon.pivot_offset = Vector2(28, 28)
 	chrome_layer.add_child(hand_icon)
@@ -8780,11 +8887,11 @@ func _build_chrome() -> void:
 	row.anchor_right = 0.5
 	row.anchor_top = 1.0
 	row.anchor_bottom = 1.0
-	row.offset_left = -250
-	row.offset_right = 250
-	row.offset_top = -(SAFE_BOTTOM + 92)
+	row.offset_left = -340
+	row.offset_right = 340
+	row.offset_top = -(SAFE_BOTTOM + 118)
 	row.offset_bottom = -SAFE_BOTTOM
-	row.add_theme_constant_override("separation", 14)
+	row.add_theme_constant_override("separation", 8)
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	chrome_layer.add_child(row)
 	var specs := [
@@ -8792,7 +8899,7 @@ func _build_chrome() -> void:
 		["levels", "Levels", "levels"],
 		["shop", "Shop", "shop"],
 		["settings", "Settings", "settings"],
-		["ads", "No Ads", "ads"],
+		["ads", "No ads", "ads"],
 	]
 	for spec in specs:
 		var b := _icon_button(str(spec[0]), str(spec[1]))
@@ -8801,6 +8908,8 @@ func _build_chrome() -> void:
 			b.pressed.connect(_confirm_remove_ads)
 		elif screen_name == "settings":
 			b.pressed.connect(_open_settings_menu)
+		elif screen_name == "levels":
+			b.pressed.connect(_open_level_picker)
 		else:
 			b.pressed.connect(_show_screen.bind(screen_name))
 		row.add_child(b)
@@ -8828,8 +8937,9 @@ func _icon_button(glyph: String, tip: String) -> Button:
 	var b := Button.new()
 	b.text = ""
 	b.tooltip_text = tip
-	b.custom_minimum_size = Vector2(84, 84)
-	b.size = Vector2(84, 84)
+	b.custom_minimum_size = Vector2(128, 118)
+	b.size = Vector2(128, 118)
+	b.mouse_filter = Control.MOUSE_FILTER_STOP
 	var box := _round_style(BRAND_CREAM)
 	b.add_theme_stylebox_override("normal", box)
 	b.add_theme_stylebox_override("hover", _round_style(Color(1, 1, 1)))
@@ -8837,11 +8947,22 @@ func _icon_button(glyph: String, tip: String) -> Button:
 	b.add_theme_stylebox_override("focus", box)
 	var icon := UiGlyph.new()
 	icon.glyph = glyph
-	icon.position = Vector2(16, 16)
+	icon.position = Vector2(38, 8)
 	icon.size = Vector2(52, 52)
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	b.add_child(icon)
-	b.pivot_offset = Vector2(42, 42)
+	var cap := Label.new()
+	cap.text = tip
+	cap.position = Vector2(0, 64)
+	cap.size = Vector2(128, 44)
+	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cap.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_style(cap, 20)
+	cap.add_theme_color_override("font_color", BRAND_INK)
+	cap.add_theme_constant_override("outline_size", 0)
+	b.add_child(cap)
+	b.pivot_offset = Vector2(64, 59)
 	b.button_down.connect(_bounce_down.bind(b))
 	b.button_up.connect(_bounce_up.bind(b))
 	b.pressed.connect(_ui_click)
@@ -9111,10 +9232,30 @@ func _refresh_test_badge() -> void:
 func _open_level_picker() -> void:
 	_show_screen("levels")
 
-func _pick_level(index: int) -> void:
+func _pick_level(index: int, lock: Control = null) -> void:
 	if not _level_open(index):
+		_deny_locked_level(lock)
 		return
 	start_round(index)
+
+func _deny_locked_level(lock: Control) -> void:
+	var need := Save.unlocked_level + 1
+	if level_lock_note:
+		level_lock_note.text = "Clear Level %d to unlock" % need
+		level_lock_note.modulate.a = 1.0
+	if lock == null:
+		return
+	var prev = lock.get_meta("shake", null)
+	if prev is Tween and (prev as Tween).is_valid():
+		(prev as Tween).kill()
+	lock.pivot_offset = lock.size * 0.5
+	lock.rotation = 0.0
+	var tw := create_tween()
+	lock.set_meta("shake", tw)
+	tw.tween_property(lock, "rotation_degrees", 14.0, 0.05)
+	tw.tween_property(lock, "rotation_degrees", -12.0, 0.06)
+	tw.tween_property(lock, "rotation_degrees", 8.0, 0.05)
+	tw.tween_property(lock, "rotation_degrees", 0.0, 0.05)
 
 func _on_play() -> void:
 	var i := map_index
@@ -9125,11 +9266,16 @@ func _on_play() -> void:
 func _screen_levels() -> void:
 	_screen_header("Levels")
 	_add_currency_pills(MENU_HEADER_Y + 92.0)
+	level_lock_note = _menu_label("", Vector2(36, MENU_HEADER_Y + 164.0), 28)
+	level_lock_note.size = Vector2(648, 44)
+	level_lock_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	level_lock_note.add_theme_color_override("font_color", Color(0.72, 0.18, 0.16))
+	_menu_add(level_lock_note)
 	var scroll := ScrollContainer.new()
 	scroll.anchor_right = 1.0
 	scroll.anchor_bottom = 1.0
 	scroll.offset_left = 28
-	scroll.offset_top = MENU_HEADER_Y + 176.0
+	scroll.offset_top = MENU_HEADER_Y + 214.0
 	scroll.offset_right = -28
 	scroll.offset_bottom = -(SAFE_BOTTOM + 12)
 	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -9535,13 +9681,20 @@ func _level_card(index: int, m: Dictionary) -> Control:
 		color = Color(0.45, 0.5, 0.58)
 	var card := _make_button("%d    %s" % [index + 1, str(m.name)], Vector2.ZERO, Vector2(640, 92), color, 32)
 	card.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	card.disabled = not open
-	if open:
-		card.pressed.connect(_pick_level.bind(index))
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	var lock: UiGlyph = null
+	if not open:
+		lock = UiGlyph.new()
+		lock.glyph = "lock"
+		lock.position = Vector2(576, 22)
+		lock.size = Vector2(48, 48)
+		lock.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card.add_child(lock)
+	card.pressed.connect(_pick_level.bind(index, lock))
 	var sub := Label.new()
 	sub.text = state
-	sub.position = Vector2(360, 26)
-	sub.size = Vector2(260, 40)
+	sub.position = Vector2(300, 26)
+	sub.size = Vector2(260 if open else 220, 40)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_style(sub, 24)
 	sub.add_theme_color_override("font_color", Color.WHITE)
@@ -9638,6 +9791,9 @@ class UiGlyph extends Control:
 				var a := TAU * float(i) / 8.0
 				var dir := Vector2(cos(a), sin(a))
 				draw_line(c + dir * 9, c + dir * 14, ink, 2.6)
+		elif glyph == "lock":
+			draw_arc(c + Vector2(0, -4), 8, PI, TAU, 14, Color.WHITE, 3.0, true)
+			draw_rect(Rect2(c + Vector2(-10, -2), Vector2(20, 16)), Color.WHITE, true)
 		elif glyph == "hand":
 			draw_circle(c + Vector2(0, 6), 10, Color(1, 1, 1, 0.95))
 			draw_rect(Rect2(c + Vector2(-4, -16), Vector2(8, 18)), Color(1, 1, 1, 0.95), true)

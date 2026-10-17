@@ -178,12 +178,17 @@ static func _bin() -> ArrayMesh:
 
 static func _bench() -> ArrayMesh:
 	var st := _begin()
-	var wood := Color(0.58, 0.40, 0.24)
-	var iron := Color(0.35, 0.38, 0.42)
-	_box(st, Vector3(0, 0.42, 0), Vector3(1.16, 0.06, 0.34), wood)
-	_box(st, Vector3(0, 0.62, -0.14), Vector3(1.16, 0.32, 0.05), wood)
-	_box(st, Vector3(-0.46, 0.22, 0), Vector3(0.06, 0.44, 0.30), iron)
-	_box(st, Vector3(0.46, 0.22, 0), Vector3(0.06, 0.44, 0.30), iron)
+	var wood := Color(0.62, 0.44, 0.26)
+	var gap := Color(0.4, 0.28, 0.16)
+	var iron := Color(0.32, 0.34, 0.38)
+	for i in 4:
+		_box(st, Vector3(0, 0.42, -0.12 + float(i) * 0.08), Vector3(1.1, 0.05, 0.05), wood if i % 2 == 0 else gap)
+	for i in 3:
+		_box(st, Vector3(0, 0.56 + float(i) * 0.1, -0.16), Vector3(1.1, 0.05, 0.045), wood)
+	_box(st, Vector3(-0.48, 0.22, 0.02), Vector3(0.05, 0.4, 0.28), iron)
+	_box(st, Vector3(0.48, 0.22, 0.02), Vector3(0.05, 0.4, 0.28), iron)
+	_box(st, Vector3(-0.48, 0.62, -0.16), Vector3(0.05, 0.36, 0.05), iron)
+	_box(st, Vector3(0.48, 0.62, -0.16), Vector3(0.05, 0.36, 0.05), iron)
 	return _commit(st)
 
 static func _picnic() -> ArrayMesh:
