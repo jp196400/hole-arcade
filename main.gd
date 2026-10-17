@@ -480,11 +480,11 @@ void fragment() {
 		outc = mix(outc, walk, band * 0.82);
 	}
 	if (motif > 1.5 && motif < 2.5) {
-		vec2 pond = (xz - vec2(2.2, 5.4)) / vec2(3.2, 2.35);
+		vec2 pond = (xz - vec2(3.6, 8.8)) / vec2(2.5, 1.85);
 		float pd = length(pond);
 		float water_m = 1.0 - smoothstep(0.78, 1.05, pd);
 		float shore = smoothstep(0.92, 1.12, pd) * (1.0 - smoothstep(1.12, 1.45, pd));
-		if (water_m > 0.001) {
+		if (water_m > 0.001 && rd > 1.55) {
 			vec3 water = mix(vec3(0.05, 0.24, 0.4), vec3(0.14, 0.42, 0.58), shade);
 			vec2 drift = xz * 0.85 + vec2(TIME * 0.24, -TIME * 0.17);
 			float n1 = vnoise(drift * 1.6);
@@ -494,7 +494,9 @@ void fragment() {
 			water = mix(water, vec3(0.78, 0.92, 0.98), glint * 0.4);
 			outc = mix(outc, water, water_m);
 		}
-		outc = mix(outc, vec3(0.36, 0.28, 0.16), shore * 0.75);
+		if (rd > 1.55) {
+			outc = mix(outc, vec3(0.36, 0.28, 0.16), shore * 0.75);
+		}
 		if (paint_mode > 0.5 && paint_mode < 1.5) {
 			float moss2 = vnoise(xz * 0.22);
 			outc = mix(outc, outc * vec3(0.78, 1.04, 0.74), smoothstep(0.4, 0.82, moss2) * 0.22);
@@ -506,7 +508,7 @@ void fragment() {
 	if (motif > 6.5 && motif < 7.5 && paint_mode > 0.5) {
 		vec2 panel = abs(fract(xz * 0.22) - 0.5);
 		float seam = smoothstep(0.46, 0.5, max(panel.x, panel.y));
-		outc = mix(outc, outc * 0.62, seam * 0.7);
+		outc = mix(outc, outc * 0.84, seam * 0.45);
 	}
 	float edge = max(abs(xz.x), abs(xz.y));
 	float rim = smoothstep(70.5, 77.0, edge);
@@ -1108,6 +1110,10 @@ func _ready() -> void:
 		call_deferred("_enter_attract", 4)
 	elif preview == "toast":
 		call_deferred("_preview_toast")
+	elif preview == "spaced":
+		call_deferred("_preview_spaced")
+	elif preview == "lanes":
+		call_deferred("_preview_lanes")
 	elif preview.begins_with("road"):
 		var road_rest := preview.substr(4)
 		var road_idx := 0
@@ -1173,6 +1179,66 @@ func _preview_toast() -> void:
 		mile_pill.visible = true
 		mile_pill.modulate.a = 1.0
 	print("TOAST combo %d snacks %d mile %s" % [combo, snacks.size(), mile])
+
+func _preview_spaced() -> void:
+	start_round(1)
+	for _i in 66:
+		_tick_movers(1.0 / 30.0)
+	_report_lane("candy-2.2s")
+
+func _preview_lanes() -> void:
+	for idx in [1, 3, 2, 7]:
+		start_round(idx)
+		_report_lane("%s-0" % str(map.get("layout", "")))
+		for _i in 90:
+			_tick_movers(1.0 / 30.0)
+		_report_lane("%s-3s" % str(map.get("layout", "")))
+	print("LANE DONE")
+
+func _report_lane(tag: String) -> void:
+	var cars: Array = []
+	for o in props:
+		if _is_road_car(o):
+			cars.append(o)
+	var worst := 99.0
+	var pair := ""
+	for i in cars.size():
+		for j in range(i + 1, cars.size()):
+			var a: Vector3 = cars[i].pos
+			var b: Vector3 = cars[j].pos
+			var d := Vector2(a.x - b.x, a.z - b.z).length()
+			if d < worst:
+				worst = d
+				pair = "%s/%s" % [kind_id_of(int(cars[i].kind)), kind_id_of(int(cars[j].kind))]
+	var road_n := 0
+	var shown := 0
+	for o in props:
+		if int(o.mover) == 2:
+			continue
+		if _surf_f(o.pos.x, o.pos.z) != SURF_ROAD:
+			continue
+		road_n += 1
+		if shown < 4:
+			var rp: Vector3 = o.pos
+			print("ROADPROP %s %s at %.1f %.1f" % [tag, kind_id_of(int(o.kind)), rp.x, rp.z])
+			shown += 1
+	var curb := 99.0
+	for o in props:
+		if int(o.mover) == 2:
+			continue
+		var op: Vector3 = o.pos
+		if absf(op.z - 4.6) > 3.2 or absf(op.x) > 16.0:
+			continue
+		var reach := float(o.size)
+		var gap := absf(op.z - 4.58) - reach
+		curb = minf(curb, gap)
+	print("LANE %s cars %d min %.2f pair %s roadprops %d curb %.2f" % [tag, cars.size(), worst, pair, road_n, curb])
+	for o in props:
+		if not _is_road_car(o):
+			continue
+		var p: Vector3 = o.pos
+		if absf(p.x) < 12.0 and p.z > 1.5 and p.z < 6.5:
+			print("LANE CAR %s %s at %.2f %.2f spd %.2f" % [tag, kind_id_of(int(o.kind)), p.x, p.z, float(o.speed)])
 
 func _preview_road(idx: int) -> void:
 	quality_locked = true
@@ -3260,7 +3326,118 @@ func _register_scaled(id: String, info: Dictionary, target: float, role: String,
 	kind_by_id[id] = prop_defs.size() - 1
 
 func _register_glb(id: String, path: String, target: float, role: String, points: int) -> void:
-	_register_scaled(id, _load_model(path, true), target, role, points)
+	var info := _load_model(path, true)
+	if id == "jpalm" or id == "jpalmtall":
+		info = _palm_trunk(info, target)
+	_register_scaled(id, info, target, role, points)
+
+func _palm_trunk(info: Dictionary, target: float) -> Dictionary:
+	# Kenney palms read as flat green shards from above. A thick warm trunk
+	# is added in mesh space so the top-down camera sees bark, not a sliver.
+	var mesh := info.mesh as ArrayMesh
+	if mesh == null or mesh.get_surface_count() < 1:
+		return info
+	var arrays: Array = mesh.surface_get_arrays(0)
+	var vert_var = arrays[Mesh.ARRAY_VERTEX]
+	if not (vert_var is PackedVector3Array):
+		return info
+	var verts: PackedVector3Array = vert_var
+	if verts.is_empty():
+		return info
+	var indices := PackedInt32Array()
+	var index_var = arrays[Mesh.ARRAY_INDEX]
+	if index_var is PackedInt32Array:
+		indices = index_var
+	if indices.is_empty():
+		indices.resize(verts.size())
+		for vi in verts.size():
+			indices[vi] = vi
+	var norms := PackedVector3Array()
+	var norm_var = arrays[Mesh.ARRAY_NORMAL]
+	if norm_var is PackedVector3Array:
+		norms = norm_var
+	var cols := PackedColorArray()
+	var col_var = arrays[Mesh.ARRAY_COLOR]
+	if col_var is PackedColorArray:
+		cols = col_var
+	var uvs := PackedVector2Array()
+	var uv_var = arrays[Mesh.ARRAY_TEX_UV]
+	if uv_var is PackedVector2Array:
+		uvs = uv_var
+	var tangents := PackedFloat32Array()
+	var tan_var = arrays[Mesh.ARRAY_TANGENT]
+	if tan_var is PackedFloat32Array:
+		tangents = tan_var
+	if cols.size() != verts.size():
+		cols = PackedColorArray()
+		cols.resize(verts.size())
+		cols.fill(Color(0.32, 0.52, 0.2, 1.0))
+	var has_n := norms.size() == verts.size()
+	var has_u := uvs.size() == verts.size()
+	var has_t := tangents.size() == verts.size() * 4
+	var size: Vector3 = info.size
+	var measured := maxf(float(info.base), 0.02)
+	var half_vis := maxf(size.x, size.z) * 0.42
+	var basis := maxf(measured, half_vis)
+	var scale := target / basis
+	if size.y * scale > 9.0:
+		scale = 9.0 / maxf(size.y, 0.05)
+	scale = maxf(scale, 0.05)
+	var radius := 0.52 / scale
+	var y0 := minf(0.04, size.y * 0.04)
+	var y1 := size.y * 0.76
+	var lean := Vector3(0.72, 0.0, 0.38) / scale
+	var sides := 8
+	var bark_lo := Color(0.55, 0.30, 0.12, 1.0)
+	var bark_hi := Color(0.68, 0.40, 0.16, 1.0)
+	var base_v := verts.size()
+	for i in sides:
+		var ang := TAU * float(i) / float(sides)
+		var dir := Vector3(cos(ang), 0.0, sin(ang))
+		verts.append(dir * radius * 1.3 + Vector3(0.0, y0, 0.0))
+		verts.append(dir * radius * 0.76 + Vector3(0.0, y1, 0.0) + lean)
+		if has_n:
+			norms.append(dir)
+			norms.append(dir)
+		cols.append(bark_lo)
+		cols.append(bark_hi)
+		if has_u:
+			var u := float(i) / float(sides)
+			uvs.append(Vector2(u, 0.02))
+			uvs.append(Vector2(u, 0.84))
+		if has_t:
+			for _n in 2:
+				tangents.append(dir.z)
+				tangents.append(0.0)
+				tangents.append(-dir.x)
+				tangents.append(1.0)
+	for i in sides:
+		var i0 := base_v + i * 2
+		var i1 := i0 + 1
+		var j0 := base_v + ((i + 1) % sides) * 2
+		var j1 := j0 + 1
+		indices.append(i0)
+		indices.append(j0)
+		indices.append(i1)
+		indices.append(i1)
+		indices.append(j0)
+		indices.append(j1)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_INDEX] = indices
+	arrays[Mesh.ARRAY_COLOR] = cols
+	if has_n:
+		arrays[Mesh.ARRAY_NORMAL] = norms
+	if has_u:
+		arrays[Mesh.ARRAY_TEX_UV] = uvs
+	if has_t:
+		arrays[Mesh.ARRAY_TANGENT] = tangents
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var aabb := out.get_aabb()
+	info.mesh = out
+	info.size = aabb.size
+	info.base = _contact_half(out)
+	return info
 
 func _register_stack(id: String, paths: Array, target: float, role: String, points: int) -> void:
 	var st := SurfaceTool.new()
@@ -3549,9 +3726,9 @@ func _build_surfaces() -> void:
 			var x := GRID_MIN + i
 			var z := GRID_MIN + j
 			var surf := _surface_at(layout, x, z)
-			if RoadScript.cell(x, z) == 1 and surf != SURF_WATER:
-				surf = SURF_ROAD
-			elif RoadScript.cell(x, z) == 1 and layout == "pirate":
+			# Road tiles stay road on every theme, including where a basin
+			# crosses a street. Water sits beside the road, not on it.
+			if RoadScript.cell(x, z) == 1:
 				surf = SURF_ROAD
 			surfaces[j * n + i] = surf
 	road_routes = RoadScript.routes()
@@ -3626,12 +3803,12 @@ func _surf_candy(x: int, z: int) -> int:
 func _surf_jungle(x: int, z: int) -> int:
 	var fx := float(x)
 	var fz := float(z)
-	var pond_dx := (fx - 2.2) / 2.6
-	var pond_dz := (fz - 5.4) / 1.9
+	var pond_dx := (fx - 3.6) / 2.15
+	var pond_dz := (fz - 8.8) / 1.45
 	if pond_dx * pond_dx + pond_dz * pond_dz < 1.0:
 		return SURF_WATER
-	var shore_dx := (fx - 2.2) / 3.5
-	var shore_dz := (fz - 5.4) / 2.7
+	var shore_dx := (fx - 3.6) / 2.9
+	var shore_dz := (fz - 8.8) / 2.05
 	if shore_dx * shore_dx + shore_dz * shore_dz < 1.0:
 		return SURF_SAND
 	if absf(fx - 24.0 - sin(fz * 0.045) * 5.0) < 3.2 and fz > -52.0 and fz < 28.0:
@@ -4141,7 +4318,9 @@ func _treat_id(layout: String) -> String:
 
 func _place_treats(layout: String) -> void:
 	var id := _treat_id(layout)
-	var spots: Array = [Vector3(1.4, 0, 2.2), Vector3(-2.2, 0, 2.4), Vector3(3.2, 0, 1.6), Vector3(-1.8, 0, -5.4), Vector3(16.0, 0, 14.0), Vector3(-20.0, 0, -24.0), Vector3(28.0, 0, -18.0)]
+	# First spot is up-screen of the hole, in open ground. Positive Z sits
+	# under the "Drag to move" hint, so the opening treat stays on -Z.
+	var spots: Array = [Vector3(0.22, 0, -1.72), Vector3(-1.55, 0, -2.15), Vector3(1.7, 0, -2.05), Vector3(0.4, 0, -2.6), Vector3(16.0, 0, 14.0), Vector3(-20.0, 0, -24.0), Vector3(28.0, 0, -18.0)]
 	var made := 0
 	var tries := 0
 	while made < 4 and tries < spots.size() + 24 and props.size() < PROP_CAP:
@@ -4149,16 +4328,23 @@ func _place_treats(layout: String) -> void:
 		var p := Vector3(randf_range(-36.0, 36.0), 0.0, randf_range(-36.0, 36.0))
 		if tries <= spots.size():
 			p = spots[tries - 1]
-		if tries > 3 and p.length() < 4.2:
+		if p.length() < 1.65:
 			continue
-		if p.length() < 2.2:
+		if tries > 1 and p.length() < 2.25:
+			continue
+		if tries > 4 and p.length() < 4.2:
 			continue
 		if _surf_f(p.x, p.z) == SURF_WATER or _surf_f(p.x, p.z) == SURF_ROAD:
 			continue
 		var near := made == 0
-		if _place_id(id, p, Vector3.ZERO, randf() * TAU, 1.0, Color.WHITE, -1, -1, [], near):
+		var grow := 1.55 if near else 1.0
+		if _place_id(id, p, Vector3.ZERO, randf() * TAU, grow, Color.WHITE, -1, -1, [], near):
 			var o: Dictionary = props[props.size() - 1]
 			o["treat"] = true
+			o["ground"] = Vector3(p.x, 0.0, p.z)
+			var lifted := Vector3(p.x, 0.4, p.z)
+			o.pos = lifted
+			o.xform = Transform3D(Basis(Vector3.UP, float(o.yaw)).scaled(o.scale), lifted)
 			treats.append(o)
 			made += 1
 
@@ -4311,6 +4497,8 @@ func _dress_streets(layout: String) -> void:
 func _audit_opening() -> void:
 	var layout := str(map.get("layout", ""))
 	print("OPEN ROAD %s cell %d surf %d" % [layout, RoadScript.cell(0, 4), _surf_f(0.0, 4.0)])
+	if layout == "jungle":
+		print("OPEN POND %s water %d old %d" % [layout, _surf_f(3.6, 8.8), _surf_f(2.2, 5.4)])
 	var cars := 0
 	for o in props:
 		if int(o.mover) != 2:
@@ -4345,14 +4533,17 @@ func _audit_opening() -> void:
 		return
 	for id in want:
 		var hit := false
+		var shown := 0
 		for o in props:
 			if kind_id_of(int(o.kind)) != str(id):
 				continue
 			var p: Vector3 = o.pos
 			if absf(p.x) < 6.5 and p.z > -15.5 and p.z < 12.0:
 				hit = true
+				shown += 1
 				print("OPEN %s %s at %.1f %.1f base %.2f h %.2f" % [layout, id, p.x, p.z, float(o.base), float(o.height)])
-				break
+				if shown >= 3:
+					break
 		if not hit:
 			var any := 0
 			for o2 in props:
@@ -4964,9 +5155,10 @@ func _place_opening_cars(layout: String) -> void:
 	var ri := road_routes.size() - 1
 	var route: Dictionary = road_routes[ri]
 	var ids: Array = _opening_car_ids(layout)
+	# Same direction and a fixed gap, so they cannot meet head-on.
 	var spots: Array = [
-		{"x": -4.2, "lane": 0.42},
-		{"x": 4.4, "lane": -0.42},
+		{"x": -6.4, "lane": 0.58},
+		{"x": 1.2, "lane": 0.58},
 	]
 	for i in spots.size():
 		var spot: Dictionary = spots[i]
@@ -4984,6 +5176,8 @@ func _place_opening_cars(layout: String) -> void:
 			o["prog"] = prog
 			o["lane"] = lane
 			o["walk"] = [SURF_ROAD]
+			o["speed"] = 1.22
+			o["vel"] = dir * 1.22
 
 func _place_opening_bites(layout: String) -> void:
 	var id := _opening_bite(layout)
@@ -5059,12 +5253,12 @@ func _dress_opening(layout: String) -> void:
 			_vista_spot("fflower", Vector3(-3.0, 0, -2.6))
 			_vista_spot("blossom", Vector3(0.9, 0, 1.8))
 		"space":
-			var pad := [SURF_SAND, SURF_CONCRETE, SURF_DIRT, SURF_ROAD]
-			_place_id("stackrocket", Vector3(-3.4, 0, -8.0), Vector3.ZERO, 0.2, 1.0, Color.WHITE, -1, -1, [], true)
-			_place_id("habitat", Vector3(3.4, 0, -7.2), Vector3.ZERO, 0.5, 1.0, Color.WHITE, -1, -1, [], true)
-			if _place_id("astro", Vector3(1.2, 0, -5.0), Vector3(0.3, 0, 0.9), -1.0, 1.0, Color.WHITE, -1, 1, pad, true):
+			var pad := [SURF_SAND, SURF_CONCRETE, SURF_DIRT]
+			_place_id("stackrocket", Vector3(-3.5, 0, -4.3), Vector3.ZERO, 0.2, 1.0, Color.WHITE, -1, -1, [], true)
+			_place_id("habitat", Vector3(3.5, 0, -4.1), Vector3.ZERO, 0.5, 1.0, Color.WHITE, -1, -1, [], true)
+			if _place_id("astro", Vector3(1.45, 0, -2.45), Vector3(0.2, 0, 1.0), -1.0, 1.0, Color.WHITE, -1, 1, pad, true):
 				props[props.size() - 1]["walk"] = pad
-			if _place_id("astro", Vector3(-1.5, 0, -5.8), Vector3(-0.4, 0, 0.8), -1.0, 1.0, Color.WHITE, -1, 1, pad, true):
+			if _place_id("astro", Vector3(-1.4, 0, -2.6), Vector3(-0.2, 0, 1.0), -1.0, 1.0, Color.WHITE, -1, 1, pad, true):
 				props[props.size() - 1]["walk"] = pad
 			_vista_spot("solarpanel", Vector3(4.4, 0, -3.2), 0.4)
 			_vista_spot("solarpanel", Vector3(-4.2, 0, -3.4), 1.0)
@@ -5072,7 +5266,7 @@ func _dress_opening(layout: String) -> void:
 			_vista_spot("antenna", Vector3(-2.6, 0, -13.6), 0.3)
 			_vista_spot("satprobe", Vector3(1.6, 0, -2.6), 0.4)
 		"pirate":
-			_vista_spot("pier", Vector3(0.2, 0, 6.2), 0.0)
+			_vista_spot("pier", Vector3(0.2, 0, 7.6), 0.0)
 			_vista_spot("pier", Vector3(-4.6, 0, 1.2), 1.57)
 			_vista_spot("pier", Vector3(4.4, 0, -1.5), 1.57)
 			_vista_spot("pier", Vector3(-1.2, 0, -8.0), 0.2)
@@ -5263,6 +5457,8 @@ func _tint_animals() -> void:
 		var coat := _coat_for(kind_id_of(int(o.kind)))
 		if coat != Color.WHITE:
 			o.color = coat
+		if bool(o.get("treat", false)):
+			o.color = Color(1.08, 0.94, 0.46)
 
 func _swallow_bucket(id: String) -> String:
 	if id in ["sedan", "taxi", "hatch", "van", "police", "truck", "bus", "tractor", "forklift", "rover", "toycar", "bumper", "farmtractor", "pickup", "tracer", "ttruck", "spacerover", "fbumper", "snowmobile", "hsled"]:
@@ -5647,6 +5843,9 @@ func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float =
 	if mover >= 0:
 		spec[6] = mover
 	var foot := _overlap_foot(ki, float(spec[2]))
+	if not _road_drive(mover, allow):
+		if surf == SURF_ROAD or not _clear_of_road(p, foot):
+			return false
 	if _overlaps(p, foot):
 		return false
 	var use_yaw := yaw if yaw >= 0.0 else randf() * TAU
@@ -8048,12 +8247,63 @@ func _sidewalk_surfs(surfs: Array) -> Array:
 			out.append(s)
 	return out
 
+func _road_drive(mover: int, allow: Array) -> bool:
+	if mover != 2:
+		return false
+	for a in allow:
+		if int(a) == SURF_ROAD:
+			return true
+	return false
+
+func _clear_of_road(p: Vector3, foot: float) -> bool:
+	var pad := foot + 0.7
+	var x0 := int(floor(p.x - pad))
+	var x1 := int(ceil(p.x + pad))
+	var z0 := int(floor(p.z - pad))
+	var z1 := int(ceil(p.z + pad))
+	var lim := pad * pad
+	for x in range(x0, x1 + 1):
+		for z in range(z0, z1 + 1):
+			if RoadScript.cell(x, z) != 1:
+				continue
+			var dx := float(x) - p.x
+			var dz := float(z) - p.z
+			if dx * dx + dz * dz < lim:
+				return false
+	return true
+
+func _is_road_car(o: Dictionary) -> bool:
+	if int(o.mover) != 2 or not bool(o.alive):
+		return false
+	var walk: Array = o.get("walk", [])
+	if walk.is_empty():
+		return true
+	for w in walk:
+		if int(w) == SURF_ROAD:
+			return true
+	return false
+
+func _traffic_close(pos: Vector3, dir: Vector3) -> bool:
+	var side := Vector3(-dir.z, 0.0, dir.x)
+	for o in props:
+		if not _is_road_car(o):
+			continue
+		var delta: Vector3 = (o.pos as Vector3) - pos
+		delta.y = 0.0
+		var dist := delta.length()
+		if dist < 3.2:
+			return true
+		var along := delta.dot(dir)
+		if absf(delta.dot(side)) < 1.25 and absf(along) < 5.8:
+			return true
+	return false
+
 func _spawn_on_roads(ids: Array, count: int) -> void:
 	var made := 0
 	var guard := 0
-	while made < count and guard < count * 8 and props.size() < PROP_CAP:
+	while made < count and guard < count * 14 and props.size() < PROP_CAP:
 		guard += 1
-		var ri := made % road_routes.size()
+		var ri := (made + guard) % road_routes.size()
 		var route: Dictionary = road_routes[ri]
 		var length := float(route.len)
 		var dist := randf() * length
@@ -8063,9 +8313,11 @@ func _spawn_on_roads(ids: Array, count: int) -> void:
 		if made % 2 == 1:
 			dir = -dir
 			dist = length - dist
-		var lane := 0.62 if made % 2 == 0 else -0.62
+		var lane := 0.92 if made % 2 == 0 else -0.92
 		var side := Vector3(-dir.z, 0.0, dir.x)
 		pos += side * lane
+		if _traffic_close(pos, dir):
+			continue
 		var id := str(ids[made % ids.size()])
 		if _place_id(id, pos, dir, -1.0, 1.0, Color.WHITE, -1, 2, [SURF_ROAD, SURF_WOOD, SURF_CONCRETE, SURF_DIRT, SURF_GRASS, SURF_SAND, SURF_FIELD]):
 			var o: Dictionary = props[props.size() - 1]
@@ -8115,15 +8367,25 @@ func _route_slow(route: Dictionary, dist: float) -> float:
 		return 0.4
 	return 1.0
 
-func _car_ahead(o: Dictionary, dir: Vector3) -> bool:
-	var pos: Vector3 = o.pos
+func _car_must_wait(o: Dictionary, pos: Vector3, dir: Vector3) -> bool:
+	var side := Vector3(-dir.z, 0.0, dir.x)
 	for other in movers:
-		if other == o or int(other.mover) != 2 or not bool(other.alive):
+		if other == o or not _is_road_car(other):
 			continue
-		var delta: Vector3 = other.pos - pos
+		var delta: Vector3 = (other.pos as Vector3) - pos
 		delta.y = 0.0
 		var dist := delta.length()
-		if dist < 2.5 and dist > 0.05 and delta.dot(dir) > 0.35:
+		if dist < 0.08 or dist > 5.6:
+			continue
+		var odir: Vector3 = other.dir
+		if odir.length_squared() < 0.0001:
+			odir = Vector3(0.0, 0.0, 1.0)
+		var heading := clampf(dir.dot(odir.normalized()), -1.0, 1.0)
+		var along := delta.dot(dir)
+		var lat := absf(delta.dot(side))
+		if lat < 1.25 and along > 0.15 and along < 4.8:
+			return true
+		if absf(heading) < 0.45 and dist < 3.35 and int(o.uid) > int(other.uid):
 			return true
 	return false
 
@@ -8180,10 +8442,6 @@ func _advance_car(o: Dictionary, delta: float) -> void:
 	var length := float(route.len)
 	var closed := bool(route.closed)
 	var spd := float(o.speed) * _route_slow(route, float(o.prog))
-	var dir: Vector3 = o.dir
-	if _car_ahead(o, dir):
-		spd = 0.0
-		o.wait = maxf(float(o.wait), 0.15)
 	if float(o.wait) > 0.0:
 		o.wait = maxf(0.0, float(o.wait) - delta)
 		spd = 0.0
@@ -8193,19 +8451,25 @@ func _advance_car(o: Dictionary, delta: float) -> void:
 		spd = 0.0
 	if _route_slow(route, float(o.prog)) > 0.5:
 		o.waited = false
+	var lane := float(o.lane)
 	var signed := spd * delta
-	if float(o.lane) < 0.0 and not closed:
+	if lane < 0.0 and not closed:
 		signed = -signed
 	var prog := float(o.prog) + signed
+	var next_lane := lane
 	if not closed and (prog >= length - 0.2 or prog <= 0.2):
-		o.lane = -float(o.lane)
+		next_lane = -lane
 		prog = clampf(prog, 0.25, length - 0.25)
 	var sample := _sample_route(route, prog)
-	dir = sample.dir
-	if float(o.lane) < 0.0 and not closed:
+	var dir: Vector3 = sample.dir
+	if next_lane < 0.0 and not closed:
 		dir = -dir
 	var side := Vector3(-dir.z, 0.0, dir.x)
-	var pos: Vector3 = sample.pos + side * absf(float(o.lane))
+	var pos: Vector3 = sample.pos + side * absf(next_lane)
+	if spd > 0.01 and _car_must_wait(o, pos, dir):
+		o.wait = maxf(float(o.wait), 0.08)
+		return
+	o.lane = next_lane
 	o.prog = fposmod(prog, length) if closed else clampf(prog, 0.0, length)
 	o.dir = dir
 	o.pos = pos
@@ -8290,9 +8554,17 @@ func _tick_treats() -> void:
 		var mm := _mm_of(o)
 		if mm == null:
 			continue
-		var pulse := 0.5 + 0.5 * sin(t * 5.2 + float(o.get("phase", 0.0)))
+		var phase := float(o.get("phase", 0.0))
+		var ground: Vector3 = o.get("ground", Vector3(o.pos.x, 0.0, o.pos.z))
+		var bob := Vector3(ground.x, 0.38 + 0.14 * sin(t * 2.4 + phase), ground.z)
+		o.pos = bob
+		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
+		var xform := Transform3D(basis, bob)
+		o.xform = xform
+		mm.set_instance_transform(int(o.index), xform)
+		var pulse := 0.5 + 0.5 * sin(t * 5.2 + phase)
 		var base: Color = o.color
-		var hot := base.lerp(Color(1.0, 0.96, 0.55), 0.25 + pulse * 0.55)
+		var hot := base.lerp(Color(1.0, 0.98, 0.72), 0.4 + pulse * 0.6)
 		mm.set_instance_color(int(o.index), hot)
 
 func _update_debug(delta: float) -> void:
@@ -8919,7 +9191,7 @@ func _theme_light(layout: String) -> Dictionary:
 		"toy":
 			return {"sun_e": 1.04, "amb": Color(0.96, 0.93, 0.88), "amb_e": 0.34, "fill": Color(0.96, 0.92, 0.86), "fill_e": 0.08, "grade": Vector3(1.0, 1.0, 0.99), "sat": 1.1, "contrast": 1.06, "bright": 1.0, "expo": 1.02}
 		"space":
-			return {"sun_e": 1.02, "amb": Color(0.86, 0.86, 0.9), "amb_e": 0.3, "fill": Color(0.86, 0.86, 0.92), "fill_e": 0.06, "grade": Vector3(1.0, 0.99, 0.99), "sat": 1.04, "contrast": 1.06, "bright": 1.0, "expo": 1.0}
+			return {"sun_e": 1.08, "amb": Color(0.90, 0.92, 0.97), "amb_e": 0.44, "fill": Color(0.88, 0.91, 0.98), "fill_e": 0.12, "grade": Vector3(0.98, 0.99, 1.02), "sat": 1.02, "contrast": 1.02, "bright": 1.02, "expo": 1.04}
 		"haunt":
 			return {"sun_e": 0.94, "amb": Color(0.84, 0.8, 0.88), "amb_e": 0.3, "fill": Color(0.82, 0.78, 0.86), "fill_e": 0.06, "grade": Vector3(1.0, 0.99, 0.99), "sat": 1.04, "contrast": 1.06, "bright": 1.0, "expo": 1.0}
 		"fair":
