@@ -1730,9 +1730,9 @@ func _cam_dist_for(radius: float) -> float:
 	return _dist_for_frac(r, frac) * cam_dist_mul
 
 func _cam_fov_for() -> float:
-	# Extra vertical field so the horizon and a band of sky sit in frame.
+	# Extra vertical field so a band of sky sits above the horizon.
 	# Phone portrait stays the narrower of the two.
-	return lerpf(62.0, 78.0, _wide_blend())
+	return lerpf(68.0, 82.0, _wide_blend())
 
 func _cam_pitch_for(radius: float) -> float:
 	var start_r := maxf(_start_radius(), 0.12)
@@ -1740,8 +1740,8 @@ func _cam_pitch_for(radius: float) -> float:
 	var t := clampf((radius - start_r) / (end_r - start_r), 0.0, 1.0)
 	t = t * t * (3.0 - 2.0 * t)
 	var wide := _wide_blend()
-	# Start low enough that the top of the frame clears the map edge.
-	var near := lerpf(28.0, 30.0, wide)
+	# Start low enough that the horizon sits below the top HUD.
+	var near := lerpf(22.0, 24.0, wide)
 	var far := lerpf(CAM_PITCH_FAR, 46.0, wide)
 	return lerpf(near, far, t)
 
@@ -3292,10 +3292,10 @@ func _place_signatures(layout: String) -> void:
 	var ids: Array = _signature_ids(layout)
 	# Flank the opening view. The center corridor stays open so the horizon reads.
 	var spots: Array = [
-		Vector3(14.0, 0, -36.0),
-		Vector3(-16.0, 0, -38.0),
-		Vector3(34.0, 0, -20.0),
-		Vector3(-36.0, 0, -18.0),
+		Vector3(24.0, 0, -32.0),
+		Vector3(-26.0, 0, -30.0),
+		Vector3(36.0, 0, -16.0),
+		Vector3(-38.0, 0, -14.0),
 	]
 	for i in mini(ids.size(), spots.size()):
 		var base: Vector3 = spots[i]
@@ -3652,11 +3652,16 @@ func _blocks_horizon(role: String, base: float, height: float) -> bool:
 		return true
 	return height > 1.75
 
+func _view_angle(p: Vector3) -> float:
+	if p.z > -8.0:
+		return 4.0
+	return absf(atan2(p.x, -p.z))
+
 func _in_view_corridor(p: Vector3) -> bool:
 	# Center of the opening view, where the horizon has to stay visible.
-	if p.z > -12.0:
+	if p.z > -8.0:
 		return false
-	return absf(atan2(p.x, -p.z)) < 0.52 and Vector2(p.x, p.z).length() < 70.0
+	return _view_angle(p) < 0.72 and Vector2(p.x, p.z).length() < 72.0
 
 func _spawn_ok(id: String, p: Vector3, grow: float) -> bool:
 	var m := _prop_metrics(id, grow)
@@ -3669,8 +3674,13 @@ func _spawn_ok(id: String, p: Vector3, grow: float) -> bool:
 	var structure := _is_structure(role, base, height)
 	if home < SPAWN_MID and structure:
 		return false
-	if _blocks_horizon(role, base, height) and _in_view_corridor(p) and forward_tall >= VIEW_TALL_CAP:
-		return false
+	if _blocks_horizon(role, base, height):
+		var ang := _view_angle(p)
+		# Nothing tall in the middle of the opening view.
+		if ang < 0.42 and home < 74.0:
+			return false
+		if ang < 0.72 and home < 64.0 and forward_tall >= 2:
+			return false
 	return true
 
 func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float = -1.0, grow: float = 1.0, tint: Color = Color.WHITE, points: int = -1, mover: int = -1) -> bool:
