@@ -76,7 +76,76 @@ uniform float paint_mode = 0.0;
 uniform vec3 grade_tint = vec3(1.0);
 uniform vec3 band_lo = vec3(-1.0);
 uniform vec3 band_hi = vec3(-1.0);
+uniform float motif = 0.0;
 varying vec3 world_pos;
+float thash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+vec3 theme_ground(vec3 base, vec2 xz, float which, float mode) {
+	vec3 col = base;
+	float h = thash(floor(xz * 2.0));
+	if (which < 0.5) {
+		float row = abs(fract(xz.x * 1.1) - 0.5);
+		float furrow = smoothstep(0.38, 0.48, row);
+		col *= mix(1.0, 0.78, furrow);
+		col = mix(col, col * vec3(1.08, 1.05, 0.75), h * 0.25);
+	} else if (which < 1.5) {
+		float stripe = 0.5 + 0.5 * sin(xz.x * 2.2 + xz.y * 0.4);
+		col = mix(col, col * vec3(1.08, 0.94, 1.02), stripe * 0.45);
+		vec2 cell = fract(xz * 0.7) - vec2(0.5);
+		float dots = 1.0 - smoothstep(0.08, 0.16, length(cell));
+		col = mix(col, vec3(1.0, 0.93, 0.55), dots * 0.35);
+	} else if (which < 2.5) {
+		float blob = 0.5 + 0.5 * sin(xz.x * 0.85) * sin(xz.y * 0.7);
+		col = mix(col * vec3(0.75, 0.9, 0.6), col * vec3(1.05, 1.12, 0.7), blob);
+	} else if (which < 3.5) {
+		float wood = 0.0;
+		if ((mode > 5.5 && mode < 7.5) || mode > 8.5) {
+			wood = 1.0;
+		}
+		if (wood > 0.5) {
+			float plank = smoothstep(0.92, 0.98, fract(xz.x * 1.4));
+			col *= mix(1.0, 0.72, plank);
+		} else {
+			float rip = 0.5 + 0.5 * sin(xz.x * 0.6 + xz.y * 1.4);
+			col = mix(col, col * vec3(1.06, 1.0, 0.82), rip * 0.35);
+		}
+	} else if (which < 4.5) {
+		float spark = step(0.93, h);
+		col = mix(col, vec3(1.0), spark * 0.35);
+		float rut = smoothstep(0.45, 0.5, abs(fract(xz.y * 0.35) - 0.5));
+		col *= mix(1.0, 0.9, rut);
+	} else if (which < 5.5) {
+		float dune = 0.5 + 0.5 * sin(xz.x * 0.28 + sin(xz.y * 0.17) * 2.0);
+		col = mix(col * vec3(0.9, 0.78, 0.55), col * vec3(1.08, 0.98, 0.75), dune);
+	} else if (which < 6.5) {
+		vec2 g = abs(fract(xz * 0.5) - vec2(0.5));
+		float seam = smoothstep(0.46, 0.5, max(g.x, g.y));
+		col *= mix(1.0, 0.72, seam);
+	} else if (which < 7.5) {
+		vec2 cell = xz - (floor(xz / 5.0) + vec2(0.5)) * 5.0;
+		float cr = length(cell);
+		float ring = smoothstep(1.5, 1.2, cr) * smoothstep(0.55, 0.9, cr);
+		col = mix(col, col * vec3(0.7, 0.72, 0.78), ring * 0.8);
+	} else if (which < 8.5) {
+		float patch = smoothstep(0.35, 0.8, h);
+		col = mix(col * vec3(0.7, 0.75, 0.55), col, patch);
+		float mist = 0.5 + 0.5 * sin(xz.x * 0.4 + xz.y * 0.3);
+		col = mix(col, col * vec3(0.8, 0.7, 0.9), mist * 0.25);
+	} else {
+		float conf = step(0.9, thash(floor(xz * 3.0)));
+		vec3 tint = vec3(0.95, 0.45, 0.4);
+		if (h > 0.66) {
+			tint = vec3(0.4, 0.7, 0.95);
+		} else if (h > 0.33) {
+			tint = vec3(0.98, 0.85, 0.3);
+		}
+		col = mix(col, tint, conf * 0.28);
+		float stripe = smoothstep(0.94, 0.99, fract(xz.x * 0.8));
+		col *= mix(1.0, 0.86, stripe);
+	}
+	return clamp(col, vec3(0.0), vec3(1.0));
+}
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
@@ -99,10 +168,10 @@ void fragment() {
 	float mn = min(col.r, min(col.g, col.b));
 	float sat = mx - mn;
 	vec3 outc = col;
-	float shade = clamp(0.28 + luma * 0.85, 0.0, 1.0);
+	float shade = clamp(0.35 + luma * 0.4, 0.0, 1.0);
 	if (paint_mode > 0.5) {
-		float nse = fract(sin(dot(floor(world_pos.xz), vec2(127.1, 311.7))) * 43758.5453);
-		shade = mix(0.2, 0.95, nse);
+		float nse = thash(floor(world_pos.xz * 2.0));
+		shade = mix(0.08, 0.42, nse);
 	}
 	if (paint_mode > 8.5) {
 		outc = mix(vec3(0.40, 0.30, 0.18), vec3(0.66, 0.50, 0.32), shade);
@@ -158,6 +227,7 @@ void fragment() {
 	}
 	if (paint_mode > 0.5 && band_lo.r >= 0.0) {
 		outc = mix(band_lo, band_hi, shade);
+		outc = theme_ground(outc, world_pos.xz, motif, paint_mode);
 	}
 	outc = mix(outc, vec3(0.012, 0.014, 0.02), cover);
 	ALBEDO = outc * grade_tint;
@@ -369,6 +439,7 @@ var kind_multimeshes: Array = []
 var kind_mats: Array = []
 var kind_by_id := {}
 var kit_mat: ShaderMaterial
+var tex_cache := {}
 var ground_shader: Shader
 var ground_mats: Array = []
 var surfaces := PackedByteArray()
@@ -520,6 +591,7 @@ const RIVAL_RADIUS := [0.34, 0.42, 0.30, 0.48, 0.36, 0.44, 0.32, 0.40, 0.28, 0.4
 const RIVAL_SPEED := [2.15, 2.25, 2.40, 2.05, 2.20, 2.10, 2.30, 2.18, 2.45, 2.08, 2.35, 2.12]
 const CatalogScript = preload("res://catalog.gd")
 const PropKitScript = preload("res://props_kit.gd")
+const ThemeMeshScript = preload("res://theme_meshes.gd")
 
 func _ready() -> void:
 	randomize()
@@ -1604,12 +1676,16 @@ func _make_pool() -> void:
 		pool.append(b)
 		pool_free.append(b)
 
-func _load_model(path: String) -> Dictionary:
+func _load_model(path: String, bake_tex: bool = false) -> Dictionary:
 	var scene := load(path) as PackedScene
+	if scene == null:
+		push_error("missing model %s" % path)
+		var empty := BoxMesh.new()
+		return {"mesh": empty, "size": Vector3(1, 1, 1), "base": 0.5}
 	var inst := scene.instantiate()
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	_collect_mesh(inst, Transform3D.IDENTITY, st)
+	_collect_mesh(inst, Transform3D.IDENTITY, st, bake_tex)
 	inst.free()
 	var mesh := st.commit()
 	var aabb := mesh.get_aabb()
@@ -1779,7 +1855,17 @@ func _detail_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, uv_y: floa
 	st.set_uv(uv)
 	st.add_vertex(c)
 
-func _collect_mesh(n: Node, parent: Transform3D, st: SurfaceTool) -> void:
+func _bake_image(tex: Texture2D) -> Image:
+	var key := tex.get_instance_id()
+	if tex_cache.has(key):
+		return tex_cache[key]
+	var img := tex.get_image()
+	if img != null and img.is_compressed():
+		img.decompress()
+	tex_cache[key] = img
+	return img
+
+func _collect_mesh(n: Node, parent: Transform3D, st: SurfaceTool, bake_tex: bool = false) -> void:
 	var xform := parent
 	if n is Node3D:
 		xform = parent * (n as Node3D).transform
@@ -1788,16 +1874,22 @@ func _collect_mesh(n: Node, parent: Transform3D, st: SurfaceTool) -> void:
 		if mi.mesh:
 			for s in mi.mesh.get_surface_count():
 				var tint := Color.WHITE
+				var img: Image = null
 				var surf_mat := mi.mesh.surface_get_material(s)
+				if surf_mat == null:
+					surf_mat = mi.get_surface_override_material(s)
 				if surf_mat is StandardMaterial3D:
 					var sm := surf_mat as StandardMaterial3D
 					if sm.albedo_texture == null:
 						tint = sm.albedo_color
-				_append_surface(st, mi.mesh, s, xform, tint)
+					elif bake_tex:
+						img = _bake_image(sm.albedo_texture)
+						tint = sm.albedo_color
+				_append_surface(st, mi.mesh, s, xform, tint, img)
 	for c in n.get_children():
-		_collect_mesh(c, xform, st)
+		_collect_mesh(c, xform, st, bake_tex)
 
-func _append_surface(st: SurfaceTool, mesh: Mesh, surface: int, xform: Transform3D, color: Color) -> void:
+func _append_surface(st: SurfaceTool, mesh: Mesh, surface: int, xform: Transform3D, color: Color, image: Image = null) -> void:
 	var arrays: Array = mesh.surface_get_arrays(surface)
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
@@ -1810,8 +1902,24 @@ func _append_surface(st: SurfaceTool, mesh: Mesh, surface: int, xform: Transform
 		ids.resize(verts.size())
 		for i in verts.size():
 			ids[i] = i
+	var tw := 1
+	var th := 1
+	if image != null:
+		tw = maxi(image.get_width() - 1, 1)
+		th = maxi(image.get_height() - 1, 1)
 	for idx in ids:
-		st.set_color(color)
+		var use := color
+		if image != null and idx < uvs.size():
+			var uv: Vector2 = uvs[idx]
+			var uu: float = uv.x - floorf(uv.x)
+			var vv: float = uv.y - floorf(uv.y)
+			var px := clampi(int(uu * float(tw)), 0, tw)
+			var py := clampi(int((1.0 - vv) * float(th)), 0, th)
+			var samp := image.get_pixel(px, py)
+			use = Color(samp.r * color.r, samp.g * color.g, samp.b * color.b, 1.0)
+		else:
+			use.a = 1.0
+		st.set_color(use)
 		if idx < norms.size():
 			st.set_normal((basis * norms[idx]).normalized())
 		if idx < uvs.size():
@@ -1984,6 +2092,148 @@ func _stage_showcase() -> void:
 		_bucket_move(o)
 		n += 1
 
+func _register_kit_item(item: Dictionary) -> void:
+	var spec := ["", kit_mat, 1.0, 1.0, int(item.points), str(item.role), int(item.mover), 0.0]
+	prop_defs.append(spec)
+	kind_lists.append(_empty_slots())
+	kind_meshes.append(item.mesh)
+	kind_native.append(item.size)
+	kind_base.append(float(item.base))
+	kind_mats.append(kit_mat)
+	kind_multimeshes.append(null)
+	kind_by_id[str(item.id)] = prop_defs.size() - 1
+
+func _plant_baked(mesh: Mesh) -> Dictionary:
+	var aabb := mesh.get_aabb()
+	var shift := Vector3(
+		-(aabb.position.x + aabb.size.x * 0.5),
+		-aabb.position.y,
+		-(aabb.position.z + aabb.size.z * 0.5)
+	)
+	var st2 := SurfaceTool.new()
+	st2.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for s in mesh.get_surface_count():
+		st2.append_from(mesh, s, Transform3D(Basis(), shift))
+	var planted := _shade_mesh(st2.commit())
+	return {"mesh": planted, "size": planted.get_aabb().size, "base": _contact_half(planted)}
+
+func _register_scaled(id: String, info: Dictionary, target: float, role: String, points: int) -> void:
+	var size: Vector3 = info.size
+	var measured := maxf(float(info.base), 0.02)
+	# Thin tips (cones, sticks) report a tiny contact. Swallow against the body instead.
+	var half_vis := maxf(size.x, size.z) * 0.42
+	var basis := maxf(measured, half_vis)
+	var scale := target / basis
+	var hcap := 6.5
+	if role in ["barn", "ride", "boat", "tank"]:
+		hcap = 12.0
+	elif role in ["tree", "palm"]:
+		hcap = 9.0
+	if size.y * scale > hcap:
+		scale = hcap / maxf(size.y, 0.05)
+	var spec := ["theme", kit_mat, scale, scale, points, role, 0, 0.0]
+	prop_defs.append(spec)
+	kind_lists.append(_empty_slots())
+	kind_meshes.append(info.mesh)
+	kind_native.append(info.size)
+	kind_base.append(basis)
+	kind_mats.append(kit_mat)
+	kind_multimeshes.append(null)
+	kind_by_id[id] = prop_defs.size() - 1
+
+func _register_glb(id: String, path: String, target: float, role: String, points: int) -> void:
+	_register_scaled(id, _load_model(path, true), target, role, points)
+
+func _register_stack(id: String, paths: Array, target: float, role: String, points: int) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var y := 0.0
+	for path in paths:
+		var info := _load_model(str(path), true)
+		st.append_from(info.mesh, 0, Transform3D(Basis(), Vector3(0, y, 0)))
+		y += float(info.size.y) * 0.9
+	_register_scaled(id, _plant_baked(st.commit()), target, role, points)
+
+func _register_theme_models() -> void:
+	for item in ThemeMeshScript.defs():
+		_register_kit_item(item)
+	var root := "res://assets/kenney/theme/"
+	var glbs := [
+		["fapple", "food/apple.glb", 0.20, "small", 2],
+		["fwheat", "nature/crops_wheatStageB.glb", 0.32, "small", 2],
+		["fflower", "nature/flower_redA.glb", 0.18, "small", 1],
+		["haybale", "grave/hay-bale.glb", 0.62, "small", 5],
+		["railfence", "nature/fence_planks.glb", 0.85, "small", 3],
+		["farmmill", "fantasy/windmill.glb", 1.90, "barn", 52],
+		["lollypop", "food/lollypop.glb", 0.34, "small", 3],
+		["donut", "food/donut-sprinkles.glb", 0.42, "small", 3],
+		["canecandy", "holiday/candy-cane-red.glb", 0.55, "small", 3],
+		["gbread", "holiday/gingerbread-man.glb", 0.62, "small", 4],
+		["sweetcup", "food/cupcake.glb", 0.78, "small", 5],
+		["coneic", "food/ice-cream-cne.glb", 0.95, "small", 6],
+		["partycake", "food/cake-birthday.glb", 1.30, "ride", 14],
+		["dinoegg", "food/egg.glb", 0.24, "small", 2],
+		["fernleaf", "nature/grass_leafs.glb", 0.36, "palm", 2],
+		["redshroom", "nature/mushroom_red.glb", 0.55, "small", 4],
+		["jrock", "nature/rock_largeA.glb", 0.90, "small", 4],
+		["jpalm", "nature/tree_palmDetailedShort.glb", 1.15, "palm", 8],
+		["jpalmtall", "nature/tree_palmDetailedTall.glb", 1.55, "palm", 10],
+		["pbarrel", "pirate/barrel.glb", 0.32, "small", 4],
+		["pcrate", "pirate/crate.glb", 0.52, "small", 4],
+		["pchest", "pirate/chest.glb", 0.70, "small", 6],
+		["pcannon", "pirate/cannon.glb", 0.95, "small", 8],
+		["ppalm", "pirate/palm-detailed-straight.glb", 1.25, "palm", 8],
+		["prowboat", "pirate/boat-row-small.glb", 1.35, "boat", 16],
+		["pdock", "pirate/structure-platform-dock.glb", 1.55, "boat", 12],
+		["pship", "pirate/ship-pirate-medium.glb", 2.15, "boat", 40],
+		["plight", "pirate/tower-complete-large.glb", 2.30, "barn", 60],
+		["pflag", "pirate/flag-pirate.glb", 0.40, "small", 2],
+		["hpresent", "holiday/present-a-cube.glb", 0.36, "small", 4],
+		["hsled", "holiday/sled.glb", 0.68, "small", 5],
+		["hsnowman", "holiday/snowman.glb", 0.92, "small", 6],
+		["hpine", "nature/tree_pineRoundC.glb", 1.30, "tree", 8],
+		["iceblock", "platformer/block-snow.glb", 0.78, "small", 4],
+		["drock", "nature/rock_smallA.glb", 0.20, "small", 1],
+		["dcactus", "nature/cactus_short.glb", 0.48, "palm", 3],
+		["dpot", "nature/pot_large.glb", 0.62, "small", 4],
+		["dtallcac", "nature/cactus_tall.glb", 0.95, "palm", 6],
+		["dtent", "nature/tent_detailedClosed.glb", 1.20, "stall", 10],
+		["dpalm", "nature/tree_palmDetailedShort.glb", 1.40, "palm", 8],
+		["dstall", "fantasy/stall.glb", 1.50, "stall", 12],
+		["tblock", "platformer/brick.glb", 0.26, "small", 2],
+		["tracer", "toycar/vehicle-racer.glb", 0.72, "ride", 8],
+		["ttruck", "toycar/vehicle-truck.glb", 1.05, "ride", 12],
+		["toytrain", "train/train-locomotive-a.glb", 1.65, "ride", 18],
+		["twagon", "train/train-carriage-box.glb", 1.35, "ride", 12],
+		["moonlet", "space/meteor_detailed.glb", 0.28, "small", 2],
+		["spacecrate", "space/barrel.glb", 0.48, "small", 4],
+		["astro", "space/astronautA.glb", 0.82, "ride", 6],
+		["spacerover", "space/rover.glb", 1.15, "ride", 12],
+		["satdish", "space/satelliteDish_detailed.glb", 1.50, "ride", 14],
+		["habitat", "space/hangar_roundA.glb", 2.00, "barn", 36],
+		["hcandle", "grave/candle.glb", 0.30, "small", 2],
+		["hpumpkin", "grave/pumpkin-tall-carved.glb", 0.55, "small", 4],
+		["htomb", "grave/gravestone-cross.glb", 0.85, "small", 6],
+		["hghost", "grave/character-ghost.glb", 1.05, "small", 8],
+		["htree", "grave/pine-crooked.glb", 1.35, "tree", 8],
+		["hcart", "fantasy/cart.glb", 1.10, "small", 8],
+		["hcrypt", "grave/crypt.glb", 1.80, "barn", 32],
+		["hmansion", "grave/crypt-large.glb", 2.40, "barn", 60],
+		["fbench", "coaster/bench.glb", 0.75, "small", 4],
+		["fpop", "coaster/stall-food.glb", 1.10, "stall", 10],
+		["fteacup", "food/cup-tea.glb", 0.40, "small", 3],
+		["coastertrain", "coaster/coaster-train.glb", 1.35, "ride", 16],
+		["coasterhill", "coaster/coaster-steel-straight-hill-complete.glb", 1.90, "ride", 28],
+		["coasterloop", "coaster/coaster-steel-looping.glb", 2.20, "ride", 36],
+	]
+	for row in glbs:
+		_register_glb(str(row[0]), root + str(row[1]), float(row[2]), str(row[3]), int(row[4]))
+	_register_stack("stackrocket", [
+		root + "space/rocket_baseA.glb",
+		root + "space/rocket_sidesA.glb",
+		root + "space/rocket_topA.glb",
+	], 2.35, "barn", 48)
+
 func _ensure_models() -> void:
 	if not prop_defs.is_empty():
 		return
@@ -2047,6 +2297,7 @@ func _ensure_models() -> void:
 		kind_mats.append(kit_mat)
 		kind_multimeshes.append(null)
 		kind_by_id[str(item.id)] = prop_defs.size() - 1
+	_register_theme_models()
 	ground_meshes = [
 		_load_model("res://assets/kenney/roads/road-straight.glb").mesh,
 		_load_model("res://assets/kenney/roads/road-crossing.glb").mesh,
@@ -2634,25 +2885,25 @@ func _seed_ladder() -> void:
 func _theme_ids(layout: String) -> Array:
 	match layout:
 		"candy":
-			return ["gumdrop", "lolli", "sweet", "cupcake", "cake", "candyhouse", "candycastle"]
+			return ["lollypop", "donut", "canecandy", "gbread", "sweetcup", "coneic", "partycake", "ghouse", "ccastle"]
 		"jungle":
-			return ["fern", "egg", "shroom", "stump", "raptor", "trex", "volcano"]
+			return ["dinoegg", "fernleaf", "redshroom", "jrock", "raptord", "jpalm", "trike", "jpalmtall", "jhut", "tyrant", "brachio", "lavacone"]
 		"pirate":
-			return ["doubloon", "barrel", "chest", "cannon", "rowboat", "galleon", "fort"]
+			return ["pbarrel", "pcrate", "pchest", "pcannon", "panchor", "ppalm", "prowboat", "pdock", "tavern", "pship", "plight"]
 		"snow":
-			return ["snowball", "gift", "snowman", "pine", "cabin", "igloo", "chapel"]
+			return ["hpresent", "hsled", "iceblock", "hsnowman", "skier", "hpine", "hcabin", "skilift", "icecastle"]
 		"desert":
-			return ["pebble", "cactus", "claypot", "tent", "camel", "pyramid", "oasisgate"]
+			return ["drock", "dcactus", "dpot", "dtallcac", "dcamel", "dtent", "dpalm", "dstall", "dadobe", "dpyramid", "dsphinx"]
 		"toy":
-			return ["block", "marble", "toycar", "teddy", "robot", "dollhouse", "brickfort"]
+			return ["tblock", "tball", "tracer", "teddybear", "ttruck", "bot", "toytrain", "twagon", "toyhouse", "blockfort"]
 		"space":
-			return ["moonrock", "canister", "rover", "dish", "dome", "rocket", "station"]
+			return ["moonlet", "spacecrate", "astro", "spacerover", "satdish", "habitat", "stackrocket", "gantry"]
 		"haunt":
-			return ["skull", "candle", "pumpkin", "tomb", "ghost", "crypt", "mansion"]
+			return ["hcandle", "hbat", "hcrow", "hpumpkin", "htomb", "hghost", "htree", "hcart", "hhouse", "hcrypt", "hmansion"]
 		"fair":
-			return ["balloon", "popcorn", "bumper", "booth", "coastercar", "wheel", "coaster"]
+			return ["fballoon", "fteacup", "fbench", "fbumper", "fpop", "teacups", "coastertrain", "coasterhill", "coasterloop", "carousel", "ferris"]
 		_:
-			return ["apple", "hay", "animal", "fence", "scarecrow", "tractor", "coop", "cart", "barn", "silo", "windmill"]
+			return ["fapple", "chicken", "fwheat", "piglet", "haybale", "cow", "railfence", "scare", "farmtractor", "pickup", "grainsilo", "redbarn", "farmmill"]
 
 func _populate() -> void:
 	var layout := str(map.get("layout", "farm"))
@@ -2665,92 +2916,92 @@ func _populate() -> void:
 func _scatter_theme(layout: String) -> void:
 	match layout:
 		"candy":
-			_scatter_on(["gumdrop", "lolli", "sweet"], 14, [SURF_GRASS, SURF_FIELD, SURF_CONCRETE], 1.0)
-			_scatter_on(["cupcake", "cake"], 6, [SURF_GRASS, SURF_CONCRETE], 1.0)
-			_scatter_on(["candyhouse"], 3, [SURF_GRASS], 1.0)
+			_scatter_on(["lollypop", "donut", "canecandy", "gbread"], 10, [SURF_GRASS, SURF_FIELD, SURF_CONCRETE], 1.0)
+			_scatter_on(["sweetcup", "coneic"], 4, [SURF_GRASS, SURF_CONCRETE], 1.0)
+			_scatter_on(["ghouse"], 2, [SURF_GRASS], 1.0)
 		"jungle":
-			_scatter_on(["fern", "egg", "shroom"], 16, [SURF_FIELD, SURF_GRASS], 1.0)
-			_scatter_on(["stump", "raptor"], 6, [SURF_GRASS, SURF_DIRT], 1.0)
-			_scatter_on(["trex"], 2, [SURF_GRASS], 1.0)
+			_scatter_on(["dinoegg", "fernleaf", "redshroom"], 12, [SURF_FIELD, SURF_GRASS], 1.0)
+			_scatter_on(["jpalm", "raptord"], 4, [SURF_GRASS, SURF_DIRT], 1.0)
+			_scatter_on(["jhut"], 2, [SURF_GRASS], 1.0)
 		"pirate":
-			_scatter_on(["doubloon", "barrel", "chest"], 12, [SURF_SAND, SURF_WOOD, SURF_GRASS], 1.0)
-			_scatter_on(["cannon", "rowboat"], 5, [SURF_SAND, SURF_WOOD], 1.0)
-			_scatter_on(["galleon"], 2, [SURF_SAND], 1.0)
+			_scatter_on(["pbarrel", "pcrate", "pchest", "pflag"], 10, [SURF_SAND, SURF_WOOD, SURF_GRASS], 1.0)
+			_scatter_on(["pcannon", "prowboat", "ppalm"], 4, [SURF_SAND, SURF_WOOD], 1.0)
+			_scatter_on(["tavern"], 2, [SURF_GRASS, SURF_DIRT], 1.0)
 		"snow":
-			_scatter_on(["snowball", "gift", "snowman"], 14, [SURF_SAND, SURF_GRASS], 1.0)
-			_scatter_on(["pine"], 8, [SURF_SAND, SURF_GRASS], 1.0)
-			_scatter_on(["cabin", "igloo"], 3, [SURF_SAND, SURF_CONCRETE], 1.0)
+			_scatter_on(["hpresent", "hsled", "hsnowman"], 10, [SURF_SAND, SURF_GRASS], 1.0)
+			_scatter_on(["hpine", "iceblock"], 5, [SURF_SAND, SURF_GRASS], 1.0)
+			_scatter_on(["hcabin"], 2, [SURF_SAND, SURF_CONCRETE], 1.0)
 		"desert":
-			_scatter_on(["pebble", "cactus", "claypot"], 14, [SURF_SAND, SURF_DIRT], 1.0)
-			_scatter_on(["tent", "camel"], 5, [SURF_SAND], 1.0)
-			_scatter_on(["pyramid"], 2, [SURF_SAND], 1.0)
+			_scatter_on(["drock", "dcactus", "dpot"], 10, [SURF_SAND, SURF_DIRT], 1.0)
+			_scatter_on(["dtallcac", "dtent", "dpalm"], 4, [SURF_SAND], 1.0)
+			_scatter_on(["dstall"], 2, [SURF_SAND, SURF_DIRT], 1.0)
 		"toy":
-			_scatter_on(["block", "marble", "toycar"], 14, [SURF_FIELD, SURF_CONCRETE, SURF_GRASS], 1.0)
-			_scatter_on(["teddy", "robot"], 6, [SURF_GRASS, SURF_CONCRETE], 1.0)
-			_scatter_on(["dollhouse"], 3, [SURF_FIELD, SURF_CONCRETE], 1.0)
+			_scatter_on(["tblock", "tball", "tracer"], 10, [SURF_FIELD, SURF_CONCRETE, SURF_GRASS], 1.0)
+			_scatter_on(["teddybear", "bot", "twagon"], 4, [SURF_GRASS, SURF_CONCRETE], 1.0)
+			_scatter_on(["toyhouse"], 2, [SURF_FIELD, SURF_CONCRETE], 1.0)
 		"space":
-			_scatter_on(["moonrock", "canister", "rover"], 12, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0)
-			_scatter_on(["dish", "dome"], 4, [SURF_SAND, SURF_CONCRETE], 1.0)
-			_scatter_on(["rocket"], 2, [SURF_CONCRETE, SURF_SAND], 1.0)
+			_scatter_on(["moonlet", "spacecrate", "astro"], 8, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0)
+			_scatter_on(["spacerover", "satdish"], 3, [SURF_SAND, SURF_CONCRETE], 1.0)
+			_scatter_on(["habitat"], 2, [SURF_CONCRETE, SURF_SAND], 1.0)
 		"haunt":
-			_scatter_on(["skull", "candle", "pumpkin"], 14, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
-			_scatter_on(["tomb", "ghost"], 6, [SURF_GRASS, SURF_DIRT], 1.0)
-			_scatter_on(["crypt"], 3, [SURF_GRASS], 1.0)
+			_scatter_on(["hcandle", "hbat", "hcrow", "hpumpkin"], 10, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
+			_scatter_on(["htomb", "hghost", "htree"], 4, [SURF_GRASS, SURF_DIRT], 1.0)
+			_scatter_on(["hcart", "hhouse"], 2, [SURF_GRASS], 1.0)
 		"fair":
-			_scatter_on(["balloon", "popcorn", "bumper"], 14, [SURF_GRASS, SURF_DIRT, SURF_CONCRETE], 1.0)
-			_scatter_on(["booth", "coastercar"], 5, [SURF_GRASS, SURF_CONCRETE], 1.0)
-			_scatter_on(["wheel"], 2, [SURF_GRASS], 1.0)
+			_scatter_on(["fballoon", "fteacup", "fbench"], 10, [SURF_GRASS, SURF_DIRT, SURF_CONCRETE], 1.0)
+			_scatter_on(["fbumper", "fpop", "coastertrain"], 4, [SURF_GRASS, SURF_CONCRETE], 1.0)
+			_scatter_on(["teacups", "carousel"], 2, [SURF_GRASS], 1.0)
 		_:
-			_scatter_on(["apple", "hay", "animal"], 16, [SURF_FIELD, SURF_GRASS], 1.0)
-			_scatter_on(["fence", "scarecrow", "tractor"], 8, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
-			_scatter_on(["coop", "barn"], 3, [SURF_GRASS, SURF_FIELD], 1.0)
-			_scatter_on(["silo"], 2, [SURF_DIRT, SURF_GRASS], 1.0)
+			_scatter_on(["fapple", "chicken", "piglet", "fflower"], 12, [SURF_FIELD, SURF_GRASS], 1.0)
+			_scatter_on(["haybale", "railfence", "fwheat"], 6, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
+			_scatter_on(["cow", "scare", "farmtractor"], 3, [SURF_GRASS, SURF_FIELD], 1.0)
+			_scatter_on(["redbarn"], 2, [SURF_DIRT, SURF_GRASS], 1.0)
 
 func _signature_ids(layout: String) -> Array:
 	match layout:
 		"candy":
-			return ["lolli", "cupcake", "cake", "candyhouse"]
+			return ["sweetcup", "coneic", "partycake", "ghouse"]
 		"jungle":
-			return ["shroom", "raptor", "fern", "trex"]
+			return ["raptord", "jpalm", "trike", "tyrant"]
 		"pirate":
-			return ["barrel", "cannon", "chest", "rowboat"]
+			return ["pcannon", "ppalm", "prowboat", "pship"]
 		"snow":
-			return ["snowman", "pine", "gift", "cabin"]
+			return ["hsnowman", "hpine", "skier", "hcabin"]
 		"desert":
-			return ["cactus", "tent", "claypot", "camel"]
+			return ["dtallcac", "dcamel", "dtent", "dadobe"]
 		"toy":
-			return ["block", "teddy", "robot", "toycar"]
+			return ["tracer", "teddybear", "bot", "toytrain"]
 		"space":
-			return ["rover", "canister", "dish", "dome"]
+			return ["astro", "spacerover", "satdish", "stackrocket"]
 		"haunt":
-			return ["pumpkin", "tomb", "ghost", "crypt"]
+			return ["hpumpkin", "htomb", "hghost", "hhouse"]
 		"fair":
-			return ["balloon", "booth", "bumper", "wheel"]
+			return ["fpop", "teacups", "carousel", "ferris"]
 		_:
-			return ["scarecrow", "tractor", "coop", "barn"]
+			return ["cow", "farmtractor", "scare", "redbarn"]
 
 func _finale_id(layout: String) -> String:
 	match layout:
 		"candy":
-			return "candycastle"
+			return "ccastle"
 		"jungle":
-			return "volcano"
+			return "lavacone"
 		"pirate":
-			return "fort"
+			return "plight"
 		"snow":
-			return "chapel"
+			return "icecastle"
 		"desert":
-			return "oasisgate"
+			return "dsphinx"
 		"toy":
-			return "brickfort"
+			return "blockfort"
 		"space":
-			return "station"
+			return "gantry"
 		"haunt":
-			return "mansion"
+			return "hmansion"
 		"fair":
-			return "coaster"
+			return "ferris"
 		_:
-			return "windmill"
+			return "farmmill"
 
 func _place_signatures(layout: String) -> void:
 	var ids: Array = _signature_ids(layout)
@@ -2951,21 +3202,21 @@ func _tint_animals() -> void:
 			n += 1
 
 func _swallow_bucket(id: String) -> String:
-	if id in ["sedan", "taxi", "hatch", "van", "police", "truck", "bus", "tractor", "forklift", "rover", "toycar", "bumper"]:
+	if id in ["sedan", "taxi", "hatch", "van", "police", "truck", "bus", "tractor", "forklift", "rover", "toycar", "bumper", "farmtractor", "pickup", "tracer", "ttruck", "spacerover", "fbumper"]:
 		return "cars"
-	if id in ["tree_small", "tree_large", "tree_simple", "palm", "pine", "fern", "cactus"]:
+	if id in ["tree_small", "tree_large", "tree_simple", "palm", "pine", "fern", "cactus", "jpalm", "jpalmtall", "ppalm", "hpine", "dcactus", "dtallcac", "dpalm", "fernleaf", "htree"]:
 		return "trees"
-	if id in ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "house_a", "house_b", "house_c", "tower_a", "tower_c", "barn", "shop", "apartment", "warehouse", "gazebo", "cabana", "landmark", "windmill", "crane", "silo", "coop", "candyhouse", "candycastle", "cabin", "igloo", "chapel", "pyramid", "oasisgate", "dollhouse", "brickfort", "dome", "station", "crypt", "mansion", "fort", "volcano", "booth"]:
+	if id in ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "house_a", "house_b", "house_c", "tower_a", "tower_c", "barn", "shop", "apartment", "warehouse", "gazebo", "cabana", "landmark", "windmill", "crane", "silo", "coop", "candyhouse", "candycastle", "cabin", "igloo", "chapel", "pyramid", "oasisgate", "dollhouse", "brickfort", "dome", "station", "crypt", "mansion", "fort", "volcano", "booth", "redbarn", "grainsilo", "farmmill", "ghouse", "ccastle", "jhut", "lavacone", "tavern", "plight", "hcabin", "skilift", "icecastle", "dadobe", "dpyramid", "dsphinx", "toyhouse", "blockfort", "habitat", "stackrocket", "gantry", "hhouse", "hcrypt", "hmansion", "carousel", "ferris"]:
 		return "buildings"
 	if id == "bigtree":
 		return "trees"
-	if id in ["person_a", "person_b", "person_c"]:
+	if id in ["person_a", "person_b", "person_c", "astro", "skier"]:
 		return "people"
-	if id in ["boat", "rowboat", "galleon"]:
+	if id in ["boat", "rowboat", "galleon", "prowboat", "pship", "pdock"]:
 		return "boats"
 	if id == "lamp":
 		return "lamps"
-	if id in ["animal", "raptor", "trex", "camel"]:
+	if id in ["animal", "raptor", "trex", "camel", "chicken", "piglet", "cow", "raptord", "trike", "tyrant", "brachio", "dcamel"]:
 		return "animals"
 	return "props"
 
@@ -5189,21 +5440,45 @@ func _set_music_rate(rate: float) -> void:
 		return
 	JavaScriptBridge.eval("if(window.__holeSetMusicRate)window.__holeSetMusicRate(%.3f);" % clampf(rate, 0.84, 1.16), true)
 
+func _motif_for(layout: String) -> float:
+	match layout:
+		"candy":
+			return 1.0
+		"jungle":
+			return 2.0
+		"pirate":
+			return 3.0
+		"snow":
+			return 4.0
+		"desert":
+			return 5.0
+		"toy":
+			return 6.0
+		"space":
+			return 7.0
+		"haunt":
+			return 8.0
+		"fair":
+			return 9.0
+		_:
+			return 0.0
+
 func _apply_theme(m: Dictionary) -> void:
 	sky_mat.sky_top_color = m.sky_top
 	sky_mat.sky_horizon_color = m.horizon
 	sky_mat.ground_horizon_color = m.horizon
 	sky_mat.ground_bottom_color = m.ground
-	world_env.adjustment_saturation = clampf(float(m.sat) * 0.82, 0.90, 1.02)
+	world_env.adjustment_saturation = clampf(float(m.sat) * 0.96, 1.0, 1.10)
 	if skirt_mat:
 		skirt_mat.albedo_color = m.ground
 	sun.light_color = m.sun
-	sun.light_energy = 0.4
+	sun.light_energy = 0.62
 	sun.rotation_degrees = Vector3(-62, float(m.sun_yaw), 0)
 	var paints: Array = m.get("paints", [])
 	for i in ground_mats.size():
 		var mat := ground_mats[i] as ShaderMaterial
 		mat.set_shader_parameter("grade_tint", Vector3.ONE)
+		mat.set_shader_parameter("motif", _motif_for(str(m.layout)))
 		if i < paints.size():
 			var pair: Array = paints[i]
 			var lo: Color = pair[0]
@@ -5213,9 +5488,9 @@ func _apply_theme(m: Dictionary) -> void:
 	world_env.fog_enabled = true
 	world_env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
 	world_env.fog_light_color = m.horizon
-	world_env.fog_density = float(m.get("fog_density", 0.0035))
-	world_env.fog_aerial_perspective = 0.18
-	world_env.fog_sky_affect = 0.35
+	world_env.fog_density = float(m.get("fog_density", 0.0024))
+	world_env.fog_aerial_perspective = 0.08
+	world_env.fog_sky_affect = 0.22
 	_set_music_rate(float(m.get("rate", 1.0)))
 
 func _apply_skin() -> void:
