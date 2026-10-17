@@ -1,9 +1,9 @@
-Music loop: "Level 1" from the Retro Game Music Pack by Juhani Junkala.
-Source: https://opengameart.org/content/5-chiptunes-action
-License: CC0 1.0 Universal (public domain)
+Music loop: original calm loop written for Hole Arcade.
+Tempo 76 BPM. Soft sine pads, a quiet bass, and slow pentatonic plucks.
+No third-party recording is included. This composition is original and
+released under CC0 1.0 Universal (public domain).
 https://creativecommons.org/publicdomain/zero/1.0/
-The author marked the pack loop-ready and free to use anywhere.
-This copy is a mono Ogg Vorbis encode of that track for the web build.
+The file is a mono Ogg Vorbis encode of that loop for the web build.
 
 Swallow, combo, fanfare, sting, click, and countdown sounds are original
-tones generated in the page. They are not from that pack.
+tones generated in the page.

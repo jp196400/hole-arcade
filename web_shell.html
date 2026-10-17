@@ -72,7 +72,7 @@
 		})();
 		</script>
 		<script>
-		// SFX are original tones. Music is music.ogg (CC0, see assets/music/LICENSE.txt).
+		// SFX are original tones. Music is music.ogg, an original calm loop (see assets/music/LICENSE.txt).
 		// The context is created on the first tap so iOS Safari will play it.
 		(function () {
 			var prefs = { music: true, sfx: true, haptics: true };
@@ -111,7 +111,7 @@
 				src.buffer = buf;
 				var filter = c.createBiquadFilter();
 				filter.type = 'bandpass';
-				filter.frequency.value = 740;
+				filter.frequency.value = 480;
 				var g = c.createGain();
 				g.gain.value = peak;
 				src.connect(filter);
@@ -137,8 +137,13 @@
 					src.loop = true;
 					src.playbackRate.value = musicRate;
 					var g = c.createGain();
-					g.gain.value = 0.22;
-					src.connect(g);
+					g.gain.value = 0.11;
+					var warm = c.createBiquadFilter();
+					warm.type = 'lowpass';
+					warm.frequency.value = 2200;
+					warm.Q.value = 0.5;
+					src.connect(warm);
+					warm.connect(g);
 					g.connect(c.destination);
 					src.start();
 					music = src;
@@ -223,18 +228,18 @@
 					if (!c) return;
 					if (c.state === 'suspended') c.resume();
 					var p = Math.max(0.55, Math.min(2.6, pitch || 1));
-					if (kind === 'pop') tone(c, 'sine', 720 * p, 280 * p, 0.08, 0.09);
-					else if (kind === 'clunk') tone(c, 'triangle', 240 * p, 90 * p, 0.11, 0.12);
-					else if (kind === 'crunch') crunch(c, 0.16);
+					if (kind === 'pop') tone(c, 'sine', 620 * p, 260 * p, 0.05, 0.1);
+					else if (kind === 'clunk') tone(c, 'sine', 210 * p, 90 * p, 0.06, 0.14);
+					else if (kind === 'crunch') crunch(c, 0.07);
 					else if (kind === 'fanfare') {
-						tone(c, 'square', 523, 523, 0.05, 0.12);
-						setTimeout(function () { var x = ac(); if (x) tone(x, 'square', 659, 659, 0.05, 0.12); }, 110);
-						setTimeout(function () { var x = ac(); if (x) tone(x, 'square', 784, 784, 0.06, 0.2); }, 220);
-					} else if (kind === 'sting_win') tone(c, 'triangle', 392, 784, 0.08, 0.22);
-					else if (kind === 'sting_lose') tone(c, 'triangle', 330, 110, 0.09, 0.28);
-					else if (kind === 'click') tone(c, 'square', 980, 640, 0.035, 0.04);
-					else if (kind === 'beep') tone(c, 'square', 880 * p, 880 * p, 0.06, 0.09);
-					else tone(c, 'sine', 480 * p, 150 * p, 0.09, 0.12);
+						tone(c, 'sine', 523, 523, 0.035, 0.14);
+						setTimeout(function () { var x = ac(); if (x) tone(x, 'sine', 659, 659, 0.035, 0.14); }, 120);
+						setTimeout(function () { var x = ac(); if (x) tone(x, 'sine', 784, 784, 0.04, 0.22); }, 240);
+					} else if (kind === 'sting_win') tone(c, 'sine', 392, 660, 0.05, 0.24);
+					else if (kind === 'sting_lose') tone(c, 'sine', 311, 140, 0.05, 0.3);
+					else if (kind === 'click') tone(c, 'sine', 740, 520, 0.02, 0.05);
+					else if (kind === 'beep') tone(c, 'sine', 660 * p, 660 * p, 0.03, 0.1);
+					else tone(c, 'sine', 420 * p, 180 * p, 0.05, 0.12);
 				} catch (err) {}
 			};
 			window.__holeSwallow = function (pitch, big) {

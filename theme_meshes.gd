@@ -8,6 +8,9 @@ static func defs() -> Array:
 		_def("chicken", "small", 3, 0.26, _chicken()),
 		_def("piglet", "small", 4, 0.46, _pig()),
 		_def("cow", "small", 8, 0.82, _cow()),
+		_def("sheep", "small", 6, 0.58, _sheep()),
+		_def("penguin", "small", 4, 0.32, _penguin()),
+		_def("snowmobile", "ride", 10, 0.70, _snowmobile()),
 		_def("scare", "small", 6, 0.70, _scare()),
 		_def("farmtractor", "ride", 16, 0.78, _tractor()),
 		_def("pickup", "ride", 14, 0.92, _pickup()),
@@ -233,6 +236,48 @@ static func _cow() -> ArrayMesh:
 	_eye(st, Vector3(0.12, 0.82, 1.0), 0.05)
 	_box(st, Vector3(0, 0.52, 1.02), Vector3(0.08, 0.1, 0.06), Color(0.92, 0.74, 0.18))
 	_box(st, Vector3(0.18, 0.9, -0.2), Vector3(0.22, 0.16, 0.28), spot)
+	return _commit(st)
+
+static func _sheep() -> ArrayMesh:
+	var st := _begin()
+	var wool := Color(0.94, 0.93, 0.9)
+	var face := Color(0.28, 0.24, 0.22)
+	_ellip(st, Vector3(0, 0.46, 0), Vector3(0.38, 0.3, 0.48), wool)
+	_ellip(st, Vector3(0, 0.52, 0.4), Vector3(0.14, 0.12, 0.16), face)
+	_box(st, Vector3(-0.08, 0.7, 0.28), Vector3(0.05, 0.1, 0.04), face)
+	_box(st, Vector3(0.08, 0.7, 0.28), Vector3(0.05, 0.1, 0.04), face)
+	_legs4(st, 0.16, 0.16, 0.26, 0.22, face)
+	_eye(st, Vector3(-0.05, 0.54, 0.52), 0.03)
+	_eye(st, Vector3(0.05, 0.54, 0.52), 0.03)
+	return _commit(st)
+
+static func _penguin() -> ArrayMesh:
+	var st := _begin()
+	var body := Color(0.16, 0.18, 0.22)
+	var belly := Color(0.95, 0.94, 0.9)
+	var beak := Color(0.95, 0.62, 0.16)
+	_ellip(st, Vector3(0, 0.42, 0), Vector3(0.22, 0.32, 0.2), body)
+	_ellip(st, Vector3(0, 0.4, 0.06), Vector3(0.12, 0.22, 0.08), belly)
+	_box(st, Vector3(-0.2, 0.38, 0), Vector3(0.12, 0.06, 0.16), body)
+	_box(st, Vector3(0.2, 0.38, 0), Vector3(0.12, 0.06, 0.16), body)
+	_cone(st, Vector3(0, 0.48, 0.2), 0.04, 0.1, beak, 6)
+	_box(st, Vector3(-0.06, 0.08, 0.04), Vector3(0.05, 0.14, 0.08), Color(0.9, 0.55, 0.16))
+	_box(st, Vector3(0.06, 0.08, 0.04), Vector3(0.05, 0.14, 0.08), Color(0.9, 0.55, 0.16))
+	_eye(st, Vector3(-0.06, 0.58, 0.16), 0.028)
+	_eye(st, Vector3(0.06, 0.58, 0.16), 0.028)
+	return _commit(st)
+
+static func _snowmobile() -> ArrayMesh:
+	var st := _begin()
+	var body := Color(0.82, 0.18, 0.16)
+	var ski := Color(0.75, 0.78, 0.82)
+	var dark := Color(0.2, 0.22, 0.26)
+	_box(st, Vector3(0, 0.32, 0), Vector3(0.42, 0.22, 0.9), body)
+	_box(st, Vector3(0, 0.48, -0.16), Vector3(0.36, 0.16, 0.28), dark)
+	_box(st, Vector3(0, 0.22, 0.1), Vector3(0.5, 0.08, 0.7), ski)
+	_box(st, Vector3(-0.16, 0.12, 0.42), Vector3(0.08, 0.06, 0.55), ski)
+	_box(st, Vector3(0.16, 0.12, 0.42), Vector3(0.08, 0.06, 0.55), ski)
+	_box(st, Vector3(0, 0.4, 0.36), Vector3(0.16, 0.1, 0.16), Color(0.95, 0.84, 0.2))
 	return _commit(st)
 
 static func _scare() -> ArrayMesh:

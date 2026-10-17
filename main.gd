@@ -63,9 +63,9 @@ const SURF_DOCK := 9
 const LEVEL_SCORE := [0, 14, 36, 70, 120, 190]
 const LEVEL_RADIUS := [0.50, 0.78, 1.05, 1.42, 1.9, 2.5]
 const CLEAR_RATIO := 0.95
-# Opening view: snacks only inside the clear radius, structures past the mid ring.
-const SPAWN_CLEAR := 16.0
-const SPAWN_MID := 30.0
+# A small pocket of snacks around the hole. Everything else mixes across the map.
+const SPAWN_CLEAR := 8.0
+const SPAWN_MID := 13.0
 const VIEW_TALL_CAP := 3
 # Rival name tags sit under this so they cannot cover the level name.
 const HUD_TAG_MIN_Y := 196.0
@@ -300,7 +300,7 @@ void fragment() {
 }
 """
 const LIFE_AMP := {
-	"chicken": 0.12, "piglet": 0.08, "cow": 0.05, "raptord": 0.06, "trike": 0.04,
+	"chicken": 0.12, "piglet": 0.08, "cow": 0.05, "sheep": 0.06, "penguin": 0.1, "raptord": 0.06, "trike": 0.04,
 	"tyrant": 0.035, "brachio": 0.03, "dcamel": 0.05, "hbat": 0.22, "hcrow": 0.18,
 	"teddybear": 0.04, "scare": 0.045, "fernleaf": 0.1, "jpalm": 0.045, "jpalmtall": 0.04,
 	"ppalm": 0.045, "dpalm": 0.045, "hpine": 0.04, "htree": 0.05, "dcactus": 0.03,
@@ -462,6 +462,9 @@ var play_save_wait := 0.0
 var chrome_layer: CanvasLayer
 var chrome_buttons: Array = []
 var hint_lbl: Label
+var drag_hint: Label
+var drag_hint_t := -1.0
+var web_audio_unlocked := false
 var hand_icon: Control
 var level_pill: Button
 var logo_lbl: Label
@@ -567,6 +570,7 @@ var hud_layer: CanvasLayer
 var continue_btn: Button
 var next_btn: Button
 var double_btn: Button
+var keep_btn: Button
 var menu_sha: Label
 var ui_font: Font
 var progress_ring: Control
@@ -623,8 +627,11 @@ func _ready() -> void:
 	AdService.rewarded_done.connect(_after_reward)
 	_prewarm_shaders()
 	var start_idx := mini(Save.unlocked_level, CatalogScript.maps().size() - 1)
-	_enter_attract(start_idx)
 	var preview := _query_preview()
+	if preview == "":
+		start_round(start_idx)
+	else:
+		_enter_attract(start_idx)
 	if preview == "levels":
 		_show_screen("levels")
 	elif preview == "results":
@@ -1169,7 +1176,21 @@ func _probe_tiers() -> void:
 			var t := _tier_of(float(o.base))
 			var nm := str(id_name.get(int(o.kind), "?"))
 			(mixes[t] as Dictionary)[nm] = int((mixes[t] as Dictionary).get(nm, 0)) + 1
-		print("TIERMAP %s props %d final %.3f maxb %.3f limit %.3f unfit %d near30 tiny %d small %d" % [str(map.name), props.size(), final_radius, map_max_base, limit, unfit, near_tiny, near_small])
+		var inner_large := 0
+		var outer_small := 0
+		var mover_n := 0
+		for o in props:
+			if not bool(o.get("alive", true)):
+				continue
+			var home := (o.pos as Vector3).length()
+			var t := _tier_of(float(o.base))
+			if t >= 4 and home < 36.0:
+				inner_large += 1
+			if t <= 1 and home > 40.0:
+				outer_small += 1
+			if int(o.mover) != 0:
+				mover_n += 1
+		print("TIERMAP %s props %d final %.3f maxb %.3f limit %.3f unfit %d near30 tiny %d small %d innerLarge %d outerSmall %d movers %d" % [str(map.name), props.size(), final_radius, map_max_base, limit, unfit, near_tiny, near_small, inner_large, outer_small, mover_n])
 		for t in TIER_NAME.size():
 			var pairs: Array = []
 			for nm in (mixes[t] as Dictionary).keys():
@@ -1295,8 +1316,8 @@ func _preview_ad() -> void:
 
 func _preview_eaten() -> void:
 	start_round(2)
-	playing = false
-	_offer_continue("Scoot")
+	playing = true
+	_present_eaten("Scoot")
 
 func _focus_canvas() -> void:
 	if not OS.has_feature("web"):
@@ -1325,6 +1346,8 @@ func _on_web_steer(args: Array) -> void:
 	var anchor := _css_to_view(Vector2(float(args[1]), float(args[2])), css)
 	var finger := _css_to_view(Vector2(float(args[3]), float(args[4])), css)
 	var down := int(args[0]) != 0
+	if down:
+		_unlock_audio()
 	if not down:
 		if joy_id == -1 and joy_held:
 			if mode == "attract" and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
@@ -2572,7 +2595,7 @@ func _spawn_city() -> void:
 	_build_shadows()
 	city_load_ms = Time.get_ticks_msec() - t0
 	city_mem = int(OS.get_static_memory_usage())
-	print("CITY %s props %d tiles %d load %d ms mem %d" % [str(map.get("name", "")), props.size(), city_tiles, city_load_ms, city_mem])
+	print("CITY %s props %d tiles %d load %d ms mem %d movers %d" % [str(map.get("name", "")), props.size(), city_tiles, city_load_ms, city_mem, movers.size()])
 
 func _spawn_ground() -> void:
 	_build_surfaces()
@@ -3019,7 +3042,7 @@ func _ladder_ids(layout: String) -> Array:
 func _tier_surface_ok(p: Vector3, tier: int) -> bool:
 	if _layout_blocked(p):
 		return false
-	if tier >= 3 and p.length() < 12.0:
+	if tier >= 4 and p.length() < SPAWN_CLEAR:
 		return false
 	var s := _surf_f(p.x, p.z)
 	if s == SURF_WATER or s == SURF_TRACK:
@@ -3066,11 +3089,11 @@ func _scatter_tier(ids: Array, tier: int, need: int, near_spawn: bool) -> int:
 	var made := 0
 	if near_spawn:
 		var tries := 0
+		var inner := 3.1
+		var outer := maxf(SPAWN_CLEAR - 0.45, inner + 0.8)
 		while made < need and tries < need * 40 and props.size() < PROP_CAP:
 			tries += 1
 			var ang := randf() * TAU
-			var inner := 4.2
-			var outer := 18.0 if made % 3 != 0 else 32.0
 			var rr := sqrt(randf_range(inner * inner, outer * outer))
 			var p := Vector3(cos(ang) * rr, 0.0, sin(ang) * rr)
 			if _try_tier_place(pool, tier, p):
@@ -3100,27 +3123,23 @@ func _balance_tiers() -> void:
 	for t in TIER_NAME.size():
 		var need := int(TIER_MIN[t]) - int(counts[t])
 		if need > 0:
-			_scatter_tier(ids, t, need, t <= 1)
+			_scatter_tier(ids, t, need, false)
 
 func _seed_ladder() -> void:
-	# Large rungs go down first so their footprints claim ground before the
-	# street clutter fills every gap. Small snacks crowd the spawn.
+	# Every district gets a mix of rungs. Large footprints land first so the
+	# small snacks can still fill the gaps between them.
 	var ids := _ladder_ids(str(map.get("layout", "grid")))
-	# Four waves, largest first inside each wave, so every district grows a
-	# full ladder instead of the biggest props paving the map.
 	var left: Array = []
 	left.resize(TIER_NAME.size())
 	for t in TIER_NAME.size():
-		left[t] = int(TIER_MIN[t]) if t >= 2 else 0
+		left[t] = int(TIER_MIN[t])
 	for _round in 4:
-		for t in range(TIER_NAME.size() - 1, 1, -1):
+		for t in range(TIER_NAME.size() - 1, -1, -1):
 			if int(left[t]) <= 0:
 				continue
 			var chunk := mini(int(ceil(float(TIER_MIN[t]) / 4.0)), int(left[t]))
 			left[t] = int(left[t]) - _scatter_tier(ids, t, chunk, false)
-	_scatter_tier(ids, 0, 220, true)
-	_scatter_tier(ids, 1, 180, true)
-	_scatter_tier(ids, 1, 100, false)
+	_scatter_tier(ids, 0, 56, true)
 
 func _theme_ids(layout: String) -> Array:
 	match layout:
@@ -3150,10 +3169,118 @@ func _populate() -> void:
 	var layout := str(map.get("layout", "farm"))
 	_place_signatures(layout)
 	_place_near_icons(layout)
+	_spawn_life()
 	_seed_ladder()
 	_scatter_theme(layout)
 	_balance_tiers()
 	_tint_animals()
+
+func _path_dir(p: Vector3, surfs: Array) -> Vector3:
+	for ang in [0.0, PI * 0.5, PI, -PI * 0.5]:
+		var d := Vector3(cos(ang), 0.0, sin(ang))
+		if _surf_ok(p + d * 1.6, surfs):
+			return d
+	var yaw := randf() * TAU
+	return Vector3(cos(yaw), 0.0, sin(yaw))
+
+func _spawn_wander(ids: Array, count: int, surfs: Array, near: bool) -> void:
+	_spawn_movers(ids, count, surfs, near, 1)
+
+func _spawn_drive(ids: Array, count: int, surfs: Array) -> void:
+	_spawn_movers(ids, count, surfs, false, 2)
+
+func _path_spots(surfs: Array) -> Array:
+	var near_spots: Array = []
+	var far_spots: Array = []
+	var x := GRID_MIN + 2
+	while x < GRID_MAX - 1:
+		var z := GRID_MIN + 2
+		while z < GRID_MAX - 1:
+			var p := Vector3(float(x), 0.0, float(z))
+			if _surf_ok(p, surfs) and not _layout_blocked(p):
+				var home := p.length()
+				if home > 6.0 and home < 24.0:
+					near_spots.append(p)
+				elif home >= 24.0:
+					far_spots.append(p)
+			z += 3
+		x += 3
+	near_spots.shuffle()
+	far_spots.shuffle()
+	near_spots.append_array(far_spots)
+	return near_spots
+
+func _spawn_movers(ids: Array, count: int, surfs: Array, near: bool, mover: int) -> void:
+	if ids.is_empty() or count <= 0:
+		return
+	var spots: Array = _path_spots(surfs)
+	var made := 0
+	var spot_i := 0
+	var relaxed := false
+	while made < count and props.size() < PROP_CAP:
+		if spot_i >= spots.size():
+			if relaxed:
+				break
+			relaxed = true
+			spot_i = 0
+			continue
+		var p: Vector3 = spots[spot_i]
+		spot_i += 1
+		var home := p.length()
+		if not relaxed:
+			if mover == 1 and near and (home < 5.0 or home > 26.0):
+				continue
+			if mover == 1 and not near and home < 16.0:
+				continue
+		var id := str(ids[made % ids.size()])
+		var dir := _path_dir(p, surfs) if mover == 2 else Vector3(cos(randf() * TAU), 0.0, sin(randf() * TAU))
+		if _place_id(id, p, dir, -1.0, 1.0, Color.WHITE, -1, mover, surfs):
+			props[props.size() - 1]["walk"] = surfs
+			if id in ["prowboat", "pship", "boat"]:
+				props[props.size() - 1].speed = randf_range(0.45, 0.75)
+			elif mover == 1 and id in ["cow", "sheep", "dcamel", "brachio", "tyrant"]:
+				props[props.size() - 1].speed = randf_range(0.32, 0.55)
+			made += 1
+
+func _spawn_life() -> void:
+	var layout := str(map.get("layout", "farm"))
+	var people := ["person_a", "person_b", "person_c"]
+	var cars := ["sedan", "taxi", "hatch", "van"]
+	match layout:
+		"candy":
+			_spawn_wander(["gbread"], 8, [SURF_GRASS, SURF_CONCRETE, SURF_FIELD], true)
+			_spawn_wander(people, 6, [SURF_CONCRETE, SURF_GRASS], true)
+			_spawn_drive(cars, 6, [SURF_TRACK])
+		"jungle":
+			_spawn_wander(["raptord", "trike", "raptord"], 7, [SURF_GRASS, SURF_FIELD, SURF_DIRT], true)
+			_spawn_wander(["tyrant", "brachio"], 3, [SURF_FIELD, SURF_GRASS], false)
+			_spawn_wander(people, 4, [SURF_DIRT, SURF_GRASS], true)
+		"pirate":
+			_spawn_drive(["prowboat", "prowboat", "pship"], 5, [SURF_WATER])
+			_spawn_wander(people, 7, [SURF_WOOD, SURF_SAND, SURF_GRASS], true)
+		"snow":
+			_spawn_wander(["penguin", "penguin", "skier"], 8, [SURF_SAND, SURF_GRASS], true)
+			_spawn_drive(["snowmobile", "hsled"], 5, [SURF_DIRT])
+			_spawn_wander(people, 4, [SURF_CONCRETE, SURF_SAND], true)
+		"desert":
+			_spawn_wander(["dcamel", "dcamel", "person_a"], 8, [SURF_SAND, SURF_DIRT], true)
+			_spawn_wander(people, 4, [SURF_CONCRETE, SURF_GRASS], true)
+		"toy":
+			_spawn_drive(["tracer", "ttruck", "tracer"], 7, [SURF_CONCRETE, SURF_FIELD])
+			_spawn_wander(["bot", "bot", "teddybear"], 6, [SURF_GRASS, SURF_CONCRETE, SURF_FIELD], true)
+		"space":
+			_spawn_drive(["spacerover"], 5, [SURF_CONCRETE])
+			_spawn_wander(["astro"], 7, [SURF_SAND, SURF_CONCRETE, SURF_DIRT], true)
+		"haunt":
+			_spawn_wander(["hghost", "hghost", "person_a"], 7, [SURF_GRASS, SURF_DIRT], true)
+			_spawn_wander(["hbat", "hcrow", "hbat"], 8, [SURF_GRASS, SURF_FIELD, SURF_DIRT], true)
+		"fair":
+			_spawn_wander(people, 8, [SURF_CONCRETE, SURF_DIRT, SURF_GRASS], true)
+			_spawn_drive(["fbumper", "hcart", "fbumper"], 6, [SURF_DIRT, SURF_CONCRETE])
+		_:
+			_spawn_wander(["chicken", "piglet", "sheep", "chicken"], 10, [SURF_GRASS, SURF_FIELD], true)
+			_spawn_wander(["cow", "sheep", "piglet", "chicken"], 12, [SURF_GRASS, SURF_FIELD], false)
+			_spawn_wander(people, 6, [SURF_DIRT, SURF_GRASS], true)
 
 func _scatter_theme(layout: String) -> void:
 	match layout:
@@ -3514,7 +3641,7 @@ func _tint_animals() -> void:
 			n += 1
 
 func _swallow_bucket(id: String) -> String:
-	if id in ["sedan", "taxi", "hatch", "van", "police", "truck", "bus", "tractor", "forklift", "rover", "toycar", "bumper", "farmtractor", "pickup", "tracer", "ttruck", "spacerover", "fbumper"]:
+	if id in ["sedan", "taxi", "hatch", "van", "police", "truck", "bus", "tractor", "forklift", "rover", "toycar", "bumper", "farmtractor", "pickup", "tracer", "ttruck", "spacerover", "fbumper", "snowmobile", "hsled"]:
 		return "cars"
 	if id in ["tree_small", "tree_large", "tree_simple", "palm", "pine", "fern", "cactus", "jpalm", "jpalmtall", "ppalm", "hpine", "dcactus", "dtallcac", "dpalm", "fernleaf", "htree"]:
 		return "trees"
@@ -3528,7 +3655,7 @@ func _swallow_bucket(id: String) -> String:
 		return "boats"
 	if id == "lamp":
 		return "lamps"
-	if id in ["animal", "raptor", "trex", "camel", "chicken", "piglet", "cow", "raptord", "trike", "tyrant", "brachio", "dcamel"]:
+	if id in ["animal", "raptor", "trex", "camel", "chicken", "piglet", "cow", "sheep", "penguin", "raptord", "trike", "tyrant", "brachio", "dcamel"]:
 		return "animals"
 	return "props"
 
@@ -3701,14 +3828,15 @@ func _spawn_ok(id: String, p: Vector3, grow: float) -> bool:
 		return false
 	if _blocks_horizon(role, base, height):
 		var ang := _view_angle(p)
-		# Nothing tall in the middle of the opening view.
-		if ang < 0.42 and home < 74.0:
+		# Keep a narrow lane in front of the hole open. Larger props still
+		# sit in the same neighborhoods as the small ones.
+		if ang < 0.16 and home < 18.0:
 			return false
-		if ang < 0.72 and home < 64.0 and forward_tall >= 2:
+		if ang < 0.55 and home < 58.0 and forward_tall >= 8:
 			return false
 	return true
 
-func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float = -1.0, grow: float = 1.0, tint: Color = Color.WHITE, points: int = -1, mover: int = -1) -> bool:
+func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float = -1.0, grow: float = 1.0, tint: Color = Color.WHITE, points: int = -1, mover: int = -1, allow: Array = []) -> bool:
 	if props.size() >= PROP_CAP or not kind_by_id.has(id):
 		return false
 	if p.length() < 2.15:
@@ -3719,7 +3847,13 @@ func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float =
 		return false
 	var surf := _surf_f(p.x, p.z)
 	if surf == SURF_WATER or surf == SURF_TRACK:
-		return false
+		var allowed := false
+		for a in allow:
+			if surf == int(a):
+				allowed = true
+				break
+		if not allowed:
+			return false
 	var ki: int = int(kind_by_id[id])
 	var spec: Array = (prop_defs[ki] as Array).duplicate()
 	spec[2] = float(spec[2]) * grow
@@ -4303,7 +4437,7 @@ func _build_ui() -> void:
 	result_card.add_child(star_row)
 	for i in 3:
 		var cap := Label.new()
-		cap.position = Vector2(36, 256 + i * 118)
+		cap.position = Vector2(36, 236 + i * 96)
 		cap.size = Vector2(588, 60)
 		_style(cap, 28)
 		cap.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -4312,7 +4446,7 @@ func _build_ui() -> void:
 		result_card.add_child(cap)
 		result_labels.append(cap)
 		var track := ColorRect.new()
-		track.position = Vector2(36, 318 + i * 118)
+		track.position = Vector2(36, 286 + i * 96)
 		track.size = Vector2(588, 22)
 		track.color = Color(0.86, 0.88, 0.92)
 		track.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -4326,7 +4460,7 @@ func _build_ui() -> void:
 		result_fills.append(fill)
 	so_close_lbl = Label.new()
 	so_close_lbl.text = "So close!"
-	so_close_lbl.position = Vector2(36, 600)
+	so_close_lbl.position = Vector2(36, 512)
 	so_close_lbl.size = Vector2(588, 48)
 	so_close_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	so_close_lbl.visible = false
@@ -4334,13 +4468,17 @@ func _build_ui() -> void:
 	so_close_lbl.add_theme_color_override("font_color", Color(0.75, 0.22, 0.16))
 	so_close_lbl.add_theme_constant_override("outline_size", 0)
 	result_card.add_child(so_close_lbl)
-	double_btn = _make_button("Watch ad for 2x coins", Vector2(40, 656), Vector2(580, 92), Color(0.90, 0.62, 0.18))
+	double_btn = _make_button("Watch ad for 2x coins", Vector2(40, 596), Vector2(580, 76), Color(0.90, 0.62, 0.18), 32)
 	double_btn.pressed.connect(_on_double_coins)
 	result_card.add_child(double_btn)
-	next_btn = _make_button("Next level", Vector2(40, 764), Vector2(580, 92), Color(0.16, 0.66, 0.42))
-	next_btn.pressed.connect(_on_next_level)
+	keep_btn = _make_button("Watch ad to keep going", Vector2(40, 680), Vector2(580, 72), Color(0.20, 0.48, 0.86), 30)
+	keep_btn.pressed.connect(_on_keep_going)
+	keep_btn.visible = false
+	result_card.add_child(keep_btn)
+	next_btn = _make_button("Next", Vector2(40, 760), Vector2(580, 124), Color(0.16, 0.66, 0.42), 52)
+	next_btn.pressed.connect(_on_primary_result)
 	result_card.add_child(next_btn)
-	continue_btn = _make_button("Home", Vector2(40, 872), Vector2(580, 92), BRAND_INK)
+	continue_btn = _make_button("Home", Vector2(40, 896), Vector2(580, 76), BRAND_INK, 32)
 	continue_btn.pressed.connect(_on_continue)
 	result_card.add_child(continue_btn)
 	debug_lbl = Label.new()
@@ -4358,6 +4496,21 @@ func _build_ui() -> void:
 	guide_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	guide_ui.draw.connect(_draw_guide)
 	ui.add_child(guide_ui)
+	drag_hint = Label.new()
+	drag_hint.text = "Drag to move"
+	drag_hint.anchor_left = 0.5
+	drag_hint.anchor_right = 0.5
+	drag_hint.anchor_top = 0.5
+	drag_hint.anchor_bottom = 0.5
+	drag_hint.offset_left = -340
+	drag_hint.offset_right = 340
+	drag_hint.offset_top = 150
+	drag_hint.offset_bottom = 280
+	drag_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	drag_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	drag_hint.visible = false
+	_style(drag_hint, 72)
+	ui.add_child(drag_hint)
 	_refresh_hud()
 	_build_unlock_popup()
 	shot_path = OS.get_environment("HOLE_SHOT")
@@ -5204,7 +5357,7 @@ func _player_eats_rival(rival: Dictionary) -> void:
 
 func _rival_eats_player(rival: Dictionary) -> void:
 	_sfx("sting_lose", 1.0, false)
-	_offer_continue(str(rival.name))
+	_present_eaten(str(rival.name))
 
 func _kill_rival(rival: Dictionary) -> void:
 	rival.alive = false
@@ -5411,6 +5564,7 @@ func _process(delta: float) -> void:
 	delta = minf(delta, 1.0 / 20.0)
 	if mode == "play" or mode == "attract":
 		_poll_pointer_steer()
+	_tick_drag_hint(frame_delta)
 	if mode != "play" and mode != "results" and mode != "attract":
 		if debug_on:
 			_update_debug(frame_delta)
@@ -5504,10 +5658,84 @@ func _mover_hot(chunk: int) -> bool:
 			return true
 	return false
 
+func _chunk_bounds(chunk: int) -> Vector4:
+	var cell := (CITY_HALF * 2.0) / float(CHUNK_N)
+	var ix := chunk % CHUNK_N
+	var iz := int(chunk / CHUNK_N)
+	var x0 := -CITY_HALF + float(ix) * cell + 0.55
+	var z0 := -CITY_HALF + float(iz) * cell + 0.55
+	return Vector4(x0, z0, x0 + cell - 1.1, z0 + cell - 1.1)
+
+func _walk_ok(p: Vector3, walk: Array) -> bool:
+	if absf(p.x) > CITY_HALF - 0.8 or absf(p.z) > CITY_HALF - 0.8:
+		return false
+	var s := _surf_f(p.x, p.z)
+	if walk.is_empty():
+		return s != SURF_WATER and s != SURF_TRACK
+	for w in walk:
+		if s == int(w):
+			return true
+	return false
+
+func _mover_blocked(p: Vector3, self_uid: int) -> bool:
+	var key := _bkey(p.x, p.z)
+	if not buckets.has(key):
+		return false
+	for o in buckets[key]:
+		if int(o.uid) == self_uid or not bool(o.alive) or bool(o.in_body):
+			continue
+		var role := str(o.role)
+		if role in ["small", "clutter", "person"] or float(o.size) < 0.55:
+			continue
+		var op: Vector3 = o.pos
+		if Vector2(op.x - p.x, op.z - p.z).length() < float(o.size) * 0.5 + 0.32:
+			return true
+	return false
+
+func _advance_mover(o: Dictionary, delta: float) -> void:
+	var mover := int(o.mover)
+	var dir: Vector3 = o.dir
+	if dir.length_squared() < 0.0001:
+		dir = Vector3(0.0, 0.0, 1.0)
+	dir.y = 0.0
+	dir = dir.normalized()
+	var walk: Array = o.get("walk", [])
+	var spd := float(o.speed)
+	if mover == 1 and randf() < delta * 0.4:
+		dir = dir.rotated(Vector3.UP, randf_range(-1.1, 1.1))
+	var step := maxf(spd * delta, 0.04)
+	var ahead: Vector3 = (o.pos as Vector3) + dir * (step + 0.35)
+	if not _walk_ok(ahead, walk) or _mover_blocked(ahead, int(o.uid)):
+		var turned := false
+		for ang in [1.15, -1.15, 2.15, -2.15, PI]:
+			var nd := dir.rotated(Vector3.UP, ang)
+			var np: Vector3 = (o.pos as Vector3) + nd * 0.55
+			if _walk_ok(np, walk) and not _mover_blocked(np, int(o.uid)):
+				dir = nd
+				turned = true
+				break
+		if not turned:
+			dir = -dir
+			o.dir = dir
+			o.yaw = atan2(dir.x, dir.z)
+			return
+	var p: Vector3 = (o.pos as Vector3) + dir * spd * delta
+	if mover == 1 and int(o.chunk) < STATIC_CHUNKS:
+		var box := _chunk_bounds(int(o.chunk))
+		if p.x < box.x or p.x > box.z or p.z < box.y or p.z > box.w:
+			dir = -dir
+			p = o.pos
+	elif absf(p.x) > CITY_HALF - 1.1 or absf(p.z) > CITY_HALF - 1.1 or not _walk_ok(p, walk):
+		dir = -dir
+		p = o.pos
+	o.dir = dir
+	o.pos = p
+	o.yaw = atan2(dir.x, dir.z)
+	o.vel = dir * spd
+
 func _tick_movers(delta: float) -> void:
 	if latency_probe:
 		return
-	var lim := float(GRID_MAX) + 0.15
 	var hot := {}
 	for o in movers:
 		if bool(o.in_body) or not bool(o.alive):
@@ -5527,45 +5755,9 @@ func _tick_movers(delta: float) -> void:
 				if spin_mm:
 					spin_mm.set_instance_transform(int(o.index), spin_xf)
 			continue
-		var dir: Vector3 = o.dir
-		var spd := float(o.speed)
-		var p: Vector3 = o.pos
-		p += dir * spd * delta
-		if int(o.mover) == 1 and chunk < STATIC_CHUNKS:
-			var cell := (CITY_HALF * 2.0) / float(CHUNK_N)
-			var ix := chunk % CHUNK_N
-			var iz := int(chunk / CHUNK_N)
-			var x0 := -CITY_HALF + float(ix) * cell + 0.4
-			var z0 := -CITY_HALF + float(iz) * cell + 0.4
-			var x1 := x0 + cell - 0.8
-			var z1 := z0 + cell - 0.8
-			if p.x < x0 or p.x > x1:
-				dir.x = -dir.x
-				p.x = clampf(p.x, x0, x1)
-			if p.z < z0 or p.z > z1:
-				dir.z = -dir.z
-				p.z = clampf(p.z, z0, z1)
-			if _surf_f(p.x, p.z) == SURF_WATER:
-				dir = -dir
-				p = o.pos
-		else:
-			if p.x > lim:
-				p.x = -lim
-			elif p.x < -lim:
-				p.x = lim
-			if p.z > lim:
-				p.z = -lim
-			elif p.z < -lim:
-				p.z = lim
-		if int(o.mover) == 1 and randf() < delta * 0.25:
-			dir = -dir
-		o.dir = dir
-		o.pos = p
-		# Kenney cars and characters face +Z. atan2(dir.x, dir.z) maps +Z onto dir.
-		o.yaw = atan2(dir.x, dir.z)
-		o.vel = dir * spd
+		_advance_mover(o, delta)
 		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
-		var xform := Transform3D(basis, p)
+		var xform := Transform3D(basis, o.pos)
 		o.xform = xform
 		if bool(o.in_mesh):
 			var mm := _mm_of(o)
@@ -6162,6 +6354,8 @@ func start_round(index: int) -> void:
 	_set_chrome(false)
 	_refresh_hud()
 	_sync_audio()
+	_sync_pause_button()
+	_arm_drag_hint()
 
 func _enter_attract(index: int) -> void:
 	_clear_city()
@@ -6216,6 +6410,7 @@ func _enter_attract(index: int) -> void:
 	_set_chrome(true)
 	_refresh_level_pill()
 	_refresh_hud()
+	_hide_drag_hint()
 
 func _begin_play() -> void:
 	if ui_swallow_frames > 0:
@@ -6250,6 +6445,7 @@ func _begin_play() -> void:
 	_refresh_hud()
 	_sync_audio()
 	_sync_pause_button()
+	_arm_drag_hint()
 
 func _build_pause() -> void:
 	if pause_btn != null or hud_layer == null:
@@ -6309,6 +6505,7 @@ func _build_pause() -> void:
 	var exit_b := _make_button("Exit to menu", Vector2(40, 316), Vector2(540, 92), BRAND_INK)
 	exit_b.pressed.connect(_exit_pause)
 	card.add_child(exit_b)
+	_sync_pause_button()
 
 func _sync_pause_button() -> void:
 	if pause_btn == null:
@@ -6463,8 +6660,9 @@ func _sfx(kind: String, pitch: float, heavy: bool) -> void:
 	JavaScriptBridge.eval("if(window.__holePlay)window.__holePlay('%s',%.3f,%s);" % [kind, pitch, flag], true)
 
 func _unlock_audio() -> void:
-	if not OS.has_feature("web"):
+	if web_audio_unlocked or not OS.has_feature("web"):
 		return
+	web_audio_unlocked = true
 	JavaScriptBridge.eval("if(window.__holeUnlock)window.__holeUnlock();", true)
 
 func _sync_audio() -> void:
@@ -6475,6 +6673,115 @@ func _sync_audio() -> void:
 	var haptics := "true" if Save.haptics_on else "false"
 	JavaScriptBridge.eval("if(window.__holeSetAudio)window.__holeSetAudio(%s,%s);" % [music, sfx_on], true)
 	JavaScriptBridge.eval("if(window.__holeSetHaptics)window.__holeSetHaptics(%s);" % haptics, true)
+
+func _paint_button(b: Button, color: Color) -> void:
+	var normal := _btn_box(color)
+	var hover := _btn_box(color.lightened(0.12))
+	var pressed := _btn_box(color.darkened(0.12))
+	b.add_theme_stylebox_override("normal", normal)
+	b.add_theme_stylebox_override("hover", hover)
+	b.add_theme_stylebox_override("pressed", pressed)
+	b.add_theme_stylebox_override("focus", normal)
+
+func _arm_drag_hint() -> void:
+	if drag_hint == null:
+		return
+	if mode == "play" and playing and Save.rounds == 0:
+		drag_hint.visible = true
+		drag_hint.modulate.a = 1.0
+		drag_hint_t = 0.0
+	else:
+		_hide_drag_hint()
+
+func _hide_drag_hint() -> void:
+	drag_hint_t = -1.0
+	if drag_hint:
+		drag_hint.visible = false
+
+func _tick_drag_hint(delta: float) -> void:
+	if drag_hint == null or drag_hint_t < 0.0:
+		return
+	if joy_held and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
+		drag_hint_t = maxf(drag_hint_t, 3.05)
+	if round_cover != null and round_cover.visible and drag_hint_t < 3.0:
+		return
+	drag_hint_t += delta
+	if drag_hint_t < 3.0:
+		drag_hint.modulate.a = 1.0
+	elif drag_hint_t < 4.1:
+		drag_hint.modulate.a = clampf(1.0 - (drag_hint_t - 3.0) / 1.1, 0.0, 1.0)
+	else:
+		_hide_drag_hint()
+
+func _configure_result_actions() -> void:
+	var nxt := map_index + 1
+	var nxt_open := nxt < CatalogScript.maps().size() and nxt <= Save.unlocked_level
+	var offer_keep := round_eaten != "" and not continue_used and not round_settled
+	if keep_btn:
+		keep_btn.visible = offer_keep
+		keep_btn.disabled = false
+	if next_btn:
+		if round_cleared and nxt_open:
+			next_btn.text = "Next"
+			_paint_button(next_btn, Color(0.16, 0.66, 0.42))
+		else:
+			next_btn.text = "Retry"
+			_paint_button(next_btn, Color(0.20, 0.48, 0.86))
+		next_btn.visible = true
+		if offer_keep:
+			next_btn.position = Vector2(40, 760)
+			if continue_btn:
+				continue_btn.position = Vector2(40, 896)
+		else:
+			next_btn.position = Vector2(40, 688)
+			if continue_btn:
+				continue_btn.position = Vector2(40, 824)
+
+func _on_keep_going() -> void:
+	if continue_used or round_settled or mode != "results":
+		return
+	continue_used = true
+	if keep_btn:
+		keep_btn.visible = false
+	_show_rewarded("continue")
+
+func _present_eaten(who: String) -> void:
+	playing = false
+	joy_held = false
+	ad_hold = false
+	eaten_name = who
+	round_eaten = who
+	round_cleared = false
+	mode = "results"
+	_refresh_joystick()
+	_close_continue_layer()
+	if not round_settled:
+		coins_earned = int(float(score) * COIN_RATE)
+		if doubled:
+			coins_earned *= 2
+	round_stars = _star_rating(false)
+	if over_lbl:
+		over_lbl.text = "%s\n%s   +%d coins" % [_round_headline(), str(map.name), coins_earned]
+	_fill_result_bars()
+	result_anim = 0.0
+	if star_row:
+		star_row.set_meta("stars", 0)
+		star_row.queue_redraw()
+	if so_close_lbl:
+		so_close_lbl.visible = false
+	if double_btn:
+		double_btn.visible = true
+		double_btn.disabled = doubled
+		double_btn.text = "Coins doubled" if doubled else "Watch ad for 2x coins"
+	_configure_result_actions()
+	_hide_drag_hint()
+	_set_chrome(false)
+	_set_match_hud(false)
+	_sync_pause_button()
+	if over_panel:
+		over_panel.visible = true
+	if result_card:
+		_ease_panel(result_card, -500.0, 500.0, Vector2(330, 500))
 
 func _finish_round(cleared: bool, eaten_by: String = "") -> void:
 	if not playing:
@@ -6515,8 +6822,10 @@ func _finish_round(cleared: bool, eaten_by: String = "") -> void:
 	double_btn.visible = true
 	double_btn.disabled = false
 	double_btn.text = "Watch ad for 2x coins"
-	var nxt_open := map_index + 1 < CatalogScript.maps().size() and map_index + 1 <= Save.unlocked_level
-	next_btn.visible = cleared and nxt_open
+	if not cleared:
+		Save.note_fail()
+	_configure_result_actions()
+	_hide_drag_hint()
 	_set_chrome(false)
 	_set_match_hud(false)
 	over_panel.visible = true
@@ -6553,7 +6862,8 @@ func _after_reward(granted: bool) -> void:
 		if not granted or doubled or mode != "results":
 			return
 		doubled = true
-		Save.add_coins(coins_earned)
+		if round_settled:
+			Save.add_coins(coins_earned)
 		coins_earned *= 2
 		double_btn.text = "Coins doubled"
 		double_btn.disabled = true
@@ -6564,7 +6874,7 @@ func _after_reward(granted: bool) -> void:
 		if granted:
 			_resume_after_eaten()
 		else:
-			_offer_continue(eaten_name)
+			_present_eaten(eaten_name)
 	elif intent == "skin":
 		if granted and reward_skin != "":
 			Save.set_trial(reward_skin)
@@ -6578,6 +6888,23 @@ func _after_reward(granted: bool) -> void:
 		if mode == "daily":
 			_show_screen("daily")
 
+func _on_primary_result() -> void:
+	var nxt := map_index + 1
+	var nxt_open := nxt < CatalogScript.maps().size() and nxt <= Save.unlocked_level
+	if round_cleared and nxt_open:
+		_on_next_level()
+	else:
+		_on_results_retry()
+
+func _on_results_retry() -> void:
+	if not round_settled:
+		_settle_eaten()
+	ad_hold = false
+	if _between_ad_due():
+		_show_interstitial("retry", true)
+	else:
+		start_round(map_index)
+
 func _on_next_level() -> void:
 	if map_index + 1 >= CatalogScript.maps().size() or map_index + 1 > Save.unlocked_level:
 		return
@@ -6587,6 +6914,8 @@ func _on_next_level() -> void:
 		start_round(map_index + 1)
 
 func _on_continue() -> void:
+	if mode == "results" and not round_settled:
+		_settle_eaten()
 	if _between_ad_due():
 		_show_interstitial("home", true)
 	else:
@@ -6701,7 +7030,9 @@ func _settle_eaten() -> void:
 		round_trial = ""
 		Save.clear_trial()
 		_apply_skin()
-	var payout := int(float(score) * COIN_RATE)
+	var payout := coins_earned
+	if payout <= 0:
+		payout = int(float(score) * COIN_RATE)
 	if payout > 0:
 		Save.add_coins(payout)
 	Save.note_fail()
@@ -6747,6 +7078,11 @@ func _resume_after_eaten() -> void:
 	size_banner_t = 1.15
 	playing = true
 	mode = "play"
+	doubled = false
+	if over_panel:
+		over_panel.visible = false
+	_set_match_hud(true)
+	_sync_pause_button()
 	_refresh_hud()
 
 func _set_match_hud(on: bool) -> void:
