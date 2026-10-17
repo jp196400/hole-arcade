@@ -74,6 +74,8 @@ uniform vec3 openings[8];
 uniform float opening_r[8];
 uniform float paint_mode = 0.0;
 uniform vec3 grade_tint = vec3(1.0);
+uniform vec3 band_lo = vec3(-1.0);
+uniform vec3 band_hi = vec3(-1.0);
 varying vec3 world_pos;
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -153,6 +155,9 @@ void fragment() {
 		}
 	} else {
 		outc = clamp(vec3(luma) + (col - vec3(luma)) * 1.35, vec3(0.0), vec3(1.0));
+	}
+	if (paint_mode > 0.5 && band_lo.r >= 0.0) {
+		outc = mix(band_lo, band_hi, shade);
 	}
 	outc = mix(outc, vec3(0.012, 0.014, 0.02), cover);
 	ALBEDO = outc * grade_tint;
@@ -346,6 +351,10 @@ var next_lbl: Label
 var next_fill: ColorRect
 var combo_lbl: Label
 var size_lbl: Label
+var size_badge: ColorRect
+var kept_lbl: Label
+var kept_pulse := false
+var ui_swallow_frames := 0
 var round_stars := 0
 var rivals: Array = []
 var rival_mm: MultiMesh
@@ -1006,10 +1015,10 @@ func _preview_size() -> void:
 	shown_radius = hole_radius
 	hole_open = hole_radius
 	hole_mesh.scale = Vector3(shown_radius, 1.0, shown_radius)
-	size_banner_t = 30.0
+	size_banner_t = 0.0
+	kept_pulse = false
 	if size_lbl:
 		size_lbl.text = "Size %d" % (level + 1)
-		size_lbl.visible = true
 	_snap_camera()
 	_set_chrome(false)
 	_set_match_hud(true)
@@ -2192,110 +2201,190 @@ func _track_band(x: int, z: int, cx: float, cz: float, inner: float, outer: floa
 		return 1
 	return 0
 
-func _surface_at(layout: String, x: int, z: int) -> int:
-	var d := _district(x, z)
-	if layout == "grid":
-		if d == 0:
-			return SURF_DIRT if x % 11 == 0 or z % 11 == 0 else SURF_GRASS
-		if d == 4:
-			return SURF_ROAD if x % 4 == 0 or z % 4 == 0 else SURF_CONCRETE
-		if d == 2 or d == 8:
-			return SURF_ROAD if x % 5 == 0 or z % 5 == 0 else SURF_CONCRETE
-		return SURF_ROAD if x % 7 == 0 or z % 7 == 0 else SURF_GRASS
-	if layout == "suburb":
-		if d == 0 or d == 8:
-			return SURF_DIRT if absi(x) % 12 == 0 else SURF_GRASS
-		if d == 4:
-			return SURF_ROAD if x % 8 == 0 or z % 8 == 0 else SURF_GRASS
-		return SURF_ROAD if x % 11 == 0 or z % 11 == 0 else SURF_GRASS
-	if layout == "park":
-		var path_a := absf(float(x) - sin(float(z) * 0.07) * 28.0)
-		var path_b := absf(float(z) - cos(float(x) * 0.06) * 22.0)
-		if path_a < 1.35 or (d == 7 and path_b < 1.35):
-			return SURF_DIRT
-		if _pond(x, z, -40.0, 30.0, 16.0, 12.0) or _pond(x, z, 36.0, -28.0, 18.0, 14.0):
-			return SURF_WATER
-		if _pond(x, z, 6.0, 8.0, 12.0, 10.0) or _pond(x, z, -22.0, -42.0, 13.0, 11.0):
-			return SURF_WATER
-		if d == 5 and (x + z) % 9 == 0:
-			return SURF_DIRT
+func _surf_farm(x: int, z: int) -> int:
+	if _pond(x, z, 48.0, -36.0, 14.0, 11.0):
+		return SURF_WATER
+	if _pond(x, z, 48.0, -36.0, 18.0, 15.0):
+		return SURF_DIRT
+	if absi(x) <= 2 or absi(z) <= 2:
+		return SURF_DIRT
+	if _pond(x, z, -46.0, 28.0, 22.0, 18.0):
 		return SURF_GRASS
-	if layout == "boardwalk":
-		if absi(x) % 16 == 0 and z > 18 and z < 62:
-			return SURF_WOOD
-		if d == 6:
-			return SURF_ROAD if x % 8 == 0 or z % 8 == 0 else SURF_CONCRETE
-		if z >= 36:
-			return SURF_WATER
-		if z >= 26 and z <= 34:
-			return SURF_WOOD
+	var qx := int(floor(float(x + 80) / 16.0))
+	var qz := int(floor(float(z + 80) / 16.0))
+	if (qx + qz) % 2 == 0:
+		return SURF_FIELD
+	return SURF_GRASS
+
+func _surf_candy(x: int, z: int) -> int:
+	var fx := float(x)
+	var fz := float(z)
+	var plazas: Array = [Vector2(0, 0), Vector2(40, 28), Vector2(-36, 22), Vector2(24, -40), Vector2(-28, -34)]
+	for p in plazas:
+		var at: Vector2 = p
+		if _pond(x, z, at.x, at.y, 8.0, 8.0):
+			return SURF_CONCRETE
+	if absf(fz - sin(fx * 0.05) * 16.0) < 2.4 and fx > -50.0:
+		return SURF_WATER
+	var ang := atan2(fz, fx)
+	var rad := sqrt(fx * fx + fz * fz)
+	var arm := fposmod(rad - ang * 7.5, 16.0)
+	if arm < 2.0 and rad > 10.0 and rad < 74.0:
+		return SURF_TRACK
+	if _pond(x, z, -8.0, 46.0, 16.0, 12.0):
+		return SURF_FIELD
+	return SURF_GRASS
+
+func _surf_jungle(x: int, z: int) -> int:
+	var fx := float(x)
+	var fz := float(z)
+	if absf(fx - sin(fz * 0.05) * 28.0) < 3.4:
+		return SURF_WATER
+	if absf(fz - cos(fx * 0.045) * 18.0) < 1.6:
+		return SURF_DIRT
+	if _pond(x, z, -20.0, -24.0, 14.0, 12.0) or _pond(x, z, 34.0, 18.0, 12.0, 10.0) or _pond(x, z, 8.0, -48.0, 10.0, 10.0):
+		return SURF_GRASS
+	return SURF_FIELD
+
+func _surf_pirate(x: int, z: int) -> int:
+	var fx := float(x)
+	var fz := float(z)
+	var coast := 6.0 + sin(fx * 0.06) * 18.0
+	if fx >= -46.0 and fx <= -34.0 and fz > coast - 16.0 and fz < coast + 14.0:
+		return SURF_WOOD
+	if fx >= -6.0 and fx <= 6.0 and fz > coast - 16.0 and fz < coast + 14.0:
+		return SURF_WOOD
+	if fx >= 30.0 and fx <= 42.0 and fz > coast - 16.0 and fz < coast + 14.0:
+		return SURF_WOOD
+	if fz > coast + 5.0:
+		return SURF_WATER
+	if fz > coast - 6.0:
 		return SURF_SAND
-	if layout == "farm":
-		if absi(x) <= 2 or absi(z) <= 2:
-			return SURF_DIRT
-		if d == 0:
-			return SURF_GRASS
-		if d == 4:
-			return SURF_DIRT if (absi(x) / 5) % 2 == 0 else SURF_GRASS
-		if d == 8:
-			return SURF_GRASS
-		if (absi(x) / 6) % 2 == (absi(z) / 6) % 2:
-			return SURF_FIELD
-		return SURF_GRASS
-	if layout == "harbor":
-		var dock := absi(x) % 14 == 0 and z >= -8 and z <= 50
-		if dock and z >= 4:
-			return SURF_DOCK if z >= 16 else SURF_CONCRETE
-		if d == 6 or d == 3:
-			return SURF_CONCRETE
-		if d == 0:
-			return SURF_ROAD if x % 8 == 0 or z % 8 == 0 else SURF_CONCRETE
-		if z >= 24 or d == 2 or d == 5:
-			return SURF_WATER
+	if _pond(x, z, -22.0, -40.0, 12.0, 10.0):
 		return SURF_CONCRETE
-	if layout == "campus":
-		if absi(x) <= 16 and absi(z) <= 16:
+	if absf(fx + 10.0 - sin(fz * 0.08) * 12.0) < 1.5 and fz < coast:
+		return SURF_DIRT
+	return SURF_GRASS
+
+func _surf_snow(x: int, z: int) -> int:
+	var fx := float(x)
+	var fz := float(z)
+	if _pond(x, z, 18.0, 34.0, 16.0, 12.0):
+		return SURF_WATER
+	if absf(fx - sin(fz * 0.055) * 24.0) < 1.8:
+		return SURF_DIRT
+	var huts: Array = [Vector2(-30, -20), Vector2(8, -8), Vector2(36, -28), Vector2(-12, 48), Vector2(44, 16)]
+	for h in huts:
+		var at: Vector2 = h
+		if _pond(x, z, at.x, at.y, 7.0, 6.0):
 			return SURF_CONCRETE
-		var east := _track_band(x, z, 48.0, -40.0, 14.0, 20.0)
-		if east == 1:
-			return SURF_TRACK
-		if east == 2:
-			return SURF_GRASS
-		var west := _track_band(x, z, -42.0, 38.0, 11.0, 16.0)
-		if west == 1:
-			return SURF_TRACK
-		if west == 2:
-			return SURF_GRASS
-		if absi(x) <= 1 or absi(z) <= 1:
-			return SURF_ROAD
-		if d == 0 and x % 10 == 0:
+	if _pond(x, z, -48.0, -40.0, 18.0, 14.0):
+		return SURF_GRASS
+	return SURF_SAND
+
+func _surf_desert(x: int, z: int) -> int:
+	if _pond(x, z, -28.0, 22.0, 11.0, 9.0):
+		return SURF_WATER
+	if _pond(x, z, -28.0, 22.0, 18.0, 16.0):
+		return SURF_GRASS
+	var fx := float(x)
+	var fz := float(z)
+	if absf(fz + fx * 0.78) < 1.5 and fx > -32.0 and fx < 8.0:
+		return SURF_CONCRETE
+	var dune := sin(fx * 0.075 + fz * 0.04)
+	if dune > 0.25:
+		return SURF_DIRT
+	return SURF_SAND
+
+func _surf_toy(x: int, z: int) -> int:
+	if absi(x) >= 70 or absi(z) >= 70:
+		return SURF_WOOD
+	var fx := float(x)
+	var fz := float(z)
+	if fx * fx + fz * fz < 18.0 * 18.0:
+		return SURF_GRASS
+	var ring := sqrt(fx * fx + fz * fz)
+	if ring > 40.0 and ring < 44.0:
+		return SURF_WOOD
+	var bx := int(floor((fx + 66.0) / 12.0))
+	var bz := int(floor((fz + 66.0) / 12.0))
+	if (bx + bz) % 2 == 0:
+		return SURF_FIELD
+	return SURF_CONCRETE
+
+func _surf_space(x: int, z: int) -> int:
+	var pads: Array = [Vector2(0, -16), Vector2(32, 24), Vector2(-36, 12), Vector2(18, -46), Vector2(-22, -40), Vector2(48, -18)]
+	for p in pads:
+		var at: Vector2 = p
+		if _pond(x, z, at.x, at.y, 6.5, 6.5):
+			return SURF_CONCRETE
+		if _pond(x, z, at.x, at.y, 10.0, 10.0):
+			return SURF_DIRT
+	if _pond(x, z, -48.0, 42.0, 8.0, 8.0):
+		return SURF_WATER
+	var fx := float(x)
+	var fz := float(z)
+	if absf(fz - sin(fx * 0.04) * 26.0) < 2.2:
+		return SURF_CONCRETE
+	return SURF_SAND
+
+func _surf_haunt(x: int, z: int) -> int:
+	if _pond(x, z, 34.0, -22.0, 14.0, 10.0) or _pond(x, z, -42.0, 26.0, 12.0, 16.0):
+		return SURF_WATER
+	var fx := float(x)
+	var fz := float(z)
+	var crooked := sin(fx * 0.08) * 12.0 + sin(fx * 0.021) * 18.0
+	if absf(fz - crooked) < 1.7:
+		return SURF_DIRT
+	if _pond(x, z, -18.0, -30.0, 20.0, 16.0):
+		var h := int(absf(sin(float(x * 13 + z * 7))) * 1000.0) % 5
+		if h == 0:
 			return SURF_DIRT
 		return SURF_GRASS
-	if layout == "fair":
-		var radial := sqrt(float(x * x + z * z))
-		if radial > 34.0 and radial < 44.0:
-			return SURF_DIRT
-		var ox := float(x) - 40.0
-		var oz := float(z) + 36.0
-		var ring := sqrt(ox * ox + oz * oz)
-		if ring > 10.0 and ring < 18.0:
-			return SURF_DIRT
-		if absi(x) <= 10 and absi(z) <= 10:
-			return SURF_CONCRETE
-		if d == 0:
-			return SURF_CONCRETE
-		return SURF_GRASS
-	if layout == "industrial":
-		if d == 0:
-			return SURF_DIRT if (x + z) % 7 == 0 else SURF_GRASS
-		if d == 8:
-			return SURF_ROAD if x % 10 == 0 or z % 10 == 0 else SURF_GRASS
-		return SURF_ROAD if x % 6 == 0 or z % 6 == 0 else SURF_CONCRETE
-	if d == 0 or d == 6:
-		return SURF_DIRT if x % 8 == 0 or z % 8 == 0 else SURF_GRASS
-	if d == 4:
-		return SURF_ROAD if x % 3 == 0 or z % 3 == 0 else SURF_CONCRETE
-	return SURF_ROAD if x % 5 == 0 or z % 5 == 0 else SURF_CONCRETE
+	if _pond(x, z, 22.0, 36.0, 16.0, 14.0):
+		return SURF_FIELD
+	return SURF_GRASS
+
+func _surf_fair(x: int, z: int) -> int:
+	var fx := float(x)
+	var fz := float(z)
+	var rad := sqrt(fx * fx + fz * fz)
+	if rad < 11.0:
+		return SURF_CONCRETE
+	if rad > 26.0 and rad < 31.0:
+		return SURF_DIRT
+	if absi(x) <= 2 and z < -8:
+		return SURF_DIRT
+	if _track_band(x, z, 38.0, 16.0, 8.0, 14.0) == 1:
+		return SURF_TRACK
+	if _pond(x, z, -46.0, -28.0, 14.0, 11.0):
+		return SURF_WATER
+	if _pond(x, z, -10.0, 42.0, 12.0, 9.0):
+		return SURF_CONCRETE
+	return SURF_GRASS
+
+func _surface_at(layout: String, x: int, z: int) -> int:
+	match layout:
+		"candy":
+			return _surf_candy(x, z)
+		"jungle":
+			return _surf_jungle(x, z)
+		"pirate":
+			return _surf_pirate(x, z)
+		"snow":
+			return _surf_snow(x, z)
+		"desert":
+			return _surf_desert(x, z)
+		"toy":
+			return _surf_toy(x, z)
+		"space":
+			return _surf_space(x, z)
+		"haunt":
+			return _surf_haunt(x, z)
+		"fair":
+			return _surf_fair(x, z)
+		_:
+			return _surf_farm(x, z)
 
 func _surf_i(x: int, z: int) -> int:
 	if x < GRID_MIN or x > GRID_MAX or z < GRID_MIN or z > GRID_MAX:
@@ -2430,33 +2519,10 @@ func _target_base(id: String, lo: float, hi: float) -> float:
 	return randf_range(a, b)
 
 func _ladder_ids(layout: String) -> Array:
-	var themed: Array = []
-	match layout:
-		"grid":
-			themed = ["cone", "hydrant", "barrier", "dumpster", "planter", "planter", "kiosk", "scooter", "scooter", "sedan", "taxi", "hatch", "cart", "stall", "bigtree", "bigtree", "van", "bus", "truck", "house_a", "gazebo", "shop", "wide", "apartment", "tower_a", "tower_c", "landmark"]
-		"suburb":
-			themed = ["mailbox", "planter", "planter", "fence", "bike", "scooter", "scooter", "bench", "kiosk", "tree_small", "bigtree", "bigtree", "sedan", "van", "cart", "house_a", "house_b", "house_c", "gazebo", "truck", "shop", "apartment", "landmark"]
-		"park":
-			themed = ["bush", "bench", "picnic", "chair", "bike", "scooter", "fountain", "bigtree", "bigtree", "tree_large", "stall", "cart", "kiosk", "cabana", "gazebo", "shop", "landmark"]
-		"boardwalk":
-			themed = ["umbrella", "chair", "surf", "palm", "bike", "scooter", "stall", "cart", "kiosk", "cabana", "truck", "van", "gazebo", "shop", "apartment", "landmark"]
-		"farm":
-			themed = ["hay", "animal", "fence", "tractor", "tree_large", "bigtree", "cart", "kiosk", "gazebo", "barn", "silo", "truck", "shop", "windmill", "landmark"]
-		"harbor":
-			themed = ["crate", "cone", "barrier", "forklift", "pipe", "boat", "tank", "truck", "cart", "kiosk", "warehouse", "shop", "crane", "landmark"]
-		"campus":
-			themed = ["bench", "locker", "bike", "scooter", "planter", "kiosk", "bus", "van", "cart", "bigtree", "gazebo", "house_a", "wide", "shop", "apartment", "landmark"]
-		"fair":
-			themed = ["cone", "bench", "stall", "ride", "cart", "kiosk", "bike", "scooter", "gazebo", "shop", "apartment", "landmark"]
-		"industrial":
-			themed = ["cone", "barrier", "crate", "pipe", "forklift", "tank", "truck", "kiosk", "warehouse", "silo", "shop", "crane", "landmark"]
-		_:
-			themed = ["cone", "hydrant", "kiosk", "scooter", "sedan", "taxi", "cart", "van", "bus", "truck", "gazebo", "shop", "apartment", "tower_a", "tower_c", "landmark"]
-	var common := ["cone", "bin", "sign", "mailbox", "person_a", "hydrant", "bike", "scooter", "bench", "kiosk", "cart", "sedan", "taxi", "bigtree", "van", "gazebo", "bus", "truck", "shop", "apartment", "landmark"]
+	var themed := _theme_ids(layout)
 	var ids: Array = []
 	ids.append_array(themed)
 	ids.append_array(themed)
-	ids.append_array(common)
 	return ids
 
 func _tier_surface_ok(p: Vector3, tier: int) -> bool:
@@ -2565,128 +2631,144 @@ func _seed_ladder() -> void:
 	_scatter_tier(ids, 1, 180, true)
 	_scatter_tier(ids, 1, 100, false)
 
+func _theme_ids(layout: String) -> Array:
+	match layout:
+		"candy":
+			return ["gumdrop", "lolli", "sweet", "cupcake", "cake", "candyhouse", "candycastle"]
+		"jungle":
+			return ["fern", "egg", "shroom", "stump", "raptor", "trex", "volcano"]
+		"pirate":
+			return ["doubloon", "barrel", "chest", "cannon", "rowboat", "galleon", "fort"]
+		"snow":
+			return ["snowball", "gift", "snowman", "pine", "cabin", "igloo", "chapel"]
+		"desert":
+			return ["pebble", "cactus", "claypot", "tent", "camel", "pyramid", "oasisgate"]
+		"toy":
+			return ["block", "marble", "toycar", "teddy", "robot", "dollhouse", "brickfort"]
+		"space":
+			return ["moonrock", "canister", "rover", "dish", "dome", "rocket", "station"]
+		"haunt":
+			return ["skull", "candle", "pumpkin", "tomb", "ghost", "crypt", "mansion"]
+		"fair":
+			return ["balloon", "popcorn", "bumper", "booth", "coastercar", "wheel", "coaster"]
+		_:
+			return ["apple", "hay", "animal", "fence", "scarecrow", "tractor", "coop", "cart", "barn", "silo", "windmill"]
+
 func _populate() -> void:
+	var layout := str(map.get("layout", "farm"))
+	_place_signatures(layout)
 	_seed_ladder()
-	var layout := str(map.get("layout", "grid"))
-	if layout == "grid":
-		_fill_blocks(5, ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "tower_a", "tower_c"], 0.92, 1.55)
-		_traffic(36, 70)
-		_lamps(64)
-		_scatter_on(["tree_small", "tree_large", "tree_simple"], 120, [SURF_GRASS], 1.0)
-		_scatter_on(["dumpster"], 48, [SURF_GRASS], 1.0)
-		_scatter_on(["bush", "planter"], 160, [SURF_GRASS], 1.0)
-		_scatter_on(["cone", "bin", "crate", "hydrant", "sign"], 160, [SURF_GRASS], 1.0)
-		_edge_props(["hydrant", "bin", "cone", "sign", "mailbox", "crate", "barrier", "bike"], 2, 400)
-		_crowd(110)
-		_scatter_on(["stall"], 18, [SURF_GRASS], 1.15)
-		_scatter_on(["truck"], 10, [SURF_GRASS], 1.0)
-		_place_id("barn", Vector3(8.5, 0, -8.5), Vector3.ZERO, 0.4, 0.72, Color.WHITE, 40)
-	elif layout == "suburb":
-		_grid_ids(["house_a", "house_b", "house_c"], 3, [SURF_GRASS], 110, 1.0, true)
-		_traffic(12, 40)
-		_lamps(28)
-		_scatter_on(["house_a"], 12, [SURF_GRASS], 1.65)
-		_scatter_on(["house_b"], 6, [SURF_GRASS], 2.05)
-		_scatter_on(["fence"], 200, [SURF_GRASS], 1.0)
-		_scatter_on(["mailbox"], 90, [SURF_GRASS], 1.0)
-		_scatter_on(["tree_small", "tree_large", "bush"], 180, [SURF_GRASS], 1.0)
-		_scatter_on(["planter"], 80, [SURF_GRASS], 1.0)
-		_scatter_on(["bike"], 70, [SURF_GRASS], 1.0)
-		_crowd(60)
-	elif layout == "park":
-		var barn_spots: Array = [Vector3(-9.0, 0, 8.0), Vector3(-11.0, 0, 3.5), Vector3(10.0, 0, -6.0), Vector3(5.5, 0, 10.0), Vector3(-4.0, 0, -11.0), Vector3(16.0, 0, 12.0), Vector3(-16.0, 0, -8.0)]
-		for spot in barn_spots:
-			if _place_id("barn", spot, Vector3.ZERO, 0.6, 1.12, Color.WHITE, 52):
-				break
-		_scatter_on(["tree_small", "tree_large", "tree_simple"], 260, [SURF_GRASS], 1.0)
-		_scatter_on(["bush"], 200, [SURF_GRASS], 1.0)
-		_scatter_on(["bench"], 110, [SURF_GRASS, SURF_DIRT], 1.0)
-		_scatter_on(["picnic"], 80, [SURF_GRASS], 1.0)
-		_scatter_on(["bike"], 60, [SURF_GRASS, SURF_DIRT], 1.0)
-		_scatter_on(["bin", "sign"], 50, [SURF_DIRT], 1.0)
-		_scatter_on(["stall"], 16, [SURF_GRASS], 1.0)
-		_scatter_on(["stall"], 6, [SURF_GRASS], 1.55)
-		_scatter_on(["stall"], 4, [SURF_GRASS], 2.15)
-		_crowd(100)
-		_lamps(32)
-	elif layout == "boardwalk":
-		_edge_props(["palm", "bin", "bike"], 2, 180)
-		_scatter_on(["umbrella"], 140, [SURF_SAND], 1.0)
-		_scatter_on(["chair"], 200, [SURF_SAND], 1.0)
-		_scatter_on(["surf"], 80, [SURF_SAND], 1.0)
-		_scatter_on(["stall"], 40, [SURF_WOOD, SURF_SAND], 1.0)
-		_scatter_on(["truck"], 12, [SURF_SAND], 1.0)
-		_scatter_on(["truck"], 4, [SURF_SAND], 1.4)
-		_scatter_on(["truck"], 2, [SURF_SAND], 1.75)
-		_scatter_on(["palm"], 90, [SURF_SAND], 1.0)
-		_scatter_on(["bin", "bike", "sign"], 80, [SURF_SAND], 1.0)
-		_crowd(90)
-	elif layout == "farm":
-		_scatter_on(["barn"], 16, [SURF_GRASS, SURF_FIELD], 1.0)
-		_scatter_on(["barn"], 6, [SURF_FIELD], 1.28)
-		_scatter_on(["hay"], 240, [SURF_FIELD, SURF_GRASS], 1.0)
-		_scatter_on(["hay"], 50, [SURF_FIELD], 1.55)
-		_scatter_on(["animal"], 160, [SURF_GRASS, SURF_FIELD], 1.0, Color(0.92, 0.90, 0.86))
-		_scatter_on(["fence"], 220, [SURF_GRASS, SURF_FIELD], 1.0)
-		_scatter_on(["tractor"], 28, [SURF_DIRT, SURF_GRASS], 1.0)
-		_scatter_on(["tractor"], 8, [SURF_FIELD], 1.45)
-		_scatter_on(["tree_large"], 48, [SURF_GRASS], 1.0)
-		_crowd(48)
-	elif layout == "harbor":
-		_boats()
-		_scatter_on(["crate"], 180, [SURF_CONCRETE, SURF_DOCK], 1.0)
-		_scatter_on(["crate"], 80, [SURF_CONCRETE], 2.3, Color(0.35, 0.48, 0.68))
-		_scatter_on(["forklift"], 40, [SURF_CONCRETE, SURF_DOCK], 1.0)
-		_scatter_on(["tank"], 16, [SURF_CONCRETE], 1.0)
-		_scatter_on(["tank"], 5, [SURF_CONCRETE], 1.45)
-		_scatter_on(["tank"], 2, [SURF_CONCRETE], 1.8)
-		_scatter_on(["pipe"], 80, [SURF_CONCRETE], 1.0)
-		_scatter_on(["crate", "bin", "cone", "barrier", "hydrant"], 240, [SURF_CONCRETE, SURF_DOCK], 1.0)
-		_crowd(70)
-		_lamps(28)
-	elif layout == "campus":
-		_fill_blocks(8, ["wide", "bld_a", "bld_d", "house_a"], 1.0, 1.35)
-		_scatter_on(["bus"], 10, [SURF_ROAD, SURF_CONCRETE], 1.0)
-		_scatter_on(["bus"], 2, [SURF_CONCRETE], 1.35)
-		_scatter_on(["bus"], 2, [SURF_CONCRETE], 1.65)
-		_grid_ids(["locker"], 2, [SURF_CONCRETE, SURF_GRASS], 50, 1.0, false)
-		_scatter_on(["bench"], 80, [SURF_GRASS, SURF_CONCRETE], 1.0)
-		_scatter_on(["tree_small", "tree_large"], 140, [SURF_GRASS], 1.0)
-		_scatter_on(["bush", "planter"], 90, [SURF_GRASS], 1.0)
-		_scatter_on(["bike"], 60, [SURF_GRASS, SURF_CONCRETE], 1.0)
-		_scatter_on(["bin", "cone", "sign", "bike", "crate"], 200, [SURF_CONCRETE, SURF_GRASS], 1.0)
-		_crowd(110)
-		_lamps(28)
-	elif layout == "fair":
-		_scatter_on(["stall"], 160, [SURF_DIRT, SURF_GRASS], 1.0)
-		_scatter_on(["ride"], 18, [SURF_GRASS, SURF_CONCRETE], 1.0)
-		_scatter_on(["ride"], 6, [SURF_GRASS], 1.28)
-		_scatter_on(["bench", "bin", "sign"], 160, [SURF_GRASS, SURF_DIRT], 1.0)
-		_scatter_on(["cone"], 90, [SURF_DIRT], 1.0)
-		_scatter_on(["bike", "crate", "hydrant", "planter"], 160, [SURF_GRASS], 1.0)
-		_crowd(140)
-	elif layout == "industrial":
-		_fill_blocks(6, ["wide", "bld_b", "bld_c", "dumpster"], 1.0, 1.25)
-		_traffic(16, 28)
-		_lamps(32)
-		_scatter_on(["tank"], 36, [SURF_CONCRETE], 1.0)
-		_scatter_on(["tank"], 8, [SURF_CONCRETE], 1.4)
-		_scatter_on(["tank"], 4, [SURF_CONCRETE], 1.75)
-		_scatter_on(["pipe"], 140, [SURF_CONCRETE], 1.0)
-		_scatter_on(["crate"], 70, [SURF_CONCRETE], 2.1, Color(0.55, 0.42, 0.28))
-		_scatter_on(["cone", "barrier", "crate", "bin", "hydrant"], 240, [SURF_CONCRETE, SURF_ROAD], 1.0)
-		_crowd(60)
-	else:
-		_fill_blocks(4, ["tower_a", "tower_c", "tower_a", "wide"], 1.05, 1.7)
-		_traffic(32, 40)
-		_lamps(48)
-		_scatter_on(["tree_small"], 60, [SURF_CONCRETE], 1.0)
-		_scatter_on(["hydrant", "bin", "cone", "sign", "crate", "bike", "barrier", "mailbox"], 400, [SURF_CONCRETE], 1.0)
-		_edge_props(["hydrant", "bin", "cone", "sign", "crate"], 2, 200)
-		_crowd(100)
-	_dress_districts()
+	_scatter_theme(layout)
 	_balance_tiers()
 	_tint_animals()
+
+func _scatter_theme(layout: String) -> void:
+	match layout:
+		"candy":
+			_scatter_on(["gumdrop", "lolli", "sweet"], 14, [SURF_GRASS, SURF_FIELD, SURF_CONCRETE], 1.0)
+			_scatter_on(["cupcake", "cake"], 6, [SURF_GRASS, SURF_CONCRETE], 1.0)
+			_scatter_on(["candyhouse"], 3, [SURF_GRASS], 1.0)
+		"jungle":
+			_scatter_on(["fern", "egg", "shroom"], 16, [SURF_FIELD, SURF_GRASS], 1.0)
+			_scatter_on(["stump", "raptor"], 6, [SURF_GRASS, SURF_DIRT], 1.0)
+			_scatter_on(["trex"], 2, [SURF_GRASS], 1.0)
+		"pirate":
+			_scatter_on(["doubloon", "barrel", "chest"], 12, [SURF_SAND, SURF_WOOD, SURF_GRASS], 1.0)
+			_scatter_on(["cannon", "rowboat"], 5, [SURF_SAND, SURF_WOOD], 1.0)
+			_scatter_on(["galleon"], 2, [SURF_SAND], 1.0)
+		"snow":
+			_scatter_on(["snowball", "gift", "snowman"], 14, [SURF_SAND, SURF_GRASS], 1.0)
+			_scatter_on(["pine"], 8, [SURF_SAND, SURF_GRASS], 1.0)
+			_scatter_on(["cabin", "igloo"], 3, [SURF_SAND, SURF_CONCRETE], 1.0)
+		"desert":
+			_scatter_on(["pebble", "cactus", "claypot"], 14, [SURF_SAND, SURF_DIRT], 1.0)
+			_scatter_on(["tent", "camel"], 5, [SURF_SAND], 1.0)
+			_scatter_on(["pyramid"], 2, [SURF_SAND], 1.0)
+		"toy":
+			_scatter_on(["block", "marble", "toycar"], 14, [SURF_FIELD, SURF_CONCRETE, SURF_GRASS], 1.0)
+			_scatter_on(["teddy", "robot"], 6, [SURF_GRASS, SURF_CONCRETE], 1.0)
+			_scatter_on(["dollhouse"], 3, [SURF_FIELD, SURF_CONCRETE], 1.0)
+		"space":
+			_scatter_on(["moonrock", "canister", "rover"], 12, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0)
+			_scatter_on(["dish", "dome"], 4, [SURF_SAND, SURF_CONCRETE], 1.0)
+			_scatter_on(["rocket"], 2, [SURF_CONCRETE, SURF_SAND], 1.0)
+		"haunt":
+			_scatter_on(["skull", "candle", "pumpkin"], 14, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
+			_scatter_on(["tomb", "ghost"], 6, [SURF_GRASS, SURF_DIRT], 1.0)
+			_scatter_on(["crypt"], 3, [SURF_GRASS], 1.0)
+		"fair":
+			_scatter_on(["balloon", "popcorn", "bumper"], 14, [SURF_GRASS, SURF_DIRT, SURF_CONCRETE], 1.0)
+			_scatter_on(["booth", "coastercar"], 5, [SURF_GRASS, SURF_CONCRETE], 1.0)
+			_scatter_on(["wheel"], 2, [SURF_GRASS], 1.0)
+		_:
+			_scatter_on(["apple", "hay", "animal"], 16, [SURF_FIELD, SURF_GRASS], 1.0)
+			_scatter_on(["fence", "scarecrow", "tractor"], 8, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
+			_scatter_on(["coop", "barn"], 3, [SURF_GRASS, SURF_FIELD], 1.0)
+			_scatter_on(["silo"], 2, [SURF_DIRT, SURF_GRASS], 1.0)
+
+func _signature_ids(layout: String) -> Array:
+	match layout:
+		"candy":
+			return ["lolli", "cupcake", "cake", "candyhouse"]
+		"jungle":
+			return ["shroom", "raptor", "fern", "trex"]
+		"pirate":
+			return ["barrel", "cannon", "chest", "rowboat"]
+		"snow":
+			return ["snowman", "pine", "gift", "cabin"]
+		"desert":
+			return ["cactus", "tent", "claypot", "camel"]
+		"toy":
+			return ["block", "teddy", "robot", "toycar"]
+		"space":
+			return ["rover", "canister", "dish", "dome"]
+		"haunt":
+			return ["pumpkin", "tomb", "ghost", "crypt"]
+		"fair":
+			return ["balloon", "booth", "bumper", "wheel"]
+		_:
+			return ["scarecrow", "tractor", "coop", "barn"]
+
+func _finale_id(layout: String) -> String:
+	match layout:
+		"candy":
+			return "candycastle"
+		"jungle":
+			return "volcano"
+		"pirate":
+			return "fort"
+		"snow":
+			return "chapel"
+		"desert":
+			return "oasisgate"
+		"toy":
+			return "brickfort"
+		"space":
+			return "station"
+		"haunt":
+			return "mansion"
+		"fair":
+			return "coaster"
+		_:
+			return "windmill"
+
+func _place_signatures(layout: String) -> void:
+	var ids: Array = _signature_ids(layout)
+	var spots: Array = [
+		Vector3(5.4, 0, -8.2),
+		Vector3(-6.2, 0, -7.4),
+		Vector3(3.2, 0, -13.5),
+		Vector3(-4.0, 0, -15.0),
+	]
+	for i in mini(ids.size(), spots.size()):
+		var base: Vector3 = spots[i]
+		if not _place_id(str(ids[i]), base, Vector3.ZERO, 0.5, 1.0):
+			_place_id(str(ids[i]), base + Vector3(2.4, 0, -1.6), Vector3.ZERO, 0.8, 1.0)
+	var finale := _finale_id(layout)
+	var far: Array = [Vector3(46, 0, -32), Vector3(-40, 0, 36), Vector3(28, 0, 48), Vector3(-52, 0, -24)]
+	for spot in far:
+		if _place_id(finale, spot, Vector3.ZERO, 0.35, 1.0):
+			break
 
 func _fill_blocks(step: int, ids: Array, grow_min: float, grow_max: float) -> void:
 	var lines: Array = []
@@ -2869,21 +2951,21 @@ func _tint_animals() -> void:
 			n += 1
 
 func _swallow_bucket(id: String) -> String:
-	if id in ["sedan", "taxi", "hatch", "van", "police", "truck", "bus", "tractor", "forklift"]:
+	if id in ["sedan", "taxi", "hatch", "van", "police", "truck", "bus", "tractor", "forklift", "rover", "toycar", "bumper"]:
 		return "cars"
-	if id in ["tree_small", "tree_large", "tree_simple", "palm"]:
+	if id in ["tree_small", "tree_large", "tree_simple", "palm", "pine", "fern", "cactus"]:
 		return "trees"
-	if id in ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "house_a", "house_b", "house_c", "tower_a", "tower_c", "barn", "shop", "apartment", "warehouse", "gazebo", "cabana", "landmark", "windmill", "crane", "silo"]:
+	if id in ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "house_a", "house_b", "house_c", "tower_a", "tower_c", "barn", "shop", "apartment", "warehouse", "gazebo", "cabana", "landmark", "windmill", "crane", "silo", "coop", "candyhouse", "candycastle", "cabin", "igloo", "chapel", "pyramid", "oasisgate", "dollhouse", "brickfort", "dome", "station", "crypt", "mansion", "fort", "volcano", "booth"]:
 		return "buildings"
 	if id == "bigtree":
 		return "trees"
 	if id in ["person_a", "person_b", "person_c"]:
 		return "people"
-	if id == "boat":
+	if id in ["boat", "rowboat", "galleon"]:
 		return "boats"
 	if id == "lamp":
 		return "lamps"
-	if id == "animal":
+	if id in ["animal", "raptor", "trex", "camel"]:
 		return "animals"
 	return "props"
 
@@ -3308,7 +3390,7 @@ func _build_ui() -> void:
 	clear_track.anchor_left = 0.5
 	clear_track.anchor_right = 0.5
 	clear_track.offset_left = -332
-	clear_track.offset_right = 332
+	clear_track.offset_right = 168
 	clear_track.offset_top = 16
 	clear_track.offset_bottom = 76
 	clear_track.color = Color(0.06, 0.08, 0.12, 0.92)
@@ -3397,22 +3479,46 @@ func _build_ui() -> void:
 	_style(combo_lbl, 44)
 	combo_lbl.modulate = Color(1, 0.86, 0.2)
 	ui.add_child(combo_lbl)
+	size_badge = ColorRect.new()
+	size_badge.anchor_left = 0.5
+	size_badge.anchor_right = 0.5
+	size_badge.offset_left = 184
+	size_badge.offset_right = 332
+	size_badge.offset_top = 16
+	size_badge.offset_bottom = 76
+	size_badge.color = Color(0.11, 0.16, 0.29, 0.92)
+	size_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	size_badge.pivot_offset = Vector2(74, 30)
+	ui.add_child(size_badge)
 	size_lbl = Label.new()
-	size_lbl.text = "SIZE UP!"
-	size_lbl.position = Vector2(80, 500)
-	size_lbl.size = Vector2(560, 96)
+	size_lbl.text = "Size 1"
+	size_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
 	size_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	size_lbl.visible = false
-	size_lbl.pivot_offset = Vector2(280, 48)
-	_style(size_lbl, 72)
-	ui.add_child(size_lbl)
+	size_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	size_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_style(size_lbl, 30)
+	size_badge.add_child(size_lbl)
+	kept_lbl = Label.new()
+	kept_lbl.anchor_left = 0.5
+	kept_lbl.anchor_right = 0.5
+	kept_lbl.offset_left = -180
+	kept_lbl.offset_right = 180
+	kept_lbl.offset_top = 300
+	kept_lbl.offset_bottom = 348
+	kept_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	kept_lbl.visible = false
+	kept_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	kept_lbl.text = "Kept going!"
+	_style(kept_lbl, 28)
+	kept_lbl.modulate = Color(1, 0.92, 0.45)
+	ui.add_child(kept_lbl)
 	name_lbl = Label.new()
 	name_lbl.text = PLAYER_NAME
-	name_lbl.size = Vector2(180, 48)
+	name_lbl.size = Vector2(100, 28)
 	name_lbl.visible = false
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_style(name_lbl, 36)
+	_style(name_lbl, 20)
 	ui.add_child(name_lbl)
 	for i in RIVAL_NAMES.size():
 		var tag := Label.new()
@@ -3435,6 +3541,8 @@ func _build_ui() -> void:
 	sha_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_style(sha_lbl, 22)
 	sha_lbl.text = _short_sha()
+	sha_lbl.visible = debug_on
+	sha_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui.add_child(sha_lbl)
 	for _i in 6:
 		var fl := Label.new()
@@ -3679,7 +3787,7 @@ func _place_name_tag() -> void:
 		return
 	var sp := cam.unproject_position(p)
 	name_lbl.visible = true
-	name_lbl.position = sp - Vector2(90, 52)
+	name_lbl.position = sp - Vector2(50, 30)
 
 func _event_pos(event: InputEvent) -> Vector2:
 	if event is InputEventMouseButton:
@@ -3692,7 +3800,40 @@ func _event_pos(event: InputEvent) -> Vector2:
 		return (event as InputEventScreenDrag).position
 	return Vector2(-1.0, -1.0)
 
+func _rect_hit(ctrl: Control, pos: Vector2, pad: float) -> bool:
+	if ctrl == null or not is_instance_valid(ctrl) or not ctrl.visible:
+		return false
+	return ctrl.get_global_rect().grow(pad).has_point(pos)
+
+func _chrome_hit(pos: Vector2) -> bool:
+	if pos.x < 0.0:
+		return false
+	if _rect_hit(pause_btn, pos, 10.0):
+		return true
+	if chrome_layer != null and chrome_layer.visible:
+		if _rect_hit(daily_btn, pos, 10.0):
+			return true
+		for b in chrome_buttons:
+			if _rect_hit(b as Control, pos, 16.0):
+				return true
+	return false
+
+func _ui_hit(pos: Vector2) -> bool:
+	if pos.x < 0.0:
+		return false
+	if pause_layer != null and pause_layer.visible:
+		return true
+	if menu_layer != null and menu_layer.visible:
+		return true
+	if over_panel != null and over_panel.visible:
+		return true
+	return _chrome_hit(pos)
+
 func _blocks_world(pos: Vector2) -> bool:
+	if ui_swallow_frames > 0:
+		return true
+	if _chrome_hit(pos):
+		return true
 	if paused or render_failed or (pause_layer != null and pause_layer.visible):
 		return true
 	if pause_btn != null and pause_btn.visible and pos.x >= 0.0 and pause_btn.get_global_rect().has_point(pos):
@@ -3719,7 +3860,12 @@ func _input(event: InputEvent) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if ad_hold:
 		return
-	if _blocks_world(_event_pos(event)):
+	var pos := _event_pos(event)
+	if (event is InputEventScreenTouch or event is InputEventScreenDrag) and _ui_hit(pos):
+		get_viewport().set_input_as_handled()
+		ui_swallow_frames = 4
+		return
+	if _blocks_world(pos):
 		return
 	if mode != "play" and mode != "attract":
 		return
@@ -3923,7 +4069,8 @@ func _sync_level() -> void:
 	var grew := n > level
 	if grew:
 		level = n
-		size_banner_t = 1.45
+		size_banner_t = 1.15
+		kept_pulse = false
 		_sfx("fanfare", 1.0, false)
 		if size_lbl:
 			size_lbl.text = "Size %d" % (level + 1)
@@ -4004,7 +4151,9 @@ func _refresh_hud() -> void:
 	if score_lbl:
 		score_lbl.text = "%d pts" % score
 	if level_lbl:
-		level_lbl.text = "%s   Size %d" % [str(map.get("name", "")), level + 1]
+		level_lbl.text = str(map.get("name", ""))
+	if size_lbl:
+		size_lbl.text = "Size %d" % (level + 1)
 	if clear_lbl:
 		clear_lbl.text = _clear_caption()
 	_refresh_next_skin()
@@ -4049,15 +4198,24 @@ func _tick_feedback(delta: float) -> void:
 		combo_left = maxf(0.0, combo_left - delta)
 		if combo_left <= 0.0 and combo_lbl:
 			combo_lbl.visible = false
-	if size_lbl:
-		if size_banner_t > 0.0:
+	if size_badge:
+		if size_banner_t > 0.0 and match_hud:
 			size_banner_t = maxf(0.0, size_banner_t - delta)
-			size_lbl.visible = true
 			var u := clampf(size_banner_t / 1.45, 0.0, 1.0)
-			size_lbl.modulate = Color(1, 0.95, 0.35, u)
-			size_lbl.scale = Vector2.ONE * (1.0 + (1.0 - u) * 0.22)
+			var pop := 1.0 + u * 0.16
+			size_badge.scale = Vector2(pop, pop)
+			size_badge.color = Color(0.11, 0.16, 0.29).lerp(Color(0.92, 0.62, 0.12), u)
+			size_badge.color.a = 0.94
+			if kept_lbl:
+				kept_lbl.visible = kept_pulse and u > 0.04
+				kept_lbl.modulate.a = u
 		else:
-			size_lbl.visible = false
+			size_banner_t = 0.0
+			size_badge.scale = Vector2.ONE
+			size_badge.color = Color(0.11, 0.16, 0.29, 0.92)
+			if kept_lbl:
+				kept_lbl.visible = false
+			kept_pulse = false
 	if mode == "results" and result_anim < 1.0:
 		result_anim = minf(1.0, result_anim + delta * 1.35)
 		var eased := 1.0 - pow(1.0 - result_anim, 3.0)
@@ -4453,6 +4611,8 @@ func _feel(points: int, heavy: bool, sound: bool = true) -> void:
 	_sfx(kind, pitch, heavy or points >= 14)
 
 func _process(delta: float) -> void:
+	if ui_swallow_frames > 0:
+		ui_swallow_frames -= 1
 	if shot_wait > 0:
 		shot_wait -= 1
 		if shot_wait == 0 and shot_path != "":
@@ -5024,6 +5184,11 @@ func _release_body(o: Dictionary, p: Vector3) -> void:
 			mm.set_instance_transform(int(o.index), xform)
 		_set_shadow(o)
 
+func _set_music_rate(rate: float) -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("if(window.__holeSetMusicRate)window.__holeSetMusicRate(%.3f);" % clampf(rate, 0.84, 1.16), true)
+
 func _apply_theme(m: Dictionary) -> void:
 	sky_mat.sky_top_color = m.sky_top
 	sky_mat.sky_horizon_color = m.horizon
@@ -5035,10 +5200,23 @@ func _apply_theme(m: Dictionary) -> void:
 	sun.light_color = m.sun
 	sun.light_energy = 0.4
 	sun.rotation_degrees = Vector3(-62, float(m.sun_yaw), 0)
-	var tint: Color = m.get("tint", Color.WHITE)
-	var grade := Vector3(tint.r, tint.g, tint.b)
-	for mat in ground_mats:
-		(mat as ShaderMaterial).set_shader_parameter("grade_tint", grade)
+	var paints: Array = m.get("paints", [])
+	for i in ground_mats.size():
+		var mat := ground_mats[i] as ShaderMaterial
+		mat.set_shader_parameter("grade_tint", Vector3.ONE)
+		if i < paints.size():
+			var pair: Array = paints[i]
+			var lo: Color = pair[0]
+			var hi: Color = pair[1]
+			mat.set_shader_parameter("band_lo", Vector3(lo.r, lo.g, lo.b))
+			mat.set_shader_parameter("band_hi", Vector3(hi.r, hi.g, hi.b))
+	world_env.fog_enabled = true
+	world_env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
+	world_env.fog_light_color = m.horizon
+	world_env.fog_density = float(m.get("fog_density", 0.0035))
+	world_env.fog_aerial_perspective = 0.18
+	world_env.fog_sky_affect = 0.35
+	_set_music_rate(float(m.get("rate", 1.0)))
 
 func _apply_skin() -> void:
 	if pit_mat == null:
@@ -5182,6 +5360,8 @@ func _enter_attract(index: int) -> void:
 	_refresh_hud()
 
 func _begin_play() -> void:
+	if ui_swallow_frames > 0:
+		return
 	if mode != "attract" or playing or ad_hold or paused or render_failed:
 		return
 	if menu_layer != null and menu_layer.visible:
@@ -5246,15 +5426,15 @@ func _build_pause() -> void:
 	card.anchor_bottom = 0.5
 	card.offset_left = -310.0
 	card.offset_right = 310.0
-	card.offset_top = -300.0
-	card.offset_bottom = 300.0
+	card.offset_top = -220.0
+	card.offset_bottom = 236.0
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
 	card.add_theme_stylebox_override("panel", _panel_style())
 	pause_layer.add_child(card)
 	var title := Label.new()
 	title.text = "Paused"
-	title.position = Vector2(40, 36)
-	title.size = Vector2(540, 80)
+	title.position = Vector2(40, 24)
+	title.size = Vector2(540, 68)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_style(title, 52)
@@ -5262,13 +5442,13 @@ func _build_pause() -> void:
 	title.add_theme_constant_override("outline_size", 0)
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(title)
-	var resume := _make_button("Resume", Vector2(40, 148), Vector2(540, 92), Color(0.16, 0.66, 0.42))
+	var resume := _make_button("Resume", Vector2(40, 108), Vector2(540, 92), Color(0.16, 0.66, 0.42))
 	resume.pressed.connect(_resume_pause)
 	card.add_child(resume)
-	var restart := _make_button("Restart", Vector2(40, 260), Vector2(540, 92), BRAND_CYAN)
+	var restart := _make_button("Restart", Vector2(40, 212), Vector2(540, 92), BRAND_CYAN)
 	restart.pressed.connect(_restart_pause)
 	card.add_child(restart)
-	var exit_b := _make_button("Exit to menu", Vector2(40, 372), Vector2(540, 92), BRAND_INK)
+	var exit_b := _make_button("Exit to menu", Vector2(40, 316), Vector2(540, 92), BRAND_INK)
 	exit_b.pressed.connect(_exit_pause)
 	card.add_child(exit_b)
 
@@ -5703,16 +5883,17 @@ func _resume_after_eaten() -> void:
 	var lim := CITY_HALF - 1.2
 	hole_pos = Vector3(clampf(kicked.x, -lim, lim), 0.0, clampf(kicked.z, -lim, lim))
 	player_invuln = 2.6
-	if size_lbl:
-		size_lbl.text = "Kept going!"
-	size_banner_t = 1.1
+	kept_pulse = true
+	if kept_lbl:
+		kept_lbl.text = "Kept going!"
+	size_banner_t = 1.15
 	playing = true
 	mode = "play"
 	_refresh_hud()
 
 func _set_match_hud(on: bool) -> void:
 	match_hud = on
-	for n in [clear_track, clear_lbl, score_lbl, level_lbl, next_lbl]:
+	for n in [clear_track, clear_lbl, score_lbl, level_lbl, next_lbl, size_badge]:
 		if n:
 			n.visible = on
 	if next_fill and next_fill.get_parent():
@@ -5722,6 +5903,8 @@ func _set_match_hud(on: bool) -> void:
 			combo_lbl.visible = false
 		if size_lbl:
 			size_lbl.visible = false
+		if kept_lbl:
+			kept_lbl.visible = false
 		if name_lbl:
 			name_lbl.visible = false
 		for tag in rival_labels:
@@ -5984,7 +6167,7 @@ func _clear_menu() -> void:
 	for c in menu_layer.get_children():
 		c.queue_free()
 
-func _mount_menu_column() -> Control:
+func _mount_menu_column(sheet_bottom: float = -1.0) -> Control:
 	_clear_menu()
 	menu_layer.visible = true
 	var dim := ColorRect.new()
@@ -6008,7 +6191,11 @@ func _mount_menu_column() -> Control:
 	sheet.offset_left = 8
 	sheet.offset_top = SAFE_TOP
 	sheet.offset_right = -8
-	sheet.offset_bottom = -SAFE_BOTTOM
+	if sheet_bottom > 0.0:
+		sheet.anchor_bottom = 0.0
+		sheet.offset_bottom = sheet_bottom
+	else:
+		sheet.offset_bottom = -SAFE_BOTTOM
 	sheet.add_theme_stylebox_override("panel", _panel_style())
 	sheet.mouse_filter = Control.MOUSE_FILTER_STOP
 	sheet.gui_input.connect(_eat_menu_pointer)
@@ -6067,7 +6254,10 @@ func _show_screen(which: String) -> void:
 		name_lbl.visible = false
 	hud_layer.visible = true
 	_sync_pause_button()
-	_mount_menu_column()
+	var sheet_bottom := -1.0
+	if which == "shop":
+		sheet_bottom = MENU_HEADER_Y + 96.0 + 700.0
+	_mount_menu_column(sheet_bottom)
 	if which == "levels":
 		_screen_levels()
 	elif which == "skins":

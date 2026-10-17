@@ -2,19 +2,25 @@ extends RefCounted
 
 static func maps() -> Array:
 	return [
-		_map("Downtown", 80, "grid", 11, "Grid streets", Color(0.36, 0.62, 0.90), Color(0.68, 0.82, 0.94), Color(0.34, 0.62, 0.32), Color(1.0, 0.97, 0.92), 28.0, 1.16, Color(1, 1, 1), [Color(0.76, 0.36, 0.36), Color(0.84, 0.70, 0.34), Color(0.36, 0.60, 0.64), Color(0.78, 0.48, 0.52), Color(0.40, 0.50, 0.72)]),
-		_map("Suburbs", 130, "suburb", 27, "Yards and fences", Color(0.58, 0.78, 0.88), Color(0.74, 0.88, 0.72), Color(0.40, 0.68, 0.34), Color(1.0, 0.97, 0.90), 18.0, 1.12, Color(1.0, 1.0, 0.96), [Color(0.84, 0.76, 0.64), Color(0.55, 0.70, 0.76), Color(0.62, 0.74, 0.56), Color(0.86, 0.68, 0.56), Color(0.78, 0.76, 0.82)]),
-		_map("Park", 180, "park", 63, "Paths and ponds", Color(0.42, 0.70, 0.86), Color(0.58, 0.84, 0.58), Color(0.24, 0.58, 0.26), Color(0.95, 0.98, 0.90), -12.0, 1.14, Color(0.96, 1.0, 0.94), [Color(0.55, 0.68, 0.48), Color(0.72, 0.62, 0.46)]),
-		_map("Boardwalk", 240, "boardwalk", 41, "Sand and water", Color(0.42, 0.66, 0.88), Color(0.98, 0.74, 0.50), Color(0.84, 0.72, 0.46), Color(1.0, 0.94, 0.82), 48.0, 1.18, Color(1.0, 0.98, 0.92), [Color(0.86, 0.55, 0.42), Color(0.92, 0.78, 0.52), Color(0.45, 0.70, 0.74)]),
-		_map("Farm", 300, "farm", 88, "Fields and barns", Color(0.64, 0.78, 0.90), Color(0.92, 0.84, 0.54), Color(0.55, 0.62, 0.26), Color(1.0, 0.96, 0.84), 70.0, 1.10, Color(1.0, 0.98, 0.90), [Color(0.70, 0.32, 0.28), Color(0.78, 0.68, 0.40), Color(0.55, 0.58, 0.36)]),
-		_map("Harbor", 370, "harbor", 104, "Docks and crates", Color(0.34, 0.50, 0.64), Color(0.58, 0.70, 0.74), Color(0.30, 0.42, 0.48), Color(0.90, 0.94, 0.96), 8.0, 1.08, Color(0.90, 0.95, 0.98), [Color(0.38, 0.48, 0.58), Color(0.62, 0.40, 0.34), Color(0.42, 0.52, 0.48)]),
-		_map("Campus", 450, "campus", 130, "Plaza and field", Color(0.36, 0.55, 0.84), Color(0.78, 0.82, 0.70), Color(0.36, 0.60, 0.34), Color(0.96, 0.96, 0.90), 40.0, 1.12, Color(0.98, 0.99, 0.96), [Color(0.62, 0.42, 0.36), Color(0.78, 0.74, 0.64), Color(0.36, 0.44, 0.62)]),
-		_map("Fairground", 540, "fair", 156, "Rides and stalls", Color(0.40, 0.34, 0.68), Color(0.94, 0.50, 0.40), Color(0.42, 0.55, 0.34), Color(1.0, 0.86, 0.74), 55.0, 1.20, Color(1.0, 0.96, 0.92), [Color(0.78, 0.40, 0.48), Color(0.86, 0.62, 0.28), Color(0.48, 0.42, 0.70)]),
-		_map("Industrial", 640, "industrial", 188, "Tanks and pipes", Color(0.58, 0.62, 0.60), Color(0.74, 0.70, 0.58), Color(0.42, 0.46, 0.38), Color(0.94, 0.94, 0.90), -28.0, 1.05, Color(0.92, 0.94, 0.90), [Color(0.55, 0.56, 0.54), Color(0.62, 0.48, 0.32), Color(0.48, 0.54, 0.40), Color(0.78, 0.66, 0.28)]),
-		_map("Skyline", 760, "skyline", 214, "Dense towers", Color(0.12, 0.18, 0.38), Color(0.90, 0.50, 0.34), Color(0.20, 0.24, 0.34), Color(1.0, 0.90, 0.78), 24.0, 1.14, Color(1.0, 0.96, 0.92), [Color(0.45, 0.55, 0.68), Color(0.62, 0.50, 0.48), Color(0.40, 0.38, 0.55), Color(0.72, 0.62, 0.42)]),
+		_map("Farm Valley", 80, "farm", 11, "Lanes, ponds, and wheat", Color(0.46, 0.74, 0.95), Color(0.78, 0.90, 0.62), Color(0.40, 0.62, 0.26), Color(1.0, 0.96, 0.84), 36.0, 1.08, 1.00, 0.0035, _paints(Color(0.55, 0.40, 0.22), Color(0.24, 0.58, 0.20), Color(0.78, 0.68, 0.34), Color(0.46, 0.32, 0.16), Color(0.22, 0.52, 0.66), Color(0.62, 0.58, 0.48), Color(0.58, 0.40, 0.22), Color(0.74, 0.70, 0.18), Color(0.66, 0.42, 0.28), Color(0.50, 0.36, 0.20))),
+		_map("Candy Town", 130, "candy", 27, "Spiral streets of sweets", Color(0.62, 0.42, 0.92), Color(1.0, 0.70, 0.82), Color(0.95, 0.55, 0.72), Color(1.0, 0.92, 0.96), 18.0, 1.16, 1.08, 0.0032, _paints(Color(0.95, 0.45, 0.62), Color(0.55, 0.90, 0.74), Color(0.98, 0.86, 0.42), Color(0.52, 0.28, 0.20), Color(0.38, 0.58, 0.96), Color(0.98, 0.90, 0.96), Color(0.86, 0.62, 0.40), Color(0.96, 0.55, 0.74), Color(0.95, 0.32, 0.52), Color(0.92, 0.70, 0.78))),
+		_map("Dino Jungle", 180, "jungle", 63, "A river through the ferns", Color(0.16, 0.40, 0.36), Color(0.52, 0.74, 0.40), Color(0.12, 0.36, 0.18), Color(0.85, 0.92, 0.70), -24.0, 1.05, 0.92, 0.0060, _paints(Color(0.28, 0.22, 0.12), Color(0.10, 0.40, 0.16), Color(0.36, 0.42, 0.18), Color(0.32, 0.22, 0.12), Color(0.08, 0.38, 0.42), Color(0.34, 0.40, 0.28), Color(0.36, 0.26, 0.14), Color(0.10, 0.28, 0.12), Color(0.24, 0.32, 0.16), Color(0.20, 0.28, 0.14))),
+		_map("Pirate Harbor", 240, "pirate", 41, "Curved coast and wooden piers", Color(0.22, 0.38, 0.62), Color(0.96, 0.55, 0.32), Color(0.16, 0.42, 0.28), Color(1.0, 0.86, 0.70), 52.0, 1.10, 0.96, 0.0040, _paints(Color(0.45, 0.36, 0.24), Color(0.20, 0.52, 0.26), Color(0.90, 0.76, 0.46), Color(0.48, 0.34, 0.20), Color(0.06, 0.24, 0.44), Color(0.55, 0.54, 0.50), Color(0.50, 0.32, 0.16), Color(0.34, 0.48, 0.26), Color(0.62, 0.40, 0.24), Color(0.42, 0.28, 0.16))),
+		_map("Snowy Village", 300, "snow", 88, "A winding path and a frozen pond", Color(0.55, 0.70, 0.90), Color(0.86, 0.92, 0.96), Color(0.78, 0.86, 0.92), Color(0.92, 0.96, 1.0), -8.0, 0.96, 0.88, 0.0048, _paints(Color(0.70, 0.78, 0.86), Color(0.70, 0.82, 0.88), Color(0.92, 0.95, 0.98), Color(0.74, 0.82, 0.90), Color(0.62, 0.84, 0.94), Color(0.72, 0.76, 0.84), Color(0.55, 0.40, 0.30), Color(0.80, 0.88, 0.92), Color(0.68, 0.74, 0.82), Color(0.60, 0.68, 0.76))),
+		_map("Desert Oasis", 370, "desert", 104, "Dunes around a green pool", Color(0.52, 0.74, 0.95), Color(0.98, 0.74, 0.42), Color(0.86, 0.64, 0.32), Color(1.0, 0.92, 0.74), 70.0, 1.12, 1.04, 0.0030, _paints(Color(0.72, 0.52, 0.30), Color(0.18, 0.55, 0.26), Color(0.88, 0.70, 0.36), Color(0.62, 0.42, 0.22), Color(0.12, 0.55, 0.62), Color(0.78, 0.62, 0.40), Color(0.62, 0.44, 0.26), Color(0.70, 0.58, 0.28), Color(0.74, 0.48, 0.28), Color(0.58, 0.40, 0.24))),
+		_map("Toy Room", 450, "toy", 130, "A rug on giant building blocks", Color(0.70, 0.58, 0.90), Color(0.98, 0.88, 0.74), Color(0.55, 0.36, 0.22), Color(1.0, 0.96, 0.90), 12.0, 1.14, 1.12, 0.0028, _paints(Color(0.85, 0.28, 0.26), Color(0.22, 0.62, 0.36), Color(0.95, 0.78, 0.28), Color(0.30, 0.48, 0.82), Color(0.35, 0.62, 0.90), Color(0.28, 0.48, 0.86), Color(0.62, 0.42, 0.24), Color(0.92, 0.76, 0.18), Color(0.82, 0.22, 0.24), Color(0.55, 0.36, 0.22))),
+		_map("Space Colony", 540, "space", 156, "Crater pads on the moon", Color(0.03, 0.05, 0.12), Color(0.16, 0.20, 0.32), Color(0.34, 0.36, 0.40), Color(0.82, 0.88, 0.98), -40.0, 0.92, 0.90, 0.0022, _paints(Color(0.40, 0.44, 0.50), Color(0.16, 0.24, 0.30), Color(0.46, 0.48, 0.52), Color(0.28, 0.30, 0.36), Color(0.16, 0.55, 0.86), Color(0.72, 0.76, 0.80), Color(0.42, 0.46, 0.52), Color(0.22, 0.28, 0.36), Color(0.55, 0.60, 0.68), Color(0.36, 0.40, 0.48))),
+		_map("Haunted Hollow", 640, "haunt", 188, "A crooked path and a swamp", Color(0.16, 0.10, 0.30), Color(0.55, 0.26, 0.34), Color(0.18, 0.22, 0.16), Color(0.85, 0.70, 0.62), 8.0, 0.90, 0.86, 0.0055, _paints(Color(0.32, 0.26, 0.28), Color(0.22, 0.28, 0.16), Color(0.40, 0.36, 0.30), Color(0.28, 0.22, 0.20), Color(0.10, 0.20, 0.16), Color(0.40, 0.40, 0.44), Color(0.32, 0.24, 0.22), Color(0.28, 0.16, 0.32), Color(0.36, 0.28, 0.32), Color(0.26, 0.22, 0.28))),
+		_map("Theme Park", 760, "fair", 214, "A midway loop and a coaster", Color(0.26, 0.20, 0.55), Color(0.96, 0.46, 0.36), Color(0.24, 0.58, 0.30), Color(1.0, 0.90, 0.74), 58.0, 1.14, 1.06, 0.0036, _paints(Color(0.70, 0.36, 0.24), Color(0.22, 0.64, 0.28), Color(0.90, 0.74, 0.40), Color(0.72, 0.46, 0.30), Color(0.14, 0.46, 0.72), Color(0.78, 0.76, 0.82), Color(0.62, 0.40, 0.24), Color(0.40, 0.70, 0.32), Color(0.78, 0.20, 0.26), Color(0.55, 0.32, 0.22))),
 	]
 
-static func _map(map_name: String, target: int, layout: String, seed_n: int, blurb: String, sky_top: Color, horizon: Color, ground: Color, sun: Color, sun_yaw: float, sat: float, tint: Color, palette: Array) -> Dictionary:
+static func _band(c: Color) -> Array:
+	return [c, c.lightened(0.24)]
+
+static func _paints(road: Color, grass: Color, sand: Color, dirt: Color, water: Color, stone: Color, wood: Color, field: Color, brick: Color, dock: Color) -> Array:
+	return [_band(road), _band(grass), _band(sand), _band(dirt), _band(water), _band(stone), _band(wood), _band(field), _band(brick), _band(dock)]
+
+static func _map(map_name: String, target: int, layout: String, seed_n: int, blurb: String, sky_top: Color, horizon: Color, ground: Color, sun: Color, sun_yaw: float, sat: float, rate: float, fog_density: float, paints: Array) -> Dictionary:
 	return {
 		"name": map_name,
 		"target": target,
@@ -29,8 +35,11 @@ static func _map(map_name: String, target: int, layout: String, seed_n: int, blu
 		"sun": sun,
 		"sun_yaw": sun_yaw,
 		"sat": sat,
-		"tint": tint,
-		"palette": palette,
+		"tint": Color.WHITE,
+		"palette": [],
+		"paints": paints,
+		"rate": rate,
+		"fog_density": fog_density,
 	}
 
 static func skins() -> Array:

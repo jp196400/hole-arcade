@@ -71,6 +71,7 @@
 			var prefs = { music: true, sfx: true, haptics: true };
 			var ctx = null;
 			var music = null;
+			var musicRate = 1;
 			var unlocked = false;
 			function ac() {
 				var AC = window.AudioContext || window.webkitAudioContext;
@@ -127,6 +128,7 @@
 					var src = c.createBufferSource();
 					src.buffer = audioBuf;
 					src.loop = true;
+					src.playbackRate.value = musicRate;
 					var g = c.createGain();
 					g.gain.value = 0.22;
 					src.connect(g);
@@ -182,6 +184,12 @@
 				if (c.state === 'suspended') c.resume();
 				unlocked = true;
 				if (prefs.music) startMusic();
+			};
+			window.__holeSetMusicRate = function (rate) {
+				var next = Number(rate);
+				if (!isFinite(next)) next = 1;
+				musicRate = Math.max(0.84, Math.min(1.16, next));
+				if (music && music.playbackRate) music.playbackRate.value = musicRate;
 			};
 			window.__holeSetAudio = function (musicOn, sfxOn) {
 				prefs.music = !!musicOn;
