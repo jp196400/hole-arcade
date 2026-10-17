@@ -6806,7 +6806,7 @@ func _show_screen(which: String) -> void:
 	if which == "shop":
 		sheet_bottom = MENU_HEADER_Y + 96.0 + 700.0
 	elif which == "settings":
-		sheet_bottom = MENU_HEADER_Y + 620.0
+		sheet_bottom = MENU_HEADER_Y + 584.0
 	_mount_menu_column(sheet_bottom)
 	if which == "levels":
 		_screen_levels()
@@ -7036,11 +7036,11 @@ func _screen_settings() -> void:
 	var hap_btn := _make_button("Haptics: %s" % ("On" if Save.haptics_on else "Off"), Vector2(48, body + 224.0), Vector2(624, 92), BRAND_CYAN if Save.haptics_on else BRAND_INK)
 	hap_btn.pressed.connect(_toggle_haptics)
 	_menu_add(hap_btn)
-	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(48, body + 340.0), 28)
-	note.size = Vector2(624, 72)
+	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(48, body + 328.0), 26)
+	note.size = Vector2(624, 64)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_menu_add(note)
-	var build := _menu_label("Build %s" % _short_sha(), Vector2(48, body + 424.0), 22)
+	var build := _menu_label("Build %s" % _short_sha(), Vector2(48, body + 400.0), 22)
 	build.size = Vector2(624, 36)
 	build.add_theme_color_override("font_color", Color(0.32, 0.4, 0.5))
 	_menu_add(build)
