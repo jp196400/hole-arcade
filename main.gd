@@ -60,6 +60,12 @@ const SURF_DOCK := 9
 const LEVEL_SCORE := [0, 14, 36, 70, 120, 190]
 const LEVEL_RADIUS := [0.50, 0.78, 1.05, 1.42, 1.9, 2.5]
 const CLEAR_RATIO := 0.95
+# Opening view: snacks only inside the clear radius, structures past the mid ring.
+const SPAWN_CLEAR := 16.0
+const SPAWN_MID := 30.0
+const VIEW_TALL_CAP := 3
+# Rival name tags sit under this so they cannot cover the level name.
+const HUD_TAG_MIN_Y := 196.0
 # Swallow-size rungs. Each band is what "just fits" at the next step from the
 # starting hole up to just under a 10x clear, so every radius has new food.
 const TIER_LO := [0.05, 0.48, 0.84, 1.20, 1.58, 1.96, 2.34, 2.72, 3.10, 3.48]
@@ -71,7 +77,7 @@ const COIN_RATE := 0.012
 const CLEAR_COIN_BONUS := 100
 const RIVAL_GROW := 0.40
 const GROUND_SHADER := """shader_type spatial;
-render_mode diffuse_lambert, cull_back;
+render_mode diffuse_lambert, cull_back, shadows_disabled;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec3 openings[8];
 uniform float opening_r[8];
@@ -159,6 +165,8 @@ void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 void fragment() {
+	// Flat ground. Mesh triangle normals were shading long diagonal seams.
+	NORMAL = vec3(0.0, 1.0, 0.0);
 	float cover = 0.0;
 	for (int i = 0; i < 8; i++) {
 		if (opening_r[i] > 0.0) {
@@ -404,7 +412,10 @@ var velocity := Vector3.ZERO
 var joy_held := false
 var joy_anchor := Vector2.ZERO
 var joy_finger := Vector2.ZERO
-var joy_id := 0
+var joy_id := -2
+var web_steer := false
+var _steer_cb = null
+var forward_tall := 0
 var hole_radius := LEVEL_RADIUS[0]
 var shown_radius := LEVEL_RADIUS[0]
 var shown_vel := 0.0
@@ -1233,7 +1244,23 @@ func _probe_maps() -> void:
 		if city_root != null:
 			nodes = city_root.get_child_count()
 		var mem := int(OS.get_static_memory_usage())
-		print("MAP %s props %d total %d tiles %d nodes %d load %d ms mem %d maxb %.3f final %.3f unfit %d %s" % [str(map.name), props.size(), clear_total, city_tiles, nodes, city_load_ms, mem, max_base, final_radius, unfit, str(roles)])
+		var clear_tall := 0
+		var clear_snack := 0
+		var corridor_tall := 0
+		var corridor_hi := 0
+		for o in props:
+			var home := (o.pos as Vector3).length()
+			var tall := float(o.height) > 1.7 or str(o.role) in ["barn", "tower", "building", "wide", "house", "landmark", "tank", "boat"]
+			if home < SPAWN_CLEAR:
+				if tall:
+					clear_tall += 1
+				else:
+					clear_snack += 1
+			if tall and _in_view_corridor(o.pos):
+				corridor_tall += 1
+				if float(o.height) > 2.2:
+					corridor_hi += 1
+		print("MAP %s props %d total %d tiles %d nodes %d load %d ms mem %d maxb %.3f final %.3f unfit %d clear_tall %d clear_snack %d corridor_tall %d corridor_hi %d %s" % [str(map.name), props.size(), clear_total, city_tiles, nodes, city_load_ms, mem, max_base, final_radius, unfit, clear_tall, clear_snack, corridor_tall, corridor_hi, str(roles)])
 	get_tree().quit()
 
 func _preview_close(idx: int) -> void:
@@ -1311,9 +1338,73 @@ func _preview_eaten() -> void:
 func _focus_canvas() -> void:
 	if not OS.has_feature("web"):
 		return
-	# Focusing on pointerdown cancels that gesture in desktop browsers, so the
-	# first mouse drag never reaches the game. Focus on hover and on release.
-	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeFocus)return;c.__holeFocus=true;c.setAttribute('tabindex','0');var f=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointermove',f,true);c.addEventListener('pointerup',f,true);c.addEventListener('touchend',f,true);f();})();", true)
+	# Desktop browsers drop the first mousedown when the canvas takes focus.
+	# A capture-phase tracker records the press point itself, and setPointerCapture
+	# keeps the gesture alive. Steering then reads that offset every frame.
+	_steer_cb = JavaScriptBridge.create_callback(_on_web_steer)
+	var window := JavaScriptBridge.get_interface("window")
+	window.__holeSteerCb = _steer_cb
+	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var focus=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointerover',focus,true);var send=function(down,ax,ay,x,y){var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down,ax,ay,x,y,r.width,r.height);};window.addEventListener('pointerdown',function(e){if(e.pointerType==='touch'||e.button!==0)return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch')return;if((e.buttons&1)===0)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if(window.__holeAX===undefined){window.__holeAX=x;window.__holeAY=y;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e.pointerType==='touch')return;if(window.__holeAX===undefined)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);focus();})();", true)
+	web_steer = true
+
+func _css_to_view(p: Vector2, css: Vector2) -> Vector2:
+	var vp := get_viewport().get_visible_rect().size
+	return Vector2(p.x * vp.x / maxf(css.x, 1.0), p.y * vp.y / maxf(css.y, 1.0))
+
+func _on_web_steer(args: Array) -> void:
+	if args.size() < 7:
+		return
+	if mode != "play" and mode != "attract":
+		return
+	if mode == "play" and not playing:
+		return
+	var css := Vector2(float(args[5]), float(args[6]))
+	var anchor := _css_to_view(Vector2(float(args[1]), float(args[2])), css)
+	var finger := _css_to_view(Vector2(float(args[3]), float(args[4])), css)
+	var down := int(args[0]) != 0
+	if not down:
+		if joy_id == -1 and joy_held:
+			if mode == "attract" and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
+				_begin_play()
+			joy_held = false
+			_refresh_joystick()
+		return
+	if not joy_held or joy_id != -1:
+		if _blocks_world(finger):
+			return
+		joy_held = true
+		joy_id = -1
+		joy_anchor = anchor
+		joy_finger = finger
+	else:
+		joy_finger = finger
+		if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
+			_begin_play()
+	_refresh_joystick()
+
+func _poll_pointer_steer() -> void:
+	# Web drags are delivered by _on_web_steer. Elsewhere, sample the cursor
+	# every frame so a held offset keeps moving even when events are sparse.
+	if web_steer:
+		return
+	if mode != "play" and mode != "attract":
+		return
+	if mode == "play" and not playing:
+		return
+	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		return
+	var mp := get_viewport().get_mouse_position()
+	if not joy_held or joy_id != -1:
+		if _blocks_world(mp):
+			return
+		joy_held = true
+		joy_id = -1
+		joy_anchor = mp
+		joy_finger = mp
+		return
+	joy_finger = mp
+	if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
+		_begin_play()
 
 func _probe_gate() -> void:
 	var kept := Save.unlocked_level
@@ -1470,12 +1561,19 @@ func _build_world() -> void:
 	sun.light_color = Color(1.0, 0.96, 0.86)
 	sun.light_energy = 0.4
 	sun.shadow_enabled = false
+	sun.shadow_bias = 0.2
+	sun.shadow_normal_bias = 3.0
+	sun.shadow_blur = 0.0
+	sun.shadow_opacity = 0.0
 	add_child(sun)
 	fill_light = DirectionalLight3D.new()
 	fill_light.rotation_degrees = Vector3(-24, 200, 0)
 	fill_light.light_color = Color(0.62, 0.78, 1.0)
 	fill_light.light_energy = 0.24
 	fill_light.shadow_enabled = false
+	fill_light.shadow_bias = 0.2
+	fill_light.shadow_normal_bias = 3.0
+	fill_light.shadow_opacity = 0.0
 	add_child(fill_light)
 	var floor := StaticBody3D.new()
 	floor.collision_layer = 1
@@ -1632,9 +1730,9 @@ func _cam_dist_for(radius: float) -> float:
 	return _dist_for_frac(r, frac) * cam_dist_mul
 
 func _cam_fov_for() -> float:
-	# Extra vertical field on a wide window, so the horizon and sky fit
-	# without tipping the phone view onto its side.
-	return lerpf(CAM_FOV, 70.0, _wide_blend())
+	# Extra vertical field so the horizon and a band of sky sit in frame.
+	# Phone portrait stays the narrower of the two.
+	return lerpf(62.0, 78.0, _wide_blend())
 
 func _cam_pitch_for(radius: float) -> float:
 	var start_r := maxf(_start_radius(), 0.12)
@@ -1642,7 +1740,8 @@ func _cam_pitch_for(radius: float) -> float:
 	var t := clampf((radius - start_r) / (end_r - start_r), 0.0, 1.0)
 	t = t * t * (3.0 - 2.0 * t)
 	var wide := _wide_blend()
-	var near := lerpf(CAM_PITCH_DEG, 32.0, wide)
+	# Start low enough that the top of the frame clears the map edge.
+	var near := lerpf(28.0, 30.0, wide)
 	var far := lerpf(CAM_PITCH_FAR, 46.0, wide)
 	return lerpf(near, far, t)
 
@@ -3022,6 +3121,7 @@ func _theme_ids(layout: String) -> Array:
 			return ["fapple", "chicken", "fwheat", "piglet", "haybale", "cow", "railfence", "scare", "farmtractor", "pickup", "grainsilo", "redbarn", "farmmill"]
 
 func _populate() -> void:
+	forward_tall = 0
 	var layout := str(map.get("layout", "farm"))
 	_place_signatures(layout)
 	_place_near_icons(layout)
@@ -3151,54 +3251,57 @@ func _finale_id(layout: String) -> String:
 			return "farmmill"
 
 func _near_icons(layout: String) -> Array:
+	# Small bites only. Tall heroes are placed further out.
 	match layout:
 		"candy":
-			return ["lollypop", "donut", "partycake", "sweetcup"]
+			return ["lollypop", "donut", "gbread", "canecandy"]
 		"jungle":
-			return ["dinoegg", "fernleaf", "raptord", "jpalm"]
+			return ["dinoegg", "redshroom", "jrock"]
 		"pirate":
-			return ["pbarrel", "pcannon", "prowboat", "ppalm"]
+			return ["pbarrel", "pcrate", "pflag", "pchest"]
 		"snow":
-			return ["hsnowman", "hpresent", "hsled", "hpine"]
+			return ["hpresent", "hsled", "iceblock"]
 		"desert":
-			return ["dcactus", "dcamel", "dtent", "dpalm"]
+			return ["drock", "dpot", "dcactus"]
 		"toy":
-			return ["tblock", "tracer", "teddybear", "ttruck"]
+			return ["tblock", "tball"]
 		"space":
-			return ["astro", "spacerover", "moonlet", "satdish"]
+			return ["moonlet", "spacecrate"]
 		"haunt":
-			return ["hpumpkin", "htomb", "hghost", "hcandle"]
+			return ["hcandle", "hbat", "hcrow", "hpumpkin"]
 		"fair":
-			return ["fballoon", "fteacup", "fpop", "teacups"]
+			return ["fballoon", "fteacup"]
 		_:
-			return ["haybale", "fwheat", "scare", "fapple"]
+			return ["fapple", "chicken", "fwheat", "fflower", "piglet"]
 
 func _place_near_icons(layout: String) -> void:
-	# The camera looks toward -Z, so the opening view is that forward arc.
+	# The camera looks toward -Z. Keep this arc inside the clear radius.
 	var ids: Array = _near_icons(layout)
 	var made := 0
 	var tries := 0
-	while made < 8 and tries < 90 and props.size() < PROP_CAP:
+	while made < 12 and tries < 120 and props.size() < PROP_CAP:
 		tries += 1
-		var ang := randf_range(-PI * 0.92, -PI * 0.08)
-		var rr := randf_range(3.5, 8.6)
+		var ang := randf_range(-PI * 0.82, -PI * 0.18)
+		var rr := randf_range(5.4, 13.5)
 		var p := Vector3(cos(ang) * rr, 0.0, sin(ang) * rr)
-		var id := str(ids[made % ids.size()])
+		var id := str(ids[tries % ids.size()])
 		if _place_id(id, p, Vector3.ZERO, randf() * TAU, 1.0):
 			made += 1
 
 func _place_signatures(layout: String) -> void:
 	var ids: Array = _signature_ids(layout)
+	# Flank the opening view. The center corridor stays open so the horizon reads.
 	var spots: Array = [
-		Vector3(3.4, 0, -4.8),
-		Vector3(-3.6, 0, -5.4),
-		Vector3(6.2, 0, -7.6),
-		Vector3(-5.8, 0, -8.2),
+		Vector3(14.0, 0, -36.0),
+		Vector3(-16.0, 0, -38.0),
+		Vector3(34.0, 0, -20.0),
+		Vector3(-36.0, 0, -18.0),
 	]
 	for i in mini(ids.size(), spots.size()):
 		var base: Vector3 = spots[i]
-		if not _place_id(str(ids[i]), base, Vector3.ZERO, 0.5, 1.0):
-			_place_id(str(ids[i]), base + Vector3(2.4, 0, -1.6), Vector3.ZERO, 0.8, 1.0)
+		if _place_id(str(ids[i]), base, Vector3.ZERO, 0.4, 1.0):
+			continue
+		_place_id(str(ids[i]), base * 1.22, Vector3.ZERO, 0.7, 1.0)
 	var finale := _finale_id(layout)
 	var far: Array = [Vector3(46, 0, -32), Vector3(-40, 0, 36), Vector3(28, 0, 48), Vector3(-52, 0, -24)]
 	for spot in far:
@@ -3517,10 +3620,65 @@ func _overlap_foot(ki: int, sxz: float) -> float:
 	var native: Vector3 = kind_native[ki]
 	return maxf(native.x, native.z) * sxz * 0.45
 
+func _prop_metrics(id: String, grow: float) -> Dictionary:
+	var ki: int = int(kind_by_id[id])
+	var sxz := float(prop_defs[ki][2]) * grow
+	var sy := float(prop_defs[ki][3]) * grow
+	var native: Vector3 = kind_native[ki]
+	return {
+		"role": str(prop_defs[ki][5]),
+		"base": float(kind_base[ki]) * sxz,
+		"height": native.y * sy,
+	}
+
+func _is_snack(role: String, base: float, height: float) -> bool:
+	if base > 0.72 or height > 1.55:
+		return false
+	return role in ["small", "clutter", "person"]
+
+func _is_structure(role: String, base: float, height: float) -> bool:
+	if role in ["barn", "tower", "building", "wide", "house", "landmark", "tank", "boat"]:
+		return true
+	if role == "stall" and height > 1.8:
+		return true
+	if role == "ride" and (height > 2.2 or base > 1.05):
+		return true
+	if role in ["tree", "palm"] and height > 2.4:
+		return true
+	return height > 2.8 or base > 1.45
+
+func _blocks_horizon(role: String, base: float, height: float) -> bool:
+	if _is_structure(role, base, height):
+		return true
+	return height > 1.75
+
+func _in_view_corridor(p: Vector3) -> bool:
+	# Center of the opening view, where the horizon has to stay visible.
+	if p.z > -12.0:
+		return false
+	return absf(atan2(p.x, -p.z)) < 0.52 and Vector2(p.x, p.z).length() < 70.0
+
+func _spawn_ok(id: String, p: Vector3, grow: float) -> bool:
+	var m := _prop_metrics(id, grow)
+	var role := str(m.role)
+	var base := float(m.base)
+	var height := float(m.height)
+	var home := Vector2(p.x, p.z).length()
+	if home < SPAWN_CLEAR and not _is_snack(role, base, height):
+		return false
+	var structure := _is_structure(role, base, height)
+	if home < SPAWN_MID and structure:
+		return false
+	if _blocks_horizon(role, base, height) and _in_view_corridor(p) and forward_tall >= VIEW_TALL_CAP:
+		return false
+	return true
+
 func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float = -1.0, grow: float = 1.0, tint: Color = Color.WHITE, points: int = -1, mover: int = -1) -> bool:
 	if props.size() >= PROP_CAP or not kind_by_id.has(id):
 		return false
 	if p.length() < 2.15:
+		return false
+	if not _spawn_ok(id, p, grow):
 		return false
 	if absf(p.x) > CITY_HALF - 0.45 or absf(p.z) > CITY_HALF - 0.45:
 		return false
@@ -3544,6 +3702,9 @@ func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float =
 	_add_prop(ki, p, dir, use_yaw, spec)
 	if tint != Color.WHITE:
 		props[props.size() - 1].color = tint
+	var placed := _prop_metrics(id, grow)
+	if _blocks_horizon(str(placed.role), float(placed.base), float(placed.height)) and _in_view_corridor(p):
+		forward_tall += 1
 	return true
 
 func _overlaps(p: Vector3, foot: float, ignore_roles: Array = []) -> bool:
@@ -3814,21 +3975,21 @@ func _lod_end(role: String, id: String) -> float:
 	return 30.0
 
 func _build_shadows() -> void:
-	var img := Image.create(48, 48, false, Image.FORMAT_RGBA8)
-	for y in 48:
-		for x in 48:
-			var d := Vector2(float(x) - 23.5, float(y) - 23.5).length() / 23.5
-			var a := clampf(1.0 - smoothstep(0.08, 1.0, d), 0.0, 1.0)
-			img.set_pixel(x, y, Color(0.16, 0.22, 0.34, a * 0.46))
-	img.generate_mipmaps()
-	var tex := ImageTexture.create_from_image(img)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-	mat.alpha_scissor_threshold = 0.22
-	mat.albedo_texture = tex
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	# Hard contact discs. Alpha-scissor blobs on one plane z-fight into diagonal stripes.
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled;
+void fragment() {
+	vec2 p = UV * 2.0 - 1.0;
+	if (dot(p, p) > 0.92) {
+		discard;
+	}
+	ALBEDO = vec3(0.20, 0.32, 0.22);
+	ALPHA = 1.0;
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
 	var quad := PlaneMesh.new()
 	quad.size = Vector2(1, 1)
 	shadow_mm = MultiMesh.new()
@@ -3861,7 +4022,7 @@ func _shadow_xform(o: Dictionary) -> Transform3D:
 	var basis := Basis()
 	basis.x *= s
 	basis.z *= s
-	return Transform3D(basis, Vector3(p.x, 0.045, p.z))
+	return Transform3D(basis, Vector3(p.x, 0.08, p.z))
 
 func _set_shadow(o: Dictionary) -> void:
 	if shadow_mm == null:
@@ -4417,6 +4578,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
 			_begin_play()
 		_refresh_joystick()
+	elif web_steer and (event is InputEventMouseButton or event is InputEventMouseMotion):
+		return
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		# Desktop clicks stay mouse events. Touch emulation was eating the first menu tap.
 		if event.pressed:
@@ -4437,7 +4600,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 			joy_held = true
 			joy_id = -1
-			joy_anchor = event.position - event.relative
+			# relative is 0 on the web export, so it cannot rebuild the press point.
+			joy_anchor = event.position
 			joy_finger = event.position
 		else:
 			joy_finger = event.position
@@ -5075,9 +5239,14 @@ func _sync_rival_visuals() -> void:
 		if s < 0.05 or cam == null or cam.is_position_behind(above):
 			tag.visible = false
 		else:
-			tag.visible = true
-			tag.text = str(rival.name)
-			tag.position = cam.unproject_position(above) - Vector2(90, 46)
+			var sp := cam.unproject_position(above) - Vector2(90, 46)
+			# The level name lives in the top band. Hide a tag that would cover it.
+			if sp.y < HUD_TAG_MIN_Y:
+				tag.visible = false
+			else:
+				tag.visible = true
+				tag.text = str(rival.name)
+				tag.position = sp
 
 func _push_openings() -> void:
 	if ground_mat == null or opening_centers.size() < 8:
@@ -5163,7 +5332,11 @@ func _process(delta: float) -> void:
 	_sync_pause_button()
 	var frame_delta := delta
 	_tick_quality(frame_delta)
+	# Hole steering uses the real frame time. A 20fps cap made a slow machine crawl.
+	var steer_delta := minf(frame_delta, 0.5)
 	delta = minf(delta, 1.0 / 20.0)
+	if mode == "play" or mode == "attract":
+		_poll_pointer_steer()
 	if mode != "play" and mode != "results" and mode != "attract":
 		if debug_on:
 			_update_debug(frame_delta)
@@ -5190,7 +5363,7 @@ func _process(delta: float) -> void:
 					grow_arm = false
 					_grow_drive_step(delta)
 			else:
-				_move_hole(delta)
+				_move_hole(steer_delta)
 			_tick_movers(delta)
 			_tick_rivals(delta)
 			_activate_nearby()
