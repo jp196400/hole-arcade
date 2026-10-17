@@ -383,6 +383,8 @@ var joy_anchor := Vector2.ZERO
 var joy_finger := Vector2.ZERO
 var joy_id := -2
 var web_steer := false
+var web_phase_live := false
+var _announced_phase := ""
 var _steer_cb = null
 var forward_tall := 0
 var hole_radius := LEVEL_RADIUS[0]
@@ -1674,7 +1676,7 @@ func _focus_canvas() -> void:
 	_steer_cb = JavaScriptBridge.create_callback(_on_web_steer)
 	var window := JavaScriptBridge.get_interface("window")
 	window.__holeSteerCb = _steer_cb
-	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var focus=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointerover',focus,true);var send=function(down,ax,ay,x,y){var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down,ax,ay,x,y,r.width,r.height);};window.addEventListener('pointerdown',function(e){if(e.pointerType==='touch'||e.button!==0)return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch')return;if((e.buttons&1)===0)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if(window.__holeAX===undefined){window.__holeAX=x;window.__holeAY=y;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e.pointerType==='touch')return;if(window.__holeAX===undefined)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);focus();})();", true)
+	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var focus=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointerover',focus,true);var send=function(down,ax,ay,x,y){var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down,ax,ay,x,y,r.width,r.height);};window.addEventListener('pointerdown',function(e){if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;if(e.pointerType==='touch'||e.button!==0)return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch')return;if((e.buttons&1)===0)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if(window.__holeAX===undefined){window.__holeAX=x;window.__holeAY=y;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e.pointerType==='touch')return;if(window.__holeAX===undefined)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);focus();})();", true)
 	web_steer = true
 
 func _css_to_view(p: Vector2, css: Vector2) -> Vector2:
@@ -6369,7 +6371,25 @@ func _feel(points: int, heavy: bool, sound: bool = true) -> void:
 	var pitch := 1.0 + float(mini(combo, 10)) * 0.08
 	_sfx(kind, pitch, heavy or points >= 14)
 
+func _announce_web_phase() -> void:
+	if not web_phase_live or not OS.has_feature("web"):
+		return
+	var phase := "menu"
+	if mode == "play":
+		phase = "play"
+	elif mode == "results":
+		phase = "results"
+	if phase == _announced_phase:
+		return
+	_announced_phase = phase
+	JavaScriptBridge.eval("if(window.__holeSetPhase)window.__holeSetPhase('%s');" % phase, true)
+
+func _mark_web_phase() -> void:
+	web_phase_live = true
+	_announce_web_phase()
+
 func _process(delta: float) -> void:
+	_announce_web_phase()
 	_tick_reveal()
 	if ui_swallow_frames > 0:
 		ui_swallow_frames -= 1
@@ -7370,6 +7390,7 @@ func start_round(index: int) -> void:
 	mode = "play"
 	playing = true
 	ad_hold = false
+	_mark_web_phase()
 	_set_match_hud(true)
 	_set_chrome(false)
 	_refresh_hud()
@@ -7425,6 +7446,7 @@ func _enter_attract(index: int) -> void:
 		pause_layer.visible = false
 	mode = "attract"
 	playing = false
+	_mark_web_phase()
 	_apply_skin()
 	_set_match_hud(false)
 	_set_chrome(true)
@@ -7443,6 +7465,7 @@ func _begin_play() -> void:
 		return
 	mode = "play"
 	playing = true
+	_mark_web_phase()
 	score = 0
 	level = 0
 	combo = 0
@@ -7818,6 +7841,7 @@ func _finish_round(cleared: bool, eaten_by: String = "") -> void:
 		Save.clear_trial()
 		_apply_skin()
 	mode = "results"
+	_mark_web_phase()
 	round_settled = true
 	var bonus := CLEAR_COIN_BONUS if cleared else 0
 	coins_earned = int(float(score) * COIN_RATE) + bonus
@@ -8473,6 +8497,7 @@ func _show_screen(which: String) -> void:
 	if which == "menu" or which == "attract":
 		mode = "attract"
 		playing = false
+		_mark_web_phase()
 		paused = false
 		if pause_layer:
 			pause_layer.visible = false
@@ -8487,6 +8512,7 @@ func _show_screen(which: String) -> void:
 		return
 	mode = which
 	playing = false
+	_mark_web_phase()
 	joy_held = false
 	_set_chrome(false)
 	_set_match_hud(false)
