@@ -13,9 +13,12 @@ const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?s
 const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
 const STOP_RATE := 34.0
-const CAM_PITCH_DEG := 48.0
-const CAM_PITCH_FAR := 60.0
+const CAM_PITCH_DEG := 54.0
+const CAM_PITCH_FAR := 54.0
 const CAM_FOV := 56.0
+# Share of the frame height that stays sky. Pitch is held against the field
+# of view so this sliver does not grow or vanish as the hole zooms out.
+const CAM_SKY_SLIVER := 0.055
 const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
 const SPEED_SCREEN := 1.0
@@ -90,74 +93,29 @@ varying vec3 world_pos;
 float thash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
-vec3 theme_ground(vec3 base, vec2 xz, float which, float mode) {
+vec3 theme_ground(vec3 base, vec2 xz, float which) {
 	vec3 col = base;
-	float h = thash(floor(xz * 2.0));
-	if (which < 0.5) {
-		float row = abs(fract(xz.x * 1.1) - 0.5);
-		float furrow = smoothstep(0.38, 0.48, row);
-		col *= mix(1.0, 0.78, furrow);
-		col = mix(col, col * vec3(1.03, 1.01, 0.94), h * 0.16);
-		float lane = abs(fract((xz.y + sin(xz.x * 0.07) * 1.6) * 0.16) - 0.5);
-		float path = 1.0 - smoothstep(0.04, 0.1, lane);
-		col = mix(col, vec3(0.55, 0.4, 0.22), path * 0.42);
-	} else if (which < 1.5) {
-		float stripe = 0.5 + 0.5 * sin(xz.x * 2.2 + xz.y * 0.4);
-		col = mix(col, col * vec3(1.08, 0.94, 1.02), stripe * 0.45);
-		vec2 cell = fract(xz * 0.7) - vec2(0.5);
-		float dots = 1.0 - smoothstep(0.08, 0.16, length(cell));
-		col = mix(col, vec3(0.96, 0.82, 0.48), dots * 0.28);
-	} else if (which < 2.5) {
-		float blob = 0.5 + 0.5 * sin(xz.x * 0.85) * sin(xz.y * 0.7);
-		col = mix(col * vec3(0.75, 0.9, 0.6), col * vec3(1.05, 1.12, 0.7), blob);
-	} else if (which < 3.5) {
-		float wood = 0.0;
-		if ((mode > 5.5 && mode < 7.5) || mode > 8.5) {
-			wood = 1.0;
-		}
-		if (wood > 0.5) {
-			float plank = smoothstep(0.92, 0.98, fract(xz.x * 1.4));
-			col *= mix(1.0, 0.72, plank);
-		} else {
-			float rip = 0.5 + 0.5 * sin(xz.x * 0.6 + xz.y * 1.4);
-			col = mix(col, col * vec3(1.06, 1.0, 0.82), rip * 0.35);
-		}
-	} else if (which < 4.5) {
-		float spark = step(0.93, h);
-		col = mix(col, vec3(1.0), spark * 0.35);
-		float rut = smoothstep(0.45, 0.5, abs(fract(xz.y * 0.35) - 0.5));
-		col *= mix(1.0, 0.9, rut);
-	} else if (which < 5.5) {
-		float dune = 0.5 + 0.5 * sin(xz.x * 0.28 + sin(xz.y * 0.17) * 2.0);
-		col = mix(col * vec3(0.9, 0.78, 0.55), col * vec3(1.08, 0.98, 0.75), dune);
-	} else if (which < 6.5) {
-		vec2 g = abs(fract(xz * 0.5) - vec2(0.5));
-		float seam = smoothstep(0.46, 0.5, max(g.x, g.y));
-		col *= mix(1.0, 0.72, seam);
-	} else if (which < 7.5) {
-		vec2 cell = xz - (floor(xz / 5.0) + vec2(0.5)) * 5.0;
-		float cr = length(cell);
-		float ring = smoothstep(1.5, 1.2, cr) * smoothstep(0.55, 0.9, cr);
-		col = mix(col, col * vec3(0.7, 0.72, 0.78), ring * 0.8);
-	} else if (which < 8.5) {
-		float patch = smoothstep(0.35, 0.8, h);
-		col = mix(col * vec3(0.7, 0.75, 0.55), col, patch);
-		float mist = 0.5 + 0.5 * sin(xz.x * 0.4 + xz.y * 0.3);
-		col = mix(col, col * vec3(0.8, 0.7, 0.9), mist * 0.25);
-	} else {
-		float conf = step(0.9, thash(floor(xz * 3.0)));
+	float h = thash(floor(xz * 1.6));
+	float blot = thash(floor(xz * 0.37 + vec2(4.1, 9.3)));
+	// Mottling only. Furrows, lanes, seams, and diagonal waves read as long stripes.
+	col = mix(col, col * vec3(1.03, 1.015, 0.97), h * 0.12);
+	col = mix(col, col * vec3(0.97, 0.985, 0.96), blot * 0.07);
+	if (which > 0.5 && which < 1.5) {
+		vec2 cell = fract(xz * 0.55) - vec2(0.5);
+		float dots = 1.0 - smoothstep(0.1, 0.18, length(cell));
+		col = mix(col, vec3(0.96, 0.82, 0.48), dots * 0.16);
+	} else if (which > 3.5 && which < 4.5) {
+		float spark = step(0.94, h);
+		col = mix(col, vec3(1.0), spark * 0.22);
+	} else if (which > 8.5) {
+		float conf = step(0.93, thash(floor(xz * 2.2)));
 		vec3 tint = vec3(0.95, 0.45, 0.4);
 		if (h > 0.66) {
 			tint = vec3(0.4, 0.7, 0.95);
 		} else if (h > 0.33) {
 			tint = vec3(0.98, 0.85, 0.3);
 		}
-		col = mix(col, tint, conf * 0.28);
-		float stripe = smoothstep(0.94, 0.99, fract(xz.x * 0.8));
-		col *= mix(1.0, 0.86, stripe);
-		float lane = abs(fract((xz.y + sin(xz.x * 0.05) * 1.2) * 0.14) - 0.5);
-		float path = 1.0 - smoothstep(0.05, 0.11, lane);
-		col = mix(col, vec3(0.72, 0.5, 0.32), path * 0.34);
+		col = mix(col, tint, conf * 0.2);
 	}
 	return clamp(col, vec3(0.0), vec3(1.0));
 }
@@ -188,7 +146,7 @@ void fragment() {
 	float shade = clamp(0.35 + luma * 0.4, 0.0, 1.0);
 	if (paint_mode > 0.5) {
 		float nse = thash(floor(world_pos.xz * 2.0));
-		shade = mix(0.08, 0.42, nse);
+		shade = mix(0.24, 0.40, nse);
 	}
 	if (paint_mode > 8.5) {
 		outc = mix(vec3(0.40, 0.30, 0.18), vec3(0.66, 0.50, 0.32), shade);
@@ -244,7 +202,7 @@ void fragment() {
 	}
 	if (paint_mode > 0.5 && band_lo.r >= 0.0) {
 		outc = mix(band_lo, band_hi, shade);
-		outc = theme_ground(outc, world_pos.xz, motif, paint_mode);
+		outc = theme_ground(outc, world_pos.xz, motif);
 	}
 	outc = mix(outc, vec3(0.012, 0.014, 0.02), cover);
 	ALBEDO = outc * grade_tint;
@@ -577,6 +535,8 @@ var clear_total := 0
 var clear_eaten := 0
 var clear_shown := 0.0
 var player_eaten := 0
+var rival_radius_bonus := 0.0
+var round_cover: ColorRect
 var map_max_base := 0.4
 var final_radius := 2.6
 var round_settled := false
@@ -1489,6 +1449,25 @@ func _prewarm_shaders() -> void:
 		return
 	RenderingServer.force_draw(false)
 
+func _warm_view() -> void:
+	# Draw the finished city before the round is shown. WebGL compiles each
+	# material on first use, which otherwise pops props in over the opening.
+	if DisplayServer.get_name() == "headless":
+		return
+	if round_cover == null:
+		var layer := CanvasLayer.new()
+		layer.layer = 40
+		add_child(layer)
+		round_cover = ColorRect.new()
+		round_cover.color = Color(0.11, 0.16, 0.29, 1)
+		round_cover.set_anchors_preset(Control.PRESET_FULL_RECT)
+		round_cover.mouse_filter = Control.MOUSE_FILTER_STOP
+		layer.add_child(round_cover)
+	round_cover.visible = true
+	for _i in 4:
+		RenderingServer.force_draw(false)
+	round_cover.visible = false
+
 func _no_shadow(g: GeometryInstance3D) -> void:
 	g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
@@ -1561,8 +1540,8 @@ func _build_world() -> void:
 	sun.light_color = Color(1.0, 0.96, 0.86)
 	sun.light_energy = 0.4
 	sun.shadow_enabled = false
-	sun.shadow_bias = 0.2
-	sun.shadow_normal_bias = 3.0
+	sun.shadow_bias = 0.5
+	sun.shadow_normal_bias = 4.0
 	sun.shadow_blur = 0.0
 	sun.shadow_opacity = 0.0
 	add_child(sun)
@@ -1571,8 +1550,8 @@ func _build_world() -> void:
 	fill_light.light_color = Color(0.62, 0.78, 1.0)
 	fill_light.light_energy = 0.24
 	fill_light.shadow_enabled = false
-	fill_light.shadow_bias = 0.2
-	fill_light.shadow_normal_bias = 3.0
+	fill_light.shadow_bias = 0.5
+	fill_light.shadow_normal_bias = 4.0
 	fill_light.shadow_opacity = 0.0
 	add_child(fill_light)
 	var floor := StaticBody3D.new()
@@ -1719,7 +1698,7 @@ func _cam_ref_dist() -> float:
 
 func _cam_dist_for(radius: float) -> float:
 	# Zoom out lags the radius. The hole starts smaller than a quarter of the
-	# screen so the fields and sky read, then grows toward about a third.
+	# screen so the fields read, then grows toward about a third.
 	var r := maxf(radius, 0.12)
 	var start_r := maxf(_start_radius(), 0.12)
 	var end_r := maxf(final_radius, start_r + 0.2)
@@ -1727,23 +1706,23 @@ func _cam_dist_for(radius: float) -> float:
 	# Front-load the on-screen size so early radius gains are not cancelled by zoom.
 	var shaped := 0.0 if grow <= 0.0 else pow(grow, 0.45)
 	var frac := lerpf(SCREEN_FRAC_START, SCREEN_FRAC_END, shaped)
-	return _dist_for_frac(r, frac) * cam_dist_mul
+	return _dist_for_frac(r, frac) * cam_dist_mul * _cam_span_scale()
 
 func _cam_fov_for() -> float:
-	# Extra vertical field so a band of sky sits above the horizon.
-	# Phone portrait stays the narrower of the two.
-	return lerpf(68.0, 82.0, _wide_blend())
+	# Steep pitch, with just enough field that the horizon stays a thin sliver.
+	var horizon := 1.0 - CAM_SKY_SLIVER * 2.0
+	var half := atan(tan(deg_to_rad(CAM_PITCH_DEG)) / horizon)
+	return rad_to_deg(half * 2.0)
 
-func _cam_pitch_for(radius: float) -> float:
-	var start_r := maxf(_start_radius(), 0.12)
-	var end_r := maxf(final_radius, start_r + 0.2)
-	var t := clampf((radius - start_r) / (end_r - start_r), 0.0, 1.0)
-	t = t * t * (3.0 - 2.0 * t)
-	var wide := _wide_blend()
-	# Start low enough that the horizon sits below the top HUD.
-	var near := lerpf(22.0, 24.0, wide)
-	var far := lerpf(CAM_PITCH_FAR, 46.0, wide)
-	return lerpf(near, far, t)
+func _cam_pitch_for(_radius: float) -> float:
+	return CAM_PITCH_DEG
+
+func _cam_span_scale() -> float:
+	# The steeper view uses a wider field. Pull the camera in by the same
+	# factor so the hole keeps its width and a drag still crosses the screen.
+	var old_half := tan(deg_to_rad(lerpf(68.0, 82.0, _wide_blend())) * 0.5)
+	var new_half := tan(deg_to_rad(_cam_fov_for()) * 0.5)
+	return old_half / maxf(new_half, 0.001)
 
 func _snap_camera() -> void:
 	if cam_dist_mul > 0.9:
@@ -1917,6 +1896,22 @@ func _shade_mesh(mesh: Mesh) -> ArrayMesh:
 			1.0
 		)
 	arrays[Mesh.ARRAY_COLOR] = cols
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return out
+
+func _flat_ground(mesh: Mesh) -> Mesh:
+	# Tile diagonals were shading as long dark stripes. Force every normal up.
+	if mesh == null or mesh.get_surface_count() < 1:
+		return mesh
+	var arrays: Array = mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	if verts.is_empty():
+		return mesh
+	var norms := PackedVector3Array()
+	norms.resize(verts.size())
+	norms.fill(Vector3.UP)
+	arrays[Mesh.ARRAY_NORMAL] = norms
 	var out := ArrayMesh.new()
 	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return out
@@ -2514,10 +2509,10 @@ func _ensure_models() -> void:
 		kind_by_id[str(item.id)] = prop_defs.size() - 1
 	_register_theme_models()
 	ground_meshes = [
-		_load_model("res://assets/kenney/roads/road-straight.glb").mesh,
-		_load_model("res://assets/kenney/roads/road-crossing.glb").mesh,
-		_load_model("res://assets/kenney/roads/road-crossroad.glb").mesh,
-		_load_model("res://assets/kenney/roads/tile-low.glb").mesh,
+		_flat_ground(_load_model("res://assets/kenney/roads/road-straight.glb").mesh),
+		_flat_ground(_load_model("res://assets/kenney/roads/road-crossing.glb").mesh),
+		_flat_ground(_load_model("res://assets/kenney/roads/road-crossroad.glb").mesh),
+		_flat_ground(_load_model("res://assets/kenney/roads/tile-low.glb").mesh),
 	]
 
 func _add_city(n: Node) -> void:
@@ -3865,7 +3860,6 @@ func _build_kind_multimesh(ki: int) -> void:
 	var any := false
 	var kid := kind_id_of(ki)
 	var amp := _life_amp(kid)
-	var lod := _lod_end(str(prop_defs[ki][5]), kid)
 	for c in SLOT_COUNT:
 		var list: Array = slots[c]
 		if list.is_empty():
@@ -3889,17 +3883,13 @@ func _build_kind_multimesh(ki: int) -> void:
 		inst.multimesh = mm
 		inst.material_override = kind_mats[ki]
 		inst.custom_aabb = _chunk_aabb(c, -6.0, 36.0)
-		inst.extra_cull_margin = 0.0
-		if c < STATIC_CHUNKS and lod > 0.0:
-			inst.visibility_range_end = lod
-			inst.visibility_range_end_margin = 8.0
-			inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+		# Keep the whole chunk once it is near the view. A distance cutoff
+		# made props pop in during the opening seconds.
+		inst.extra_cull_margin = 24.0
 		_no_shadow(inst)
 		_add_city(inst)
 		mms[c] = mm
 	kind_multimeshes[ki] = mms if any else null
-	if _wants_impostor(kid):
-		_build_impostors(ki, slots, kid)
 
 func _wants_impostor(id: String) -> bool:
 	return id in ["jpalm", "jpalmtall", "ppalm", "dpalm", "hpine", "htree"]
@@ -4636,6 +4626,7 @@ func _move_speed() -> float:
 	# drag still crosses the screen at that same pace. A wide monitor also sees
 	# more ground across the same distance, so speed up with the extra width.
 	var dist := cam_distance if cam_distance > 0.5 else STICK_REF_DIST
+	dist = dist / maxf(_cam_span_scale(), 0.001)
 	var wide := maxf(_view_aspect() / (720.0 / 1280.0), 1.0)
 	var factor := pow(maxf(dist, 0.001) / STICK_REF_DIST, SPEED_SCREEN) * wide
 	return BASE_SPEED * speed_scale * Save.speed_mul() * factor
@@ -4776,6 +4767,7 @@ func _tally_clear() -> void:
 	var start := _start_radius()
 	var fit_need := map_max_base / FIT_RATIO * 1.04
 	final_radius = maxf(start * GROW_MULTIPLE, fit_need)
+	rival_radius_bonus = 0.0
 
 func _sync_level() -> void:
 	var progress := _player_progress()
@@ -4789,7 +4781,14 @@ func _sync_level() -> void:
 		if size_lbl:
 			size_lbl.text = "Size %d" % (level + 1)
 	if not latency_probe:
-		hole_radius = maxf(_radius_for(_start_radius(), progress), _start_radius())
+		var start_r := _start_radius()
+		var curve := maxf(_radius_for(start_r, progress), start_r)
+		var cap := final_radius
+		# Rival bites can nudge the hole, but not past 8x before two-thirds
+		# of the clear, and not past the 10x clear radius.
+		if progress < 0.65 / CLEAR_RATIO:
+			cap = minf(cap, start_r * 8.0)
+		hole_radius = minf(curve + rival_radius_bonus, cap)
 	if grew:
 		_announce_skins(Save.note_size(level + 1))
 
@@ -5163,8 +5162,9 @@ func _player_eats_rival(rival: Dictionary) -> void:
 	bonus += maxi(combo - 1, 0)
 	score += bonus
 	player_eaten += 4
+	_grant_rival_growth()
 	_sync_level()
-	_burst(rival.pos, bonus, rival.color)
+	_burst(rival.pos, bonus, rival.color, "Bonus +%d" % bonus)
 	_feel(bonus, true, false)
 	_sfx("sting_win", 1.0, true)
 	rivals_bitten[str(rival.name)] = true
@@ -5228,9 +5228,24 @@ func _sink_radius(sink: int) -> float:
 		return float(rivals[sink].radius)
 	return hole_radius
 
+func _grant_rival_growth() -> void:
+	# One rival is about one or two mid bites: enough to see, not a size tier.
+	var start_r := maxf(_start_radius(), 0.12)
+	var progress := _player_progress()
+	var curve := maxf(_radius_for(start_r, progress), start_r)
+	var cap := final_radius
+	if progress < 0.65 / CLEAR_RATIO:
+		cap = minf(cap, start_r * 8.0)
+	var bite := clampf(hole_radius * 0.06, 0.06, 0.15)
+	var room := cap - curve - rival_radius_bonus
+	if room <= 0.0:
+		return
+	rival_radius_bonus += minf(bite, room)
+
 func _sync_rival_visuals() -> void:
 	if rival_mm == null:
 		return
+	var shown: Array = []
 	for i in rivals.size():
 		var rival: Dictionary = rivals[i]
 		var s := 0.0
@@ -5257,6 +5272,24 @@ func _sync_rival_visuals() -> void:
 				tag.visible = true
 				tag.text = str(rival.name)
 				tag.position = sp
+				var dist := cam.global_position.distance_squared_to(rival.pos)
+				shown.append({"i": i, "d": dist, "p": sp})
+	shown.sort_custom(func(a, b): return float(a.d) < float(b.d))
+	var kept: Array = []
+	var tag_size := Vector2(220, 48)
+	for item in shown:
+		var sp: Vector2 = item.p
+		var rect := Rect2(sp, tag_size)
+		var clash := false
+		for prev in kept:
+			if (prev as Rect2).grow(10.0).intersects(rect):
+				clash = true
+				break
+		var tag: Label = rival_labels[int(item.i)]
+		if clash:
+			tag.visible = false
+		else:
+			kept.append(rect)
 
 func _push_openings() -> void:
 	if ground_mat == null or opening_centers.size() < 8:
@@ -5840,7 +5873,7 @@ func _drive_body(o: Dictionary) -> void:
 		return
 	_push_prop_visual(o, b.global_transform)
 
-func _burst(at: Vector3, points: int, tint: Color) -> void:
+func _burst(at: Vector3, points: int, tint: Color, caption: String = "") -> void:
 	pop_fx.global_position = at + Vector3(0, 0.45, 0)
 	var pm := pop_fx.material_override as StandardMaterial3D
 	pm.albedo_color = Color(tint.r, tint.g, tint.b, 0.95).lerp(Color(1, 0.95, 0.4, 0.95), 0.45)
@@ -5851,7 +5884,7 @@ func _burst(at: Vector3, points: int, tint: Color) -> void:
 			f.age = 0.0
 			f.pos = at + Vector3(0, 0.7, 0)
 			var lbl: Label = f.lbl
-			lbl.text = "+%d" % points
+			lbl.text = caption if caption != "" else "+%d" % points
 			lbl.visible = true
 			lbl.modulate = Color(1, 0.95, 0.35, 1)
 			return
@@ -6083,6 +6116,7 @@ func start_round(index: int) -> void:
 	hole_mesh.visible = true
 	hole_mesh.position = hole_pos
 	_snap_camera()
+	_warm_view()
 	over_panel.visible = false
 	hud_layer.visible = true
 	menu_layer.visible = false
@@ -6135,6 +6169,7 @@ func _enter_attract(index: int) -> void:
 	hole_mesh.visible = true
 	hole_mesh.position = hole_pos
 	_snap_camera()
+	_warm_view()
 	over_panel.visible = false
 	hud_layer.visible = true
 	if menu_layer:
