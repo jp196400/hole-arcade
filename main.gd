@@ -104,34 +104,49 @@ varying vec3 world_pos;
 float thash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
+float vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	float a = thash(i);
+	float b = thash(i + vec2(1.0, 0.0));
+	float c = thash(i + vec2(0.0, 1.0));
+	float d = thash(i + vec2(1.0, 1.0));
+	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
 vec3 theme_ground(vec3 base, vec2 xz, float which) {
 	vec3 col = base;
 	float h = thash(floor(xz * 1.6));
-	float blot = thash(floor(xz * 0.37 + vec2(4.1, 9.3)));
-	// Mottling only. Furrows, lanes, seams, and diagonal waves read as long stripes.
-	col = mix(col, col * vec3(1.03, 1.015, 0.97), h * 0.12);
-	col = mix(col, col * vec3(0.97, 0.985, 0.96), blot * 0.07);
+	float blot = vnoise(xz * 0.17 + vec2(4.1, 9.3));
+	float patch = vnoise(xz * 0.045 + vec2(1.7, 8.2));
+	// Broad painted patches. No furrows or diagonal waves (those read as stripes).
+	col = mix(col, col * vec3(1.06, 1.02, 0.94), h * 0.14);
+	col = mix(col, col * vec3(0.9, 0.98, 0.9), smoothstep(0.42, 0.72, blot) * 0.16);
+	col = mix(col, col * vec3(1.08, 1.04, 0.92), smoothstep(0.62, 0.88, patch) * 0.12);
 	if (which > 0.5 && which < 1.5) {
 		vec2 cell = fract(xz * 0.55) - vec2(0.5);
-		float dots = 1.0 - smoothstep(0.1, 0.18, length(cell));
-		col = mix(col, vec3(0.96, 0.82, 0.48), dots * 0.16);
+		float dots = 1.0 - smoothstep(0.08, 0.16, length(cell));
+		col = mix(col, vec3(0.98, 0.78, 0.42), dots * step(0.72, h) * 0.28);
 	} else if (which > 3.5 && which < 4.5) {
-		float spark = step(0.94, h);
-		col = mix(col, vec3(1.0), spark * 0.22);
+		float spark = step(0.92, h);
+		col = mix(col, vec3(0.9, 0.96, 1.0), spark * 0.28);
 	} else if (which > 8.5) {
-		float conf = step(0.93, thash(floor(xz * 2.2)));
-		vec3 tint = vec3(0.95, 0.45, 0.4);
+		float conf = step(0.9, thash(floor(xz * 2.2)));
+		vec3 tint = vec3(0.95, 0.42, 0.38);
 		if (h > 0.66) {
-			tint = vec3(0.4, 0.7, 0.95);
+			tint = vec3(0.35, 0.66, 0.95);
 		} else if (h > 0.33) {
-			tint = vec3(0.98, 0.85, 0.3);
+			tint = vec3(0.98, 0.84, 0.28);
 		}
-		col = mix(col, tint, conf * 0.2);
+		col = mix(col, tint, conf * 0.28);
 	}
 	return clamp(col, vec3(0.0), vec3(1.0));
 }
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	if (paint_mode > 3.5 && paint_mode < 4.5) {
+		VERTEX.y += sin(TIME * 1.15 + world_pos.x * 0.85) * 0.028 + cos(TIME * 0.9 + world_pos.z * 0.7) * 0.018;
+	}
 }
 void fragment() {
 	// Flat ground. Mesh triangle normals were shading long diagonal seams.
@@ -215,11 +230,94 @@ void fragment() {
 		outc = mix(band_lo, band_hi, shade);
 		outc = theme_ground(outc, world_pos.xz, motif);
 	}
-	outc = mix(outc, vec3(0.012, 0.014, 0.02), cover);
+	vec2 xz = world_pos.xz;
+	if (paint_mode < 0.5) {
+		vec2 uv = fract(UV);
+		float curb = clamp(smoothstep(0.14, 0.03, uv.y) + smoothstep(0.14, 0.03, 1.0 - uv.y), 0.0, 1.0);
+		outc = mix(outc, vec3(0.72, 0.7, 0.66), curb * 0.72);
+		float edge_line = smoothstep(0.18, 0.145, uv.y) * smoothstep(0.11, 0.145, uv.y);
+		edge_line += smoothstep(0.18, 0.145, 1.0 - uv.y) * smoothstep(0.11, 0.145, 1.0 - uv.y);
+		outc = mix(outc, vec3(0.93, 0.94, 0.96), clamp(edge_line, 0.0, 1.0) * 0.85);
+		float lane = smoothstep(0.055, 0.012, abs(uv.y - 0.5));
+		float dash = step(0.46, fract(uv.x * 3.0));
+		outc = mix(outc, vec3(0.96, 0.8, 0.22), lane * dash * 0.92);
+		vec2 crack_cell = floor(xz * 5.0);
+		float crack_h = thash(crack_cell);
+		vec2 crack_f = abs(fract(xz * 5.0) - 0.5);
+		float crack = step(0.975, crack_h) * step(0.42, crack_f.x) * step(crack_f.y, 0.08);
+		outc = mix(outc, outc * 0.62, crack);
+	}
+	if ((paint_mode > 0.5 && paint_mode < 1.5) || (paint_mode > 6.5 && paint_mode < 7.5)) {
+		vec2 gc = floor(xz * 2.5);
+		float gh = thash(gc);
+		vec2 gf = fract(xz * 2.5) - 0.5;
+		float petal = 1.0 - smoothstep(0.04, 0.11, length(gf));
+		if (gh > 0.94) {
+			vec3 flower = vec3(0.95, 0.42, 0.5);
+			if (gh > 0.975) {
+				flower = vec3(0.98, 0.86, 0.28);
+			} else if (gh > 0.96) {
+				flower = vec3(0.96, 0.96, 0.98);
+			}
+			outc = mix(outc, flower, petal * 0.9);
+		} else {
+			outc *= mix(1.0, 0.84, petal * step(0.55, gh) * 0.45);
+		}
+		float leaf = step(0.97, thash(floor(xz * 4.2 + vec2(3.0, 1.0))));
+		outc = mix(outc, vec3(0.28, 0.48, 0.16), leaf * 0.35);
+	} else if (paint_mode > 1.5 && paint_mode < 3.5) {
+		vec2 pc = floor(xz * 3.2);
+		float ph = thash(pc);
+		vec2 pf = fract(xz * 3.2) - 0.5;
+		float pebble = 1.0 - smoothstep(0.05, 0.13, length(pf));
+		if (ph > 0.88) {
+			outc = mix(outc, outc * vec3(0.7, 0.66, 0.6), pebble * 0.8);
+		}
+		if (paint_mode < 2.5 && motif > 3.5 && motif < 4.5) {
+			float flake = step(0.9, ph);
+			outc = mix(outc, vec3(1.0), flake * pebble * 0.35);
+		}
+	} else if (paint_mode > 3.5 && paint_mode < 4.5) {
+		vec2 drift = xz * 0.9 + vec2(TIME * 0.24, -TIME * 0.17);
+		float n1 = thash(floor(drift));
+		float n2 = thash(floor(drift * 2.2 + vec2(4.0, 1.5)));
+		outc = mix(outc, outc * vec3(0.74, 0.95, 1.1), n1 * 0.34);
+		float glint = step(0.84, n2) * smoothstep(0.25, 0.8, n1);
+		outc = mix(outc, vec3(0.84, 0.95, 1.0), glint * 0.4);
+	} else if (paint_mode > 4.5 && paint_mode < 5.5) {
+		vec2 sc = floor(xz * 1.3);
+		vec2 sf = abs(fract(xz * 1.3) - 0.5);
+		float seam = step(0.46, sf.x) + step(0.46, sf.y);
+		outc = mix(outc, outc * 0.78, clamp(seam, 0.0, 1.0) * 0.45);
+		vec2 cc = floor(xz * 4.0);
+		float ch = thash(cc);
+		vec2 cf = abs(fract(xz * 4.0) - 0.5);
+		float crack = step(0.97, ch) * step(0.44, cf.y) * step(cf.x, 0.07);
+		outc = mix(outc, outc * 0.66, crack);
+	}
+	float edge = max(abs(xz.x), abs(xz.y));
+	float rim = smoothstep(70.5, 77.0, edge);
+	vec3 border = outc * vec3(0.45, 0.55, 0.42);
+	if (motif > 2.5 && motif < 3.5) {
+		border = vec3(0.07, 0.26, 0.46);
+	} else if (motif > 1.5 && motif < 2.5) {
+		border = vec3(0.08, 0.22, 0.16);
+	} else if (motif > 4.5 && motif < 5.5) {
+		border = vec3(0.62, 0.4, 0.18);
+	} else if (motif > 3.5 && motif < 4.5) {
+		border = vec3(0.78, 0.88, 0.98);
+	} else if (motif > 6.5 && motif < 7.5) {
+		border = vec3(0.1, 0.12, 0.18);
+	} else if (motif > 7.5 && motif < 8.5) {
+		border = vec3(0.16, 0.12, 0.18);
+	}
+	outc = mix(outc, border, rim);
+	outc = mix(outc, vec3(0.004, 0.005, 0.008), cover);
 	ALBEDO = outc * grade_tint;
-	ROUGHNESS = 1.0;
+	ROUGHNESS = mix(1.0, 0.55, step(3.5, paint_mode) * (1.0 - step(4.5, paint_mode)));
 	METALLIC = 0.0;
-	SPECULAR = 0.0;
+	float wet = step(3.5, paint_mode) * (1.0 - step(4.5, paint_mode));
+	SPECULAR = wet * 0.35;
 }
 """
 const BUILDING_SHADER := """shader_type spatial;
@@ -261,7 +359,8 @@ void fragment() {
 		ROUGHNESS = mix(0.45, 1.0, luma);
 		SPECULAR = 0.0;
 	}
-	
+	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.2);
+	ALBEDO += ALBEDO * fres * 0.14;
 }
 """
 const CAR_SHADER := """shader_type spatial;
@@ -271,7 +370,8 @@ void fragment() {
 	vec3 tex = texture(albedo_tex, UV).rgb;
 	float luma = dot(tex, vec3(0.299, 0.587, 0.114));
 	float ao = clamp(NORMAL.y * 0.32 + 0.78, 0.64, 1.05);
-	ALBEDO = tex * ao * mix(0.94, 1.06, luma);
+	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
+	ALBEDO = tex * ao * mix(0.94, 1.06, luma) + tex * fres * 0.1;
 	ROUGHNESS = mix(0.35, 0.95, luma);
 	SPECULAR = 0.08;
 }
@@ -282,7 +382,7 @@ void fragment() {
 	float n = clamp(NORMAL.y, -1.0, 1.0);
 	float ao = clamp(n * 0.46 + 0.68, 0.5, 1.12);
 	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
-	ALBEDO = COLOR.rgb * ao + COLOR.rgb * fres * 0.07;
+	ALBEDO = COLOR.rgb * ao + COLOR.rgb * fres * 0.16;
 	ROUGHNESS = 0.78;
 	SPECULAR = 0.1;
 	
@@ -304,10 +404,29 @@ void fragment() {
 	float n = clamp(NORMAL.y, -1.0, 1.0);
 	float ao = clamp(n * 0.46 + 0.68, 0.5, 1.12);
 	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
-	ALBEDO = COLOR.rgb * ao + COLOR.rgb * fres * 0.07;
+	ALBEDO = COLOR.rgb * ao + COLOR.rgb * fres * 0.16;
 	ROUGHNESS = 0.78;
 	SPECULAR = 0.1;
 	
+}
+"""
+const VEG_SHADER := """shader_type spatial;
+render_mode diffuse_lambert, cull_disabled;
+uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform float sway = 0.04;
+void vertex() {
+	float h = clamp(VERTEX.y, 0.0, 4.0);
+	float wave = sin(TIME * 1.25 + VERTEX.x * 1.7 + VERTEX.z * 0.8) * sway * h;
+	VERTEX.x += wave;
+	VERTEX.z += cos(TIME * 0.9 + VERTEX.z * 1.3) * sway * h * 0.4;
+}
+void fragment() {
+	vec3 tex = texture(albedo_tex, UV).rgb;
+	float ao = clamp(NORMAL.y * 0.46 + 0.68, 0.55, 1.08);
+	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
+	ALBEDO = tex * ao + tex * fres * 0.12;
+	ROUGHNESS = 0.84;
+	SPECULAR = 0.04;
 }
 """
 const LIFE_AMP := {
@@ -324,6 +443,7 @@ uniform vec3 rim_color : source_color = vec3(0.05, 0.86, 1.0);
 uniform vec3 rim_color_b : source_color = vec3(0.8, 0.98, 1.0);
 uniform int pattern = 0;
 uniform float glow = 0.9;
+uniform float swirl = 0.28;
 uniform float vertex_rim = 0.0;
 varying vec4 vcol;
 varying vec2 xz;
@@ -341,13 +461,18 @@ void fragment() {
 		discard;
 	}
 	float t = clamp(dist, 0.0, 1.0);
-	vec3 pit = mix(vec3(0.012, 0.014, 0.02), vec3(0.18, 0.19, 0.22), smoothstep(0.12, 0.94, t));
-	pit = mix(pit, vec3(0.03, 0.034, 0.04), smoothstep(0.78, 1.0, dist) * 0.25);
+	vec3 pit = mix(vec3(0.002, 0.003, 0.006), vec3(0.05, 0.055, 0.07), smoothstep(0.0, 0.42, t));
+	pit = mix(pit, vec3(0.11, 0.12, 0.15), smoothstep(0.42, 0.82, t));
+	pit = mix(pit, vec3(0.02, 0.022, 0.03), smoothstep(0.82, 1.0, t) * 0.35);
+	float ang = atan(xz.x, xz.y);
+	float spin = ang + TIME * 1.35 - dist * 7.5;
+	float arm = pow(clamp(sin(spin * 3.0) * 0.5 + 0.5, 0.0, 1.0), 3.0);
+	arm *= smoothstep(0.08, 0.28, dist) * (1.0 - smoothstep(0.78, 0.96, dist));
+	pit += rim_color * arm * swirl * 0.22;
 	vec3 rim = rim_color;
 	if (vertex_rim > 0.5) {
 		rim = vcol.rgb;
 	} else {
-		float ang = atan(xz.x, xz.y);
 		float band = sin(ang * 8.0);
 		float bw = min(fwidth(band), 0.35);
 		float stripes = smoothstep(-bw, bw, band);
@@ -369,7 +494,7 @@ void fragment() {
 	float inner = smoothstep(0.90 - fw, 0.97 + fw, dist) * (1.0 - smoothstep(rim_in, rim_in + fw * 1.6, dist));
 	float core = smoothstep(1.0, 1.04, dist) * (1.0 - smoothstep(1.06, 1.12, dist));
 	vec3 col = mix(pit, rim, rim_band);
-	vec3 glow_col = rim * core * glow * 0.16 + rim * inner * 0.14;
+	vec3 glow_col = rim * core * glow * 0.28 + rim * inner * 0.22;
 	ALBEDO = col + glow_col;
 	EMISSION = glow_col;
 	ALPHA = alpha;
@@ -441,10 +566,16 @@ var map_pill: Panel
 var center_pill: Panel
 var next_bg: ColorRect
 var goal_hold := 0.0
+var goal_until_ms := 0
 var goal_seen := ""
 var sky_haze: Control
+var vignette: Control
 var sky_haze_top := Color(0.42, 0.74, 0.98)
 var sky_haze_edge := Color(0.78, 0.90, 0.72)
+var settings_from := "menu"
+var block_start_until_up := false
+var hole_swirl := 0.28
+var shadow_slide := Vector3(0.28, 0.0, 0.16)
 var kept_lbl: Label
 var kept_pulse := false
 var ui_swallow_frames := 0
@@ -1696,6 +1827,13 @@ func _on_web_steer(args: Array) -> void:
 	var down := int(args[0]) != 0
 	if down:
 		_unlock_audio()
+	if block_start_until_up:
+		if not down:
+			block_start_until_up = false
+			joy_held = false
+			ui_swallow_frames = maxi(ui_swallow_frames, 8)
+			_refresh_joystick()
+		return
 	if not down:
 		if joy_id == -1 and joy_held:
 			if mode == "attract" and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
@@ -1941,22 +2079,22 @@ func _build_world() -> void:
 	e.background_mode = Environment.BG_SKY
 	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(1.0, 0.98, 0.94)
-	e.ambient_light_energy = 1.0
-	e.tonemap_mode = Environment.TONE_MAPPER_LINEAR
-	e.tonemap_exposure = 1.02
+	e.ambient_light_color = Color(0.72, 0.82, 0.98)
+	e.ambient_light_energy = 0.42
+	e.tonemap_mode = Environment.TONE_MAPPER_ACES
+	e.tonemap_exposure = 1.06
 	e.adjustment_enabled = true
-	e.adjustment_brightness = 1.03
-	e.adjustment_contrast = 1.12
-	e.adjustment_saturation = 0.98
+	e.adjustment_brightness = 1.02
+	e.adjustment_contrast = 1.16
+	e.adjustment_saturation = 1.08
 	e.fog_enabled = false
 	world_env = e
 	env.environment = e
 	add_child(env)
 	sun = DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-62, 32, 0)
-	sun.light_color = Color(1.0, 0.96, 0.86)
-	sun.light_energy = 0.4
+	sun.light_color = Color(1.0, 0.86, 0.68)
+	sun.light_energy = 1.12
 	sun.shadow_enabled = false
 	sun.shadow_bias = 0.5
 	sun.shadow_normal_bias = 4.0
@@ -1965,8 +2103,8 @@ func _build_world() -> void:
 	add_child(sun)
 	fill_light = DirectionalLight3D.new()
 	fill_light.rotation_degrees = Vector3(-24, 200, 0)
-	fill_light.light_color = Color(0.62, 0.78, 1.0)
-	fill_light.light_energy = 0.24
+	fill_light.light_color = Color(0.55, 0.72, 1.0)
+	fill_light.light_energy = 0.34
 	fill_light.shadow_enabled = false
 	fill_light.shadow_bias = 0.5
 	fill_light.shadow_normal_bias = 4.0
@@ -2017,6 +2155,7 @@ func _build_world() -> void:
 	pit_mat.shader = pshader
 	pit_mat.render_priority = 2
 	pit_mat.set_shader_parameter("vertex_rim", 0.0)
+	pit_mat.set_shader_parameter("swirl", hole_swirl)
 	hole_mesh.material_override = pit_mat
 	_apply_skin()
 	_no_shadow(hole_mesh)
@@ -2563,6 +2702,9 @@ func _kind_material(spec: Array) -> Material:
 		return _textured_shader(BUILDING_SHADER, spec[1])
 	if role == "car":
 		return _textured_shader(CAR_SHADER, spec[1])
+	var src := str(spec[0])
+	if role in ["tree", "palm"] or src.contains("plant_bush") or src.contains("tree"):
+		return _textured_shader(VEG_SHADER, spec[1])
 	return spec[1]
 
 func _textured_shader(code: String, src_mat: Material) -> ShaderMaterial:
@@ -3553,6 +3695,8 @@ func _populate() -> void:
 	_spawn_life()
 	_seed_ladder()
 	_scatter_theme(layout)
+	_dress_districts()
+	_dress_border()
 	_balance_tiers()
 	_tint_animals()
 
@@ -4102,36 +4246,116 @@ func _district_building(fallback: String, x: float, z: float, n: int) -> String:
 	return fallback
 
 func _dress_districts() -> void:
-	var layout := str(map.get("layout", ""))
-	if layout == "grid":
-		_cluster(["tree_large", "tree_small", "bush", "bench"], 240, _district_center(0), 22.0, [SURF_GRASS])
-		_cluster(["stall", "crate", "bin", "planter"], 180, _district_center(8), 16.0, [SURF_CONCRETE, SURF_GRASS])
-	elif layout == "suburb":
-		_cluster(["tree_large", "bush", "picnic"], 160, _district_center(0), 20.0, [SURF_GRASS])
-		_cluster(["bench", "tree_small"], 100, _district_center(8), 16.0, [SURF_GRASS])
-	elif layout == "park":
-		_cluster(["picnic", "bench", "bush"], 140, _district_center(4), 16.0, [SURF_GRASS])
-		_cluster(["tree_large", "tree_simple"], 120, _district_center(2), 18.0, [SURF_GRASS])
-	elif layout == "farm":
-		_cluster(["barn", "hay", "tractor"], 48, _district_center(4), 16.0, [SURF_DIRT, SURF_GRASS])
-		_cluster(["animal", "fence"], 120, _district_center(8), 18.0, [SURF_GRASS, SURF_FIELD])
-		_cluster(["tree_large", "tree_small"], 80, _district_center(0), 16.0, [SURF_GRASS])
-	elif layout == "harbor":
-		_cluster(["crate", "forklift"], 120, _district_center(6), 16.0, [SURF_CONCRETE])
-		_cluster(["tank", "pipe"], 70, _district_center(3), 14.0, [SURF_CONCRETE])
-	elif layout == "campus":
-		_cluster(["bench", "tree_small", "planter"], 80, _district_center(4), 12.0, [SURF_CONCRETE, SURF_GRASS])
-	elif layout == "fair":
-		_cluster(["ride", "stall"], 36, _district_center(4), 14.0, [SURF_CONCRETE, SURF_GRASS])
-		_cluster(["stall", "cone", "bin"], 90, _district_center(8), 14.0, [SURF_DIRT, SURF_GRASS])
-	elif layout == "industrial":
-		_cluster(["tank", "pipe"], 80, _district_center(4), 16.0, [SURF_CONCRETE])
-		_cluster(["crate", "barrier"], 90, _district_center(6), 14.0, [SURF_CONCRETE])
-	elif layout == "boardwalk":
-		_cluster(["umbrella", "chair", "surf"], 140, _district_center(3), 18.0, [SURF_SAND])
-		_cluster(["stall", "bin"], 50, _district_center(6), 14.0, [SURF_CONCRETE, SURF_SAND])
-	else:
-		_cluster(["tree_small", "planter", "bench"], 120, _district_center(0), 18.0, [SURF_GRASS, SURF_CONCRETE])
+	var layout := str(map.get("layout", "farm"))
+	var land := [SURF_GRASS, SURF_FIELD, SURF_DIRT]
+	match layout:
+		"candy":
+			_place_landmark("ccastle", [SURF_GRASS, SURF_FIELD, SURF_CONCRETE])
+			_cluster(["lollypop", "donut", "canecandy", "sweetcup", "bench", "planter"], 32, _district_center(4), 12.0, [SURF_GRASS, SURF_CONCRETE, SURF_FIELD])
+			_cluster(["ghouse", "partycake", "coneic", "lamp"], 14, _district_center(0), 11.0, [SURF_GRASS, SURF_FIELD])
+			_cluster(["crate", "bin", "planter"], 16, _district_center(8), 10.0, [SURF_CONCRETE, SURF_GRASS])
+		"jungle":
+			_place_landmark("lavacone", land)
+			_cluster(["fernleaf", "jpalm", "redshroom", "jrock", "bush"], 28, _district_center(4), 13.0, land)
+			_cluster(["jhut", "jpalmtall", "raptord"], 12, _district_center(2), 12.0, [SURF_GRASS, SURF_DIRT])
+			_cluster(["tree_large", "fernleaf"], 14, _district_center(6), 12.0, [SURF_GRASS, SURF_FIELD])
+		"pirate":
+			_place_landmark("plight", [SURF_SAND, SURF_GRASS, SURF_WOOD, SURF_DIRT])
+			_cluster(["pbarrel", "pcrate", "pchest", "pcannon", "crate"], 26, _district_center(4), 12.0, [SURF_SAND, SURF_WOOD, SURF_GRASS])
+			_cluster(["ppalm", "pflag", "bench"], 14, _district_center(2), 12.0, [SURF_SAND, SURF_GRASS])
+			_cluster(["tavern", "panchor", "lamp"], 10, _district_center(6), 11.0, [SURF_GRASS, SURF_DIRT, SURF_WOOD])
+		"snow":
+			_place_landmark("icecastle", [SURF_SAND, SURF_GRASS, SURF_CONCRETE])
+			_cluster(["hpine", "hsnowman", "hpresent", "bench"], 24, _district_center(4), 12.0, [SURF_SAND, SURF_GRASS])
+			_cluster(["hcabin", "hsled", "lamp"], 12, _district_center(0), 11.0, [SURF_SAND, SURF_CONCRETE])
+			_cluster(["iceblock", "tree_small"], 12, _district_center(8), 11.0, [SURF_SAND, SURF_GRASS])
+		"desert":
+			_place_landmark("dsphinx", [SURF_SAND, SURF_DIRT])
+			_cluster(["dcactus", "dtallcac", "drock", "dpot"], 24, _district_center(4), 13.0, [SURF_SAND, SURF_DIRT])
+			_cluster(["dpalm", "dtent", "dstall"], 12, _district_center(2), 12.0, [SURF_SAND, SURF_GRASS])
+			_cluster(["dadobe", "crate", "lamp"], 10, _district_center(8), 11.0, [SURF_DIRT, SURF_CONCRETE, SURF_SAND])
+		"toy":
+			_place_landmark("blockfort", [SURF_FIELD, SURF_CONCRETE, SURF_GRASS])
+			_cluster(["tblock", "tball", "teddybear", "bench"], 26, _district_center(4), 12.0, [SURF_FIELD, SURF_CONCRETE, SURF_GRASS])
+			_cluster(["toyhouse", "twagon", "planter"], 12, _district_center(0), 11.0, [SURF_FIELD, SURF_CONCRETE])
+			_cluster(["bot", "crate", "lamp"], 12, _district_center(8), 10.0, [SURF_GRASS, SURF_CONCRETE])
+		"space":
+			_place_landmark("gantry", [SURF_SAND, SURF_CONCRETE, SURF_DIRT])
+			_cluster(["moonlet", "spacecrate", "satdish"], 20, _district_center(4), 12.0, [SURF_SAND, SURF_CONCRETE, SURF_DIRT])
+			_cluster(["habitat", "spacerover", "lamp"], 12, _district_center(2), 11.0, [SURF_CONCRETE, SURF_SAND])
+			_cluster(["crate", "bin", "planter"], 12, _district_center(6), 10.0, [SURF_CONCRETE, SURF_DIRT])
+		"haunt":
+			_place_landmark("hmansion", [SURF_GRASS, SURF_DIRT, SURF_FIELD])
+			_cluster(["htomb", "hpumpkin", "hcandle", "htree"], 24, _district_center(4), 12.0, [SURF_GRASS, SURF_DIRT])
+			_cluster(["hhouse", "hcart", "bench"], 12, _district_center(0), 11.0, [SURF_GRASS, SURF_DIRT])
+			_cluster(["hcrypt", "lamp", "crate"], 10, _district_center(8), 10.0, [SURF_GRASS, SURF_CONCRETE])
+		"fair":
+			_place_landmark("ferris", [SURF_GRASS, SURF_CONCRETE, SURF_DIRT])
+			_cluster(["fballoon", "fteacup", "fbench", "stall"], 26, _district_center(4), 12.0, [SURF_GRASS, SURF_CONCRETE, SURF_DIRT])
+			_cluster(["teacups", "fpop", "lamp"], 12, _district_center(8), 11.0, [SURF_CONCRETE, SURF_GRASS])
+			_cluster(["carousel", "bench", "planter"], 10, _district_center(2), 10.0, [SURF_GRASS, SURF_DIRT])
+		_:
+			_place_landmark("farmmill", [SURF_DIRT, SURF_GRASS, SURF_FIELD])
+			_cluster(["redbarn", "haybale", "farmtractor", "railfence"], 18, _district_center(4), 13.0, [SURF_DIRT, SURF_GRASS, SURF_FIELD])
+			_cluster(["fflower", "fwheat", "bush", "bench"], 22, _district_center(0), 12.0, [SURF_GRASS, SURF_FIELD])
+			_cluster(["tree_large", "tree_small", "scare", "crate"], 16, _district_center(8), 12.0, [SURF_GRASS, SURF_DIRT])
+
+func _place_landmark(id: String, surfs: Array) -> void:
+	var spots: Array = [
+		Vector3(18.0, 0.0, -16.0),
+		Vector3(-18.0, 0.0, -18.0),
+		Vector3(24.0, 0.0, 8.0),
+		Vector3(-22.0, 0.0, 12.0),
+	]
+	for spot in spots:
+		var p: Vector3 = spot
+		if not _surf_ok(p, surfs):
+			continue
+		if _place_id(id, p, Vector3.ZERO, randf() * TAU, randf_range(0.96, 1.08)):
+			return
+
+func _border_ids(layout: String) -> Array:
+	match layout:
+		"candy":
+			return ["tree_small", "planter", "lollypop", "lamp"]
+		"jungle":
+			return ["jpalm", "jpalmtall", "fernleaf", "tree_large"]
+		"pirate":
+			return ["ppalm", "pflag", "pbarrel", "tree_small"]
+		"snow":
+			return ["hpine", "tree_small", "hsnowman"]
+		"desert":
+			return ["dpalm", "dcactus", "dtallcac", "drock"]
+		"toy":
+			return ["tblock", "tree_small", "planter"]
+		"space":
+			return ["moonlet", "satdish", "spacecrate"]
+		"haunt":
+			return ["htree", "htomb", "hpumpkin", "tree_small"]
+		"fair":
+			return ["tree_large", "fballoon", "fbench", "lamp"]
+		_:
+			return ["tree_large", "tree_small", "railfence", "bush"]
+
+func _dress_border() -> void:
+	var ids: Array = _border_ids(str(map.get("layout", "farm")))
+	var span := CITY_HALF - 2.4
+	var cursor := -span
+	while cursor < span and props.size() < PROP_CAP:
+		var step := randf_range(5.4, 8.6)
+		var grow := randf_range(0.88, 1.16)
+		var id := str(ids[randi() % ids.size()])
+		_try_border(id, Vector3(cursor, 0.0, -span), grow)
+		_try_border(id, Vector3(cursor + step * 0.35, 0.0, span), grow)
+		_try_border(id, Vector3(-span, 0.0, cursor), grow)
+		_try_border(id, Vector3(span, 0.0, cursor + step * 0.2), grow)
+		cursor += step
+
+func _try_border(id: String, p: Vector3, grow: float) -> void:
+	var surf := _surf_f(p.x, p.z)
+	if surf == SURF_WATER or surf == SURF_ROAD:
+		return
+	_place_id(id, p, Vector3.ZERO, randf() * TAU, grow)
 
 func _cluster(ids: Array, count: int, center: Vector3, radius: float, surfs: Array) -> void:
 	var made := 0
@@ -4307,6 +4531,9 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 	if str(spec[5]) in ["building", "wide", "house", "tower"]:
 		sy *= randf_range(0.86, 1.22)
 		sxz *= randf_range(0.94, 1.06)
+	else:
+		sxz *= randf_range(0.94, 1.08)
+		sy *= randf_range(0.94, 1.08)
 	var base := maxf(float(kind_base[ki]) * sxz, 0.05)
 	if base > BASE_CAP:
 		var cut := BASE_CAP / base
@@ -4542,22 +4769,34 @@ func _lod_end(role: String, id: String) -> float:
 		return 56.0
 	return 30.0
 
+func _refresh_shadow_slide() -> void:
+	# Soft contact discs, slid along the key light. Real shadow maps on the
+	# city striped and cost too much on phones.
+	var yaw := deg_to_rad(float(map.get("sun_yaw", 32.0))) if not map.is_empty() else deg_to_rad(32.0)
+	var basis := Basis.from_euler(Vector3(deg_to_rad(-58.0), yaw, 0.0))
+	var ray := -basis.z
+	var flat := Vector3(ray.x, 0.0, ray.z)
+	if flat.length_squared() < 0.0001:
+		shadow_slide = Vector3(0.28, 0.0, 0.16)
+	else:
+		shadow_slide = flat.normalized() * 0.46
+
 func _build_shadows() -> void:
-	# Hard contact discs. Alpha-scissor blobs on one plane z-fight into diagonal stripes.
+	_refresh_shadow_slide()
 	var sh := Shader.new()
 	sh.code = """shader_type spatial;
-render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled;
+render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled, blend_mix;
 void fragment() {
 	vec2 p = UV * 2.0 - 1.0;
-	if (dot(p, p) > 0.92) {
-		discard;
-	}
-	ALBEDO = vec3(0.20, 0.32, 0.22);
-	ALPHA = 1.0;
+	float d = dot(p, p);
+	float a = smoothstep(1.05, 0.12, d);
+	ALBEDO = vec3(0.06, 0.08, 0.1);
+	ALPHA = a * 0.42;
 }
 """
 	var mat := ShaderMaterial.new()
 	mat.shader = sh
+	mat.render_priority = 1
 	var quad := PlaneMesh.new()
 	quad.size = Vector2(1, 1)
 	shadow_mm = MultiMesh.new()
@@ -4586,11 +4825,12 @@ func _shadow_xform(o: Dictionary) -> Transform3D:
 	var dz := p.z - hole_pos.z
 	if dx * dx + dz * dz < hole_radius * hole_radius * 0.8:
 		return Transform3D(Basis(), Vector3(0, -30, 0))
-	var s := float(o.size) * 2.2
+	var s := float(o.size) * 2.45
 	var basis := Basis()
 	basis.x *= s
 	basis.z *= s
-	return Transform3D(basis, Vector3(p.x, 0.08, p.z))
+	var at := Vector3(p.x, 0.055, p.z) + shadow_slide * clampf(float(o.size), 0.25, 2.4)
+	return Transform3D(basis, at)
 
 func _set_shadow(o: Dictionary) -> void:
 	if shadow_mm == null:
@@ -4650,6 +4890,13 @@ func _build_ui() -> void:
 	sky_haze.draw.connect(_draw_sky_haze)
 	sky_haze.resized.connect(sky_haze.queue_redraw)
 	ui.add_child(sky_haze)
+	vignette = Control.new()
+	vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vignette.visible = false
+	vignette.draw.connect(_draw_vignette)
+	vignette.resized.connect(vignette.queue_redraw)
+	ui.add_child(vignette)
 	var hud_ink := Color(0.14, 0.18, 0.30, 0.90)
 	score_pill = _make_hud_panel(hud_ink, 22)
 	score_pill.anchor_left = 0.0
@@ -5148,6 +5395,17 @@ func _input(event: InputEvent) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if ad_hold:
 		return
+	if block_start_until_up:
+		var released := false
+		if event is InputEventMouseButton:
+			released = not (event as InputEventMouseButton).pressed
+		elif event is InputEventScreenTouch:
+			released = not (event as InputEventScreenTouch).pressed
+		if released:
+			block_start_until_up = false
+			joy_held = false
+			ui_swallow_frames = maxi(ui_swallow_frames, 8)
+		return
 	var pos := _event_pos(event)
 	if (event is InputEventScreenTouch or event is InputEventScreenDrag) and _ui_hit(pos):
 		get_viewport().set_input_as_handled()
@@ -5587,6 +5845,7 @@ func _refresh_hud() -> void:
 	shown_level = level
 
 func _wake_goal() -> void:
+	goal_until_ms = Time.get_ticks_msec() + int(GOAL_HOLD * 1000.0)
 	goal_hold = GOAL_HOLD
 	if next_lbl:
 		next_lbl.modulate.a = 1.0
@@ -5631,22 +5890,21 @@ func _refresh_next_skin() -> void:
 		next_fill.size = Vector2(inner * float(prog.ratio), next_fill.size.y)
 		next_fill.color = skin.a
 
-func _tick_goal(delta: float) -> void:
+func _tick_goal(_delta: float) -> void:
 	if not match_hud:
 		return
-	# The cover can sit up for a few seconds. Hold the line until the round is visible.
+	# The cover can sit up for a few seconds. The 3 seconds start when the round is visible.
 	if round_cover != null and round_cover.visible:
-		if goal_hold < GOAL_HOLD:
-			_wake_goal()
+		_wake_goal()
 		return
 	_refresh_next_skin()
 	if next_lbl == null or not next_lbl.visible:
 		return
-	if goal_hold > 0.0:
-		goal_hold = maxf(0.0, goal_hold - delta)
+	var left := float(goal_until_ms - Time.get_ticks_msec()) / 1000.0
+	goal_hold = maxf(left, 0.0)
 	var alpha := 1.0
-	if goal_hold < GOAL_FADE:
-		alpha = clampf(goal_hold / GOAL_FADE, 0.0, 1.0)
+	if left < GOAL_FADE:
+		alpha = clampf(left / GOAL_FADE, 0.0, 1.0)
 	next_lbl.modulate.a = alpha
 	if next_bg:
 		next_bg.modulate.a = alpha
@@ -6460,6 +6718,10 @@ func _process(delta: float) -> void:
 	_tick_feedback(delta)
 	_tick_clear_bar(delta)
 	_tick_goal(delta)
+	if hole_swirl > 0.28:
+		hole_swirl = maxf(0.28, hole_swirl - frame_delta * 0.65)
+		if pit_mat:
+			pit_mat.set_shader_parameter("swirl", hole_swirl)
 	if score != shown_score or level != shown_level:
 		_refresh_hud()
 	if debug_on:
@@ -7114,6 +7376,9 @@ func _burst(at: Vector3, points: int, tint: Color, caption: String = "") -> void
 	pm.albedo_color = Color(tint.r, tint.g, tint.b, 0.95).lerp(Color(1, 0.95, 0.4, 0.95), 0.45)
 	pop_fx.restart()
 	pop_fx.emitting = true
+	hole_swirl = 1.0
+	if pit_mat:
+		pit_mat.set_shader_parameter("swirl", hole_swirl)
 	for f in floaters:
 		if float(f.age) < 0.0:
 			f.age = 0.0
@@ -7223,25 +7488,25 @@ func _motif_for(layout: String) -> float:
 func _theme_light(layout: String) -> Dictionary:
 	match layout:
 		"candy":
-			return {"sun_e": 1.02, "amb": Color(1.0, 0.9, 0.95), "amb_e": 0.58, "fill": Color(1.0, 0.68, 0.82), "fill_e": 0.3}
+			return {"sun_e": 1.18, "amb": Color(0.78, 0.84, 1.0), "amb_e": 0.4, "fill": Color(0.62, 0.74, 1.0), "fill_e": 0.36, "grade": Vector3(1.06, 0.98, 1.0), "sat": 1.12, "contrast": 1.14, "bright": 1.03, "expo": 1.06}
 		"jungle":
-			return {"sun_e": 0.96, "amb": Color(0.78, 0.92, 0.72), "amb_e": 0.52, "fill": Color(0.55, 0.82, 0.48), "fill_e": 0.26}
+			return {"sun_e": 1.1, "amb": Color(0.68, 0.82, 0.74), "amb_e": 0.38, "fill": Color(0.5, 0.72, 0.95), "fill_e": 0.32, "grade": Vector3(0.98, 1.05, 0.94), "sat": 1.1, "contrast": 1.16, "bright": 1.02, "expo": 1.05}
 		"pirate":
-			return {"sun_e": 1.08, "amb": Color(1.0, 0.9, 0.78), "amb_e": 0.56, "fill": Color(0.55, 0.74, 1.0), "fill_e": 0.28}
+			return {"sun_e": 1.22, "amb": Color(0.7, 0.8, 0.98), "amb_e": 0.38, "fill": Color(0.48, 0.68, 1.0), "fill_e": 0.34, "grade": Vector3(1.06, 1.0, 0.92), "sat": 1.12, "contrast": 1.15, "bright": 1.03, "expo": 1.07}
 		"snow":
-			return {"sun_e": 1.12, "amb": Color(0.82, 0.9, 1.0), "amb_e": 0.66, "fill": Color(0.7, 0.82, 1.0), "fill_e": 0.32}
+			return {"sun_e": 1.16, "amb": Color(0.72, 0.8, 0.98), "amb_e": 0.48, "fill": Color(0.58, 0.72, 1.0), "fill_e": 0.38, "grade": Vector3(0.96, 0.99, 1.05), "sat": 1.04, "contrast": 1.12, "bright": 1.05, "expo": 1.08}
 		"desert":
-			return {"sun_e": 1.18, "amb": Color(1.0, 0.9, 0.72), "amb_e": 0.5, "fill": Color(1.0, 0.72, 0.42), "fill_e": 0.22}
+			return {"sun_e": 1.28, "amb": Color(0.78, 0.82, 0.96), "amb_e": 0.34, "fill": Color(0.55, 0.7, 1.0), "fill_e": 0.28, "grade": Vector3(1.08, 1.0, 0.88), "sat": 1.14, "contrast": 1.18, "bright": 1.04, "expo": 1.08}
 		"toy":
-			return {"sun_e": 1.04, "amb": Color(1.0, 0.94, 0.88), "amb_e": 0.6, "fill": Color(0.7, 0.78, 1.0), "fill_e": 0.28}
+			return {"sun_e": 1.16, "amb": Color(0.74, 0.82, 1.0), "amb_e": 0.42, "fill": Color(0.58, 0.72, 1.0), "fill_e": 0.34, "grade": Vector3(1.04, 1.0, 0.98), "sat": 1.14, "contrast": 1.14, "bright": 1.04, "expo": 1.06}
 		"space":
-			return {"sun_e": 1.16, "amb": Color(0.7, 0.78, 0.95), "amb_e": 0.42, "fill": Color(0.45, 0.62, 1.0), "fill_e": 0.2}
+			return {"sun_e": 1.24, "amb": Color(0.58, 0.68, 0.95), "amb_e": 0.32, "fill": Color(0.42, 0.58, 1.0), "fill_e": 0.26, "grade": Vector3(0.94, 0.98, 1.08), "sat": 1.06, "contrast": 1.18, "bright": 1.0, "expo": 1.04}
 		"haunt":
-			return {"sun_e": 0.82, "amb": Color(0.72, 0.62, 0.84), "amb_e": 0.48, "fill": Color(0.55, 0.4, 0.72), "fill_e": 0.22}
+			return {"sun_e": 0.96, "amb": Color(0.62, 0.66, 0.9), "amb_e": 0.36, "fill": Color(0.48, 0.55, 0.95), "fill_e": 0.28, "grade": Vector3(1.02, 0.94, 0.98), "sat": 1.02, "contrast": 1.16, "bright": 0.98, "expo": 1.0}
 		"fair":
-			return {"sun_e": 1.08, "amb": Color(1.0, 0.92, 0.84), "amb_e": 0.58, "fill": Color(1.0, 0.62, 0.48), "fill_e": 0.3}
+			return {"sun_e": 1.2, "amb": Color(0.74, 0.8, 0.98), "amb_e": 0.4, "fill": Color(0.55, 0.68, 1.0), "fill_e": 0.34, "grade": Vector3(1.06, 0.98, 0.94), "sat": 1.14, "contrast": 1.15, "bright": 1.04, "expo": 1.07}
 		_:
-			return {"sun_e": 1.05, "amb": Color(1.0, 0.96, 0.86), "amb_e": 0.56, "fill": Color(0.68, 0.84, 1.0), "fill_e": 0.26}
+			return {"sun_e": 1.16, "amb": Color(0.7, 0.82, 0.98), "amb_e": 0.4, "fill": Color(0.55, 0.74, 1.0), "fill_e": 0.32, "grade": Vector3(1.04, 1.02, 0.94), "sat": 1.1, "contrast": 1.15, "bright": 1.03, "expo": 1.06}
 
 func _draw_sky_haze() -> void:
 	if sky_haze == null:
@@ -7259,6 +7524,25 @@ func _draw_sky_haze() -> void:
 		col.a = fade * 0.55
 		sky_haze.draw_rect(Rect2(0.0, float(i) * band, w, band + 1.0), col, true)
 
+func _draw_vignette() -> void:
+	if vignette == null:
+		return
+	var s := vignette.size
+	if s.x < 2.0 or s.y < 2.0:
+		return
+	var bands := 8
+	var reach := minf(s.x, s.y) * 0.22
+	for i in bands:
+		var t := float(i) / float(bands)
+		var inset := t * reach
+		var alpha := (1.0 - t) * (1.0 - t) * 0.22
+		var col := Color(0.04, 0.05, 0.09, alpha)
+		vignette.draw_rect(Rect2(inset, inset, s.x - inset * 2.0, s.y - inset * 2.0), col, false, maxf((1.0 - t) * (reach / float(bands)) + 2.0, 3.0))
+
+func _sync_vignette() -> void:
+	if vignette:
+		vignette.visible = mode == "play" or mode == "attract"
+
 func _tint_sky_haze(m: Dictionary) -> void:
 	sky_haze_top = m.sky_top
 	sky_haze_edge = m.horizon
@@ -7271,13 +7555,18 @@ func _apply_theme(m: Dictionary) -> void:
 	sky_mat.ground_horizon_color = m.horizon
 	sky_mat.ground_bottom_color = m.ground
 	_tint_sky_haze(m)
-	world_env.adjustment_saturation = clampf(float(m.sat) * 0.96, 1.0, 1.10)
-	if skirt_mat:
-		skirt_mat.albedo_color = m.ground
-	sun.light_color = m.sun
 	var look := _theme_light(str(m.layout))
+	world_env.adjustment_saturation = clampf(float(look.sat), 1.0, 1.18)
+	world_env.adjustment_contrast = float(look.contrast)
+	world_env.adjustment_brightness = float(look.bright)
+	world_env.tonemap_exposure = float(look.expo)
+	if skirt_mat:
+		skirt_mat.albedo_color = m.ground.darkened(0.42)
+	var warm := Color(1.0, 0.84, 0.62)
+	sun.light_color = (m.sun as Color).lerp(warm, 0.62)
 	sun.light_energy = float(look.sun_e)
 	sun.rotation_degrees = Vector3(-58, float(m.sun_yaw), 0)
+	_refresh_shadow_slide()
 	world_env.ambient_light_color = look.amb
 	world_env.ambient_light_energy = float(look.amb_e)
 	if fill_light:
@@ -7285,9 +7574,10 @@ func _apply_theme(m: Dictionary) -> void:
 		fill_light.light_energy = float(look.fill_e)
 		fill_light.rotation_degrees = Vector3(-22, float(m.sun_yaw) + 168.0, 0)
 	var paints: Array = m.get("paints", [])
+	var grade: Vector3 = look.grade
 	for i in ground_mats.size():
 		var mat := ground_mats[i] as ShaderMaterial
-		mat.set_shader_parameter("grade_tint", Vector3.ONE)
+		mat.set_shader_parameter("grade_tint", grade)
 		mat.set_shader_parameter("motif", _motif_for(str(m.layout)))
 		if i < paints.size():
 			var pair: Array = paints[i]
@@ -7455,7 +7745,7 @@ func _enter_attract(index: int) -> void:
 	_hide_drag_hint()
 
 func _begin_play() -> void:
-	if ui_swallow_frames > 0:
+	if ui_swallow_frames > 0 or block_start_until_up:
 		return
 	if mode != "attract" or playing or ad_hold or paused or render_failed:
 		return
@@ -7523,8 +7813,8 @@ func _build_pause() -> void:
 	card.anchor_bottom = 0.5
 	card.offset_left = -310.0
 	card.offset_right = 310.0
-	card.offset_top = -220.0
-	card.offset_bottom = 236.0
+	card.offset_top = -250.0
+	card.offset_bottom = 310.0
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
 	card.add_theme_stylebox_override("panel", _panel_style())
 	pause_layer.add_child(card)
@@ -7539,13 +7829,16 @@ func _build_pause() -> void:
 	title.add_theme_constant_override("outline_size", 0)
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(title)
-	var resume := _make_button("Resume", Vector2(40, 108), Vector2(540, 92), Color(0.16, 0.66, 0.42))
+	var resume := _make_button("Resume", Vector2(40, 104), Vector2(540, 78), Color(0.16, 0.66, 0.42))
 	resume.pressed.connect(_resume_pause)
 	card.add_child(resume)
-	var restart := _make_button("Restart", Vector2(40, 212), Vector2(540, 92), BRAND_CYAN)
+	var restart := _make_button("Restart", Vector2(40, 194), Vector2(540, 78), BRAND_CYAN)
 	restart.pressed.connect(_restart_pause)
 	card.add_child(restart)
-	var exit_b := _make_button("Exit to menu", Vector2(40, 316), Vector2(540, 92), BRAND_INK)
+	var settings_b := _make_button("Settings", Vector2(40, 284), Vector2(540, 78), Color(0.28, 0.36, 0.52))
+	settings_b.pressed.connect(_open_settings_from_pause)
+	card.add_child(settings_b)
+	var exit_b := _make_button("Exit to menu", Vector2(40, 374), Vector2(540, 78), BRAND_INK)
 	exit_b.pressed.connect(_exit_pause)
 	card.add_child(exit_b)
 	_sync_pause_button()
@@ -7588,6 +7881,10 @@ func _exit_pause() -> void:
 	paused = false
 	if pause_layer:
 		pause_layer.visible = false
+	# The same tap that closed the card must not count as "tap to start".
+	block_start_until_up = true
+	joy_held = false
+	ui_swallow_frames = 24
 	_enter_attract(map_index)
 
 func _watch_render() -> void:
@@ -8146,6 +8443,7 @@ func _set_match_hud(on: bool) -> void:
 		_wake_goal()
 	else:
 		goal_hold = 0.0
+		goal_until_ms = 0
 		if combo_lbl:
 			combo_lbl.visible = false
 		if kept_lbl:
@@ -8159,6 +8457,7 @@ func _set_match_hud(on: bool) -> void:
 			f.age = -1.0
 			if f.lbl:
 				(f.lbl as CanvasItem).visible = false
+	_sync_vignette()
 
 func _set_chrome(on: bool) -> void:
 	if chrome_layer:
@@ -8289,6 +8588,8 @@ func _build_chrome() -> void:
 		var screen_name := str(spec[2])
 		if screen_name == "ads":
 			b.pressed.connect(_confirm_remove_ads)
+		elif screen_name == "settings":
+			b.pressed.connect(_open_settings_menu)
 		else:
 			b.pressed.connect(_show_screen.bind(screen_name))
 		row.add_child(b)
@@ -8742,8 +9043,56 @@ func _confirm_remove_ads() -> void:
 	no.pressed.connect(_show_screen.bind("shop"))
 	_menu_add(no)
 
+func _open_settings_menu() -> void:
+	settings_from = "menu"
+	_show_screen("settings")
+
+func _open_settings_from_pause() -> void:
+	if mode != "play" or not paused:
+		return
+	settings_from = "pause"
+	if pause_layer:
+		pause_layer.visible = false
+	_show_screen("settings")
+
+func _settings_back() -> void:
+	joy_held = false
+	block_start_until_up = true
+	ui_swallow_frames = 24
+	if settings_from == "pause":
+		_return_to_pause()
+		return
+	_show_screen("attract")
+
+func _return_to_pause() -> void:
+	if menu_layer:
+		menu_layer.visible = false
+		_clear_menu()
+	mode = "play"
+	playing = false
+	paused = true
+	joy_held = false
+	ad_hold = false
+	if hud_layer:
+		hud_layer.visible = true
+	_set_chrome(false)
+	_set_match_hud(true)
+	if name_lbl:
+		name_lbl.visible = false
+	if pause_layer:
+		pause_layer.visible = true
+	_sync_pause_button()
+	_mark_web_phase()
+
 func _screen_settings() -> void:
-	_screen_header("Settings")
+	var label := _menu_label("Settings", Vector2(40, MENU_HEADER_Y), 48)
+	label.size = Vector2(390, 76)
+	label.clip_text = true
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_menu_add(label)
+	var back := _make_button("Back", Vector2(448, MENU_HEADER_Y), Vector2(232, 76), BRAND_INK, 32)
+	back.pressed.connect(_settings_back)
+	_menu_add(back)
 	var body := MENU_HEADER_Y + 112.0
 	var music := _make_button("Music: %s" % ("On" if Save.music_on else "Off"), Vector2(48, body), Vector2(624, 92), BRAND_CYAN if Save.music_on else BRAND_INK)
 	music.pressed.connect(_toggle_music)
