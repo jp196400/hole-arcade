@@ -1157,13 +1157,17 @@ func _preview_road(idx: int) -> void:
 	start_round(idx)
 	playing = false
 	var total := maxi(clear_total, 1)
-	player_eaten = int(float(total) * 0.48)
+	player_eaten = int(float(total) * 0.82)
 	clear_eaten = player_eaten
 	_sync_level()
 	shown_radius = hole_radius
 	hole_open = hole_radius
 	hole_mesh.scale = Vector3(shown_radius, 1.0, shown_radius)
+	# Look at a cross street so the grown camera frames the road grid.
+	hole_pos = Vector3(18.0, 0.0, -18.0)
+	hole_mesh.position = hole_pos
 	_snap_camera()
+	print("ROADVIEW idx %d radius %.2f dist %.1f pitch %.1f" % [idx, hole_radius, cam_distance, cam_pitch])
 	_set_chrome(false)
 	_set_match_hud(false)
 	if hud_layer:
@@ -3609,7 +3613,7 @@ func _surf_jungle(x: int, z: int) -> int:
 		return SURF_SAND
 	if absf(fx - 24.0 - sin(fz * 0.045) * 5.0) < 3.2 and fz > -52.0 and fz < 28.0:
 		return SURF_WATER
-	if absf(fx + 1.1 - sin(fz * 0.18) * 2.2) < 1.15 and fz > -40.0 and fz < 24.0:
+	if absf(fx - 4.4 - sin(fz * 0.16) * 0.7) < 0.62 and fz > -40.0 and fz < 24.0:
 		return SURF_DIRT
 	if absf(fz + 22.0 - cos(fx * 0.05) * 3.0) < 1.2 and fx > -36.0 and fx < 20.0:
 		return SURF_DIRT
@@ -4288,6 +4292,8 @@ func _audit_opening() -> void:
 		want = ["pier", "skiff"]
 	elif layout == "farm":
 		want = ["chicken"]
+	elif layout == "toy":
+		want = ["tracer", "ttruck"]
 	else:
 		return
 	for id in want:
@@ -4911,6 +4917,8 @@ func _dress_opening(layout: String) -> void:
 			_vista_spot("toybench", Vector3(2.4, 0, -5.2), 0.3)
 			_vista_spot("teddybear", Vector3(-2.2, 0, -6.4))
 			_vista_spot("tblock", Vector3(-3.4, 0, -4.2))
+			_vista_mover("tracer", Vector3(3.1, 0, -8.6), [SURF_WOOD, SURF_FIELD, SURF_CONCRETE], 0.2)
+			_vista_mover("ttruck", Vector3(-2.4, 0, -9.6), [SURF_WOOD, SURF_FIELD, SURF_CONCRETE], 2.4)
 		"farm":
 			_vista_spot("chicken", Vector3(1.8, 0, -4.0))
 			_vista_spot("chicken", Vector3(-2.2, 0, -4.8))
@@ -10661,9 +10669,11 @@ func _level_card(index: int, m: Dictionary) -> Control:
 	color.v = clampf(color.v, 0.72, 0.92)
 	if not open:
 		color = Color(0.45, 0.5, 0.58)
+	if color.v > 0.84:
+		color = color.darkened(0.16)
 	var luma := color.r * 0.299 + color.g * 0.587 + color.b * 0.114
-	var ink := BRAND_INK if luma >= 0.62 else Color.WHITE
-	var edge := Color(1, 1, 1, 0.72) if luma >= 0.62 else Color(0.05, 0.08, 0.14, 0.92)
+	var ink := BRAND_INK if luma >= 0.55 else Color.WHITE
+	var edge := Color(0.05, 0.08, 0.14, 0.95)
 	var card := _make_button("%d    %s" % [index + 1, str(m.name)], Vector2.ZERO, Vector2(640, 92), color, 32)
 	card.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
