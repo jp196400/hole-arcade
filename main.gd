@@ -18,7 +18,7 @@ const CAM_PITCH_FAR := 54.0
 const CAM_FOV := 56.0
 # Share of the frame height that stays sky. Pitch is held against the field
 # of view so this sliver does not grow or vanish as the hole zooms out.
-const CAM_SKY_SLIVER := 0.055
+const CAM_SKY_SLIVER := 0.08
 const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
 const SPEED_SCREEN := 1.0
@@ -537,6 +537,9 @@ var clear_shown := 0.0
 var player_eaten := 0
 var rival_radius_bonus := 0.0
 var round_cover: ColorRect
+var reveal_size := Vector2.ZERO
+var reveal_stable := 0
+var reveal_since := 0
 var map_max_base := 0.4
 var final_radius := 2.6
 var round_settled := false
@@ -1449,24 +1452,51 @@ func _prewarm_shaders() -> void:
 		return
 	RenderingServer.force_draw(false)
 
+func _ensure_cover() -> void:
+	if round_cover != null:
+		return
+	var layer := CanvasLayer.new()
+	layer.layer = 40
+	add_child(layer)
+	round_cover = ColorRect.new()
+	round_cover.color = Color(0.11, 0.16, 0.29, 1)
+	round_cover.set_anchors_preset(Control.PRESET_FULL_RECT)
+	round_cover.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(round_cover)
+	round_cover.visible = false
+
 func _warm_view() -> void:
-	# Draw the finished city before the round is shown. WebGL compiles each
-	# material on first use, which otherwise pops props in over the opening.
+	# Upload the city before it is shown. WebGL compiles each material on first use.
 	if DisplayServer.get_name() == "headless":
 		return
-	if round_cover == null:
-		var layer := CanvasLayer.new()
-		layer.layer = 40
-		add_child(layer)
-		round_cover = ColorRect.new()
-		round_cover.color = Color(0.11, 0.16, 0.29, 1)
-		round_cover.set_anchors_preset(Control.PRESET_FULL_RECT)
-		round_cover.mouse_filter = Control.MOUSE_FILTER_STOP
-		layer.add_child(round_cover)
-	round_cover.visible = true
+	_ensure_cover()
 	for _i in 4:
 		RenderingServer.force_draw(false)
-	round_cover.visible = false
+
+func _hold_for_reveal() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	_ensure_cover()
+	round_cover.visible = true
+	reveal_size = Vector2.ZERO
+	reveal_stable = 0
+	reveal_since = Time.get_ticks_msec()
+
+func _tick_reveal() -> void:
+	if round_cover == null or not round_cover.visible:
+		return
+	var sz := get_viewport().get_visible_rect().size
+	if sz.y > 64.0 and sz.distance_to(reveal_size) < 1.0:
+		reveal_stable += 1
+	else:
+		reveal_size = sz
+		reveal_stable = 0
+		if sz.y > 64.0:
+			_snap_camera()
+	var waited := Time.get_ticks_msec() - reveal_since
+	# Stay covered through the first draws so materials finish compiling.
+	if (reveal_stable >= 8 and waited >= 450) or waited > 2200:
+		round_cover.visible = false
 
 func _no_shadow(g: GeometryInstance3D) -> void:
 	g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -5365,6 +5395,7 @@ func _feel(points: int, heavy: bool, sound: bool = true) -> void:
 	_sfx(kind, pitch, heavy or points >= 14)
 
 func _process(delta: float) -> void:
+	_tick_reveal()
 	if ui_swallow_frames > 0:
 		ui_swallow_frames -= 1
 	if shot_wait > 0:
@@ -6117,6 +6148,7 @@ func start_round(index: int) -> void:
 	hole_mesh.position = hole_pos
 	_snap_camera()
 	_warm_view()
+	_hold_for_reveal()
 	over_panel.visible = false
 	hud_layer.visible = true
 	menu_layer.visible = false
