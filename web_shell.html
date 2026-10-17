@@ -58,7 +58,14 @@
 			document.addEventListener('gestureend', block, { passive: false });
 			document.addEventListener('DOMContentLoaded', function () {
 				var el = document.getElementById('build-sha');
-				if (el && BUILD.indexOf('__') !== 0) {
+				if (!el) return;
+				var debug = /(?:^|[?&])debug=1(?:&|$)/.test(location.search);
+				if (!debug) {
+					el.style.display = 'none';
+					return;
+				}
+				el.style.display = 'block';
+				if (BUILD.indexOf('__') !== 0) {
 					el.textContent = BUILD.slice(0, 7);
 				}
 			});
@@ -269,6 +276,7 @@ body {
 }
 
 #build-sha {
+	display: none;
 	position: fixed;
 	left: 8px;
 	bottom: 6px;

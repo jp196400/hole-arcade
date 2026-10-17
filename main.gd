@@ -13,8 +13,8 @@ const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?s
 const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
 const STOP_RATE := 34.0
-const CAM_PITCH_DEG := 60.0
-const CAM_PITCH_FAR := 68.0
+const CAM_PITCH_DEG := 48.0
+const CAM_PITCH_FAR := 60.0
 const CAM_FOV := 56.0
 const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
@@ -22,8 +22,11 @@ const SPEED_SCREEN := 1.0
 const POOL := 40
 const FIT_RATIO := 0.84
 const GROW_MULTIPLE := 10.0
-const SCREEN_FRAC_START := 0.25
-const SCREEN_FRAC_END := 0.40
+const SCREEN_FRAC_START := 0.18
+const SCREEN_FRAC_END := 0.36
+# d985204 framed the start hole at this distance. Stick speed is measured from it
+# so a wider camera does not make a full drag crawl.
+const STICK_REF_DIST := 8.275
 const RIVAL_CAP := 0.70
 const FALL_GRAVITY := 2.15
 const PIT_GRAVITY := 8.0
@@ -88,7 +91,7 @@ vec3 theme_ground(vec3 base, vec2 xz, float which, float mode) {
 		float row = abs(fract(xz.x * 1.1) - 0.5);
 		float furrow = smoothstep(0.38, 0.48, row);
 		col *= mix(1.0, 0.78, furrow);
-		col = mix(col, col * vec3(1.08, 1.05, 0.75), h * 0.25);
+		col = mix(col, col * vec3(1.03, 1.01, 0.94), h * 0.16);
 		float lane = abs(fract((xz.y + sin(xz.x * 0.07) * 1.6) * 0.16) - 0.5);
 		float path = 1.0 - smoothstep(0.04, 0.1, lane);
 		col = mix(col, vec3(0.55, 0.4, 0.22), path * 0.42);
@@ -97,7 +100,7 @@ vec3 theme_ground(vec3 base, vec2 xz, float which, float mode) {
 		col = mix(col, col * vec3(1.08, 0.94, 1.02), stripe * 0.45);
 		vec2 cell = fract(xz * 0.7) - vec2(0.5);
 		float dots = 1.0 - smoothstep(0.08, 0.16, length(cell));
-		col = mix(col, vec3(1.0, 0.9, 0.45), dots * 0.5);
+		col = mix(col, vec3(0.96, 0.82, 0.48), dots * 0.28);
 	} else if (which < 2.5) {
 		float blob = 0.5 + 0.5 * sin(xz.x * 0.85) * sin(xz.y * 0.7);
 		col = mix(col * vec3(0.75, 0.9, 0.6), col * vec3(1.05, 1.12, 0.7), blob);
@@ -1618,8 +1621,8 @@ func _cam_ref_dist() -> float:
 	return _dist_for_frac(LEVEL_RADIUS[0], SCREEN_FRAC_START)
 
 func _cam_dist_for(radius: float) -> float:
-	# Zoom out lags the radius, so the hole grows from about a quarter of the
-	# screen to about 40% by the time the city is cleared.
+	# Zoom out lags the radius. The hole starts smaller than a quarter of the
+	# screen so the fields and sky read, then grows toward about a third.
 	var r := maxf(radius, 0.12)
 	var start_r := maxf(_start_radius(), 0.12)
 	var end_r := maxf(final_radius, start_r + 0.2)
@@ -2005,7 +2008,7 @@ func _append_surface(st: SurfaceTool, mesh: Mesh, surface: int, xform: Transform
 			var uu: float = uv.x - floorf(uv.x)
 			var vv: float = uv.y - floorf(uv.y)
 			var px := clampi(int(uu * float(tw)), 0, tw)
-			var py := clampi(int((1.0 - vv) * float(th)), 0, th)
+			var py := clampi(int(vv * float(th)), 0, th)
 			var samp := image.get_pixel(px, py)
 			use = Color(samp.r * color.r, samp.g * color.g, samp.b * color.b, 1.0)
 		else:
@@ -4397,10 +4400,11 @@ func _start_radius() -> float:
 	return Save.start_radius() + float(Save.time_rank) * 0.04
 
 func _move_speed() -> float:
-	var base := _cam_ref_dist()
 	# Follow the eased camera so a size-up does not kick the stick ahead of the zoom.
-	var dist := cam_distance if cam_distance > 0.5 else base
-	var factor := pow(maxf(dist, 0.001) / maxf(base, 0.001), SPEED_SCREEN)
+	# Divide by the d985204 start distance, not today's wider start, so a full
+	# drag still crosses the screen at that same pace.
+	var dist := cam_distance if cam_distance > 0.5 else STICK_REF_DIST
+	var factor := pow(maxf(dist, 0.001) / STICK_REF_DIST, SPEED_SCREEN)
 	return BASE_SPEED * speed_scale * Save.speed_mul() * factor
 
 func _stick_velocity() -> Vector3:
@@ -6440,11 +6444,13 @@ func _set_match_hud(on: bool) -> void:
 			n.visible = on
 	if next_fill and next_fill.get_parent():
 		next_fill.get_parent().visible = on
+	if size_lbl:
+		size_lbl.visible = on
+		if on and size_lbl.text == "":
+			size_lbl.text = "Size %d" % (level + 1)
 	if not on:
 		if combo_lbl:
 			combo_lbl.visible = false
-		if size_lbl:
-			size_lbl.visible = false
 		if kept_lbl:
 			kept_lbl.visible = false
 		if name_lbl:
@@ -6799,6 +6805,8 @@ func _show_screen(which: String) -> void:
 	var sheet_bottom := -1.0
 	if which == "shop":
 		sheet_bottom = MENU_HEADER_Y + 96.0 + 700.0
+	elif which == "settings":
+		sheet_bottom = MENU_HEADER_Y + 620.0
 	_mount_menu_column(sheet_bottom)
 	if which == "levels":
 		_screen_levels()
@@ -7028,10 +7036,14 @@ func _screen_settings() -> void:
 	var hap_btn := _make_button("Haptics: %s" % ("On" if Save.haptics_on else "Off"), Vector2(48, body + 224.0), Vector2(624, 92), BRAND_CYAN if Save.haptics_on else BRAND_INK)
 	hap_btn.pressed.connect(_toggle_haptics)
 	_menu_add(hap_btn)
-	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(48, body + 340.0), 30)
-	note.size = Vector2(624, 80)
+	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(48, body + 340.0), 28)
+	note.size = Vector2(624, 72)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_menu_add(note)
+	var build := _menu_label("Build %s" % _short_sha(), Vector2(48, body + 424.0), 22)
+	build.size = Vector2(624, 36)
+	build.add_theme_color_override("font_color", Color(0.32, 0.4, 0.5))
+	_menu_add(build)
 
 func _screen_daily() -> void:
 	_screen_header("Daily reward")
