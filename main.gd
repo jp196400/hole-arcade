@@ -33,6 +33,8 @@ const STICK_REF_DIST := 8.275
 const RIVAL_CAP := 0.70
 const FALL_GRAVITY := 2.15
 const PIT_GRAVITY := 8.0
+# Large objects tumble under this scale. Small snacks still use the fast pit.
+const TUMBLE_GRAVITY := 3.4
 const DROP_SNAP := 0.16
 const DROP_VY := -8.0
 const RIM_MASK := 8
@@ -78,7 +80,7 @@ const TIER_MIN := [240, 360, 260, 200, 150, 120, 96, 72, 56, 40]
 const BASE_CAP := 3.86
 const COIN_RATE := 0.012
 const CLEAR_COIN_BONUS := 100
-const RIVAL_GROW := 0.40
+const RIVAL_GROW := 0.36
 const GROUND_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_back, shadows_disabled;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -695,6 +697,8 @@ func _ready() -> void:
 		call_deferred("_probe_tiers")
 	elif preview == "glfail":
 		call_deferred("_fail_graphics")
+	elif preview == "topple":
+		call_deferred("_probe_topple")
 	elif preview.begins_with("close"):
 		var close_rest := preview.substr(5)
 		var close_idx := start_idx
@@ -1115,6 +1119,76 @@ func _preview_size() -> void:
 	_set_chrome(false)
 	_set_match_hud(true)
 	_refresh_hud()
+	if _web_search().find("topple=1") != -1:
+		playing = true
+		player_invuln = 99.0
+		for rv in rivals:
+			rv.alive = false
+
+func _probe_topple() -> void:
+	start_round(0)
+	playing = false
+	for rv in rivals:
+		rv.alive = false
+	var building: Dictionary = {}
+	var best_h := 0.0
+	for o in props:
+		if not bool(o.get("alive", false)) or bool(o.get("in_body", false)):
+			continue
+		var role := str(o.get("role", ""))
+		if not (role in ["barn", "building", "house", "tower", "wide", "landmark"]):
+			continue
+		var h := float(o.get("height", 0.0))
+		if h > best_h:
+			best_h = h
+			building = o
+	if building.is_empty():
+		print("TOPPLE_FAIL none")
+		get_tree().quit()
+		return
+	var base := float(building.base)
+	var rad := maxf(base / FIT_RATIO + 0.35, 2.6)
+	hole_radius = rad
+	shown_radius = rad
+	hole_open = rad
+	var at := Vector3(8.0, 0.0, 3.0)
+	_plant_prop(building, at)
+	var dist0 := rad + base * 0.72
+	hole_pos = at + Vector3(-dist0, 0.0, 0.0)
+	building.sink = -1
+	if not _take_body(building):
+		print("TOPPLE_FAIL take")
+		get_tree().quit()
+		return
+	var max_step := 0.0
+	var min_y := 0.0
+	var max_tilt := 0.0
+	var tipped_before_drop := false
+	var prev := (building.body as RigidBody3D).global_position
+	for i in 220:
+		if i < 110:
+			hole_pos.x += 0.034
+		await get_tree().physics_frame
+		if building.body == null or not bool(building.get("alive", false)):
+			print("TOPPLE f=%d swallowed minY %.3f maxStep %.3f maxTilt %.3f tipped %s" % [i, min_y, max_step, max_tilt, str(tipped_before_drop)])
+			print("TOPPLE_OK" if max_tilt > 0.2 and tipped_before_drop and max_step < 0.75 else "TOPPLE_FAIL")
+			get_tree().quit()
+			return
+		var xf := (building.body as RigidBody3D).global_transform
+		var step := xf.origin.distance_to(prev)
+		if i > 0:
+			max_step = maxf(max_step, step)
+		prev = xf.origin
+		min_y = minf(min_y, xf.origin.y)
+		var lean := 1.0 - xf.basis.y.dot(Vector3.UP)
+		if lean > 0.2 and xf.origin.y > -0.25:
+			tipped_before_drop = true
+		max_tilt = maxf(max_tilt, lean)
+		if i % 20 == 0:
+			print("TOPPLE f=%d y=%.3f lean=%.3f step=%.3f perch=%s pit=%s" % [i, xf.origin.y, lean, step, str(building.get("perch", false)), str(building.get("pit", false))])
+	print("TOPPLE timeout minY %.3f maxStep %.3f maxTilt %.3f tipped %s" % [min_y, max_step, max_tilt, str(tipped_before_drop)])
+	print("TOPPLE_OK" if max_tilt > 0.35 and max_step < 0.75 else "TOPPLE_FAIL")
+	get_tree().quit()
 
 func _probe_kinds() -> void:
 	_ensure_models()
@@ -5160,8 +5234,9 @@ func _spawn_rivals() -> void:
 			"respawn": 0.0,
 			"wander": ang + 1.7,
 			"aim": Vector3(cos(ang + 2.0), 0.0, sin(ang + 2.0)),
-			"think": randf() * 0.15,
+			"think": randf() * 0.2,
 			"pulse": 0.0,
+			"grace": 2.4,
 		})
 
 func _tick_rivals(delta: float) -> void:
@@ -5174,15 +5249,31 @@ func _tick_rivals(delta: float) -> void:
 			if float(rival.respawn) <= 0.0:
 				_respawn_rival(rival)
 			continue
+		rival.grace = maxf(0.0, float(rival.get("grace", 0.0)) - delta)
 		rival.think = float(rival.think) - delta
 		if float(rival.think) <= 0.0:
-			rival.think = 0.34
-			rival.aim = _rival_aim(i)
+			rival.think = _rival_think_time() + randf() * 0.05
+			var nxt_aim := _rival_aim(i)
+			var prev_aim: Vector3 = rival.aim
+			if prev_aim.length_squared() < 0.0001:
+				rival.aim = nxt_aim
+			else:
+				var mixed := prev_aim.lerp(nxt_aim, lerpf(0.42, 0.78, _rival_diff()))
+				rival.aim = mixed.normalized() if mixed.length_squared() > 0.0001 else nxt_aim
 		var aim: Vector3 = rival.aim
 		if aim.length_squared() < 0.0001:
 			aim = Vector3(1.0, 0.0, 0.0)
 		var pos: Vector3 = rival.pos
-		var nxt := pos + aim.normalized() * float(rival.speed) * delta
+		var step := aim.normalized() * _rival_move_speed(rival) * delta
+		var nxt := pos + step
+		if _surf_f(nxt.x, nxt.z) == SURF_WATER:
+			var side := step.rotated(Vector3.UP, PI * 0.5)
+			if _surf_f((pos + side).x, (pos + side).z) != SURF_WATER:
+				nxt = pos + side
+			elif _surf_f((pos - side).x, (pos - side).z) != SURF_WATER:
+				nxt = pos - side
+			else:
+				nxt = pos
 		if _surf_f(nxt.x, nxt.z) != SURF_WATER:
 			pos = nxt
 		pos = _separate_hole(pos, float(rival.radius), i)
@@ -5197,66 +5288,46 @@ func _tick_rivals(delta: float) -> void:
 			rival.pulse = maxf(0.0, float(rival.pulse) - delta)
 	_resolve_eats()
 
-func _rival_aim(i: int) -> Vector3:
+func _rival_diff() -> float:
+	return clampf(float(map_index) / 9.0, 0.0, 1.0)
+
+func _rival_think_time() -> float:
+	return lerpf(0.62, 0.30, _rival_diff())
+
+func _rival_move_speed(rival: Dictionary) -> float:
+	var pace := clampf(float(rival.get("speed", 2.2)) / 2.22, 0.88, 1.05)
+	var cap := BASE_SPEED * lerpf(0.70, 0.88, _rival_diff()) * pace
+	cap = minf(cap, BASE_SPEED * 0.90)
+	if float(rival.get("grace", 0.0)) > 0.0:
+		cap *= 0.62
+	return cap
+
+func _rival_avoid(i: int) -> Vector3:
 	var rival: Dictionary = rivals[i]
 	var pos: Vector3 = rival.pos
 	var radius := float(rival.radius)
-	var flee_from := Vector3.ZERO
-	var fleeing := false
-	var flee_d := 999.0
-	if hole_radius > radius * 1.12:
-		var d := _xz_dist(pos, hole_pos)
-		if d < hole_radius + 3.4 and d < flee_d:
-			flee_d = d
-			flee_from = hole_pos
-			fleeing = true
+	var push := Vector3.ZERO
 	for j in rivals.size():
 		if j == i or not bool(rivals[j].alive):
 			continue
 		var other: Dictionary = rivals[j]
-		if float(other.radius) <= radius * 1.12:
+		var other_r := float(other.radius)
+		if radius > other_r * 1.12 or other_r > radius * 1.12:
 			continue
-		var od := _xz_dist(pos, other.pos)
-		if od < float(other.radius) + 3.4 and od < flee_d:
-			flee_d = od
-			flee_from = other.pos
-			fleeing = true
-	if fleeing:
-		var away := pos - flee_from
-		if away.length_squared() < 0.01:
-			away = Vector3(1.0, 0.0, 0.0)
-		return away.normalized()
-	var chase_at := Vector3.ZERO
-	var chasing := false
-	var chase_d := 999.0
-	if player_invuln <= 0.0 and radius > hole_radius * 1.15:
-		var pd := _xz_dist(pos, hole_pos)
-		if pd < 6.8 and pd < chase_d:
-			chase_d = pd
-			chase_at = hole_pos
-			chasing = true
-	for j in rivals.size():
-		if j == i or not bool(rivals[j].alive):
-			continue
-		var other2: Dictionary = rivals[j]
-		if radius <= float(other2.radius) * 1.15:
-			continue
-		var cd := _xz_dist(pos, other2.pos)
-		if cd < 6.8 and cd < chase_d:
-			chase_d = cd
-			chase_at = other2.pos
-			chasing = true
-	if chasing:
-		var toward := chase_at - pos
-		if toward.length_squared() > 0.0001:
-			return toward.normalized()
-	var food := Vector3.ZERO
-	var found := false
-	var food_d := 7.4
-	var x0 := int(floor((pos.x - food_d) / 4.0))
-	var x1 := int(floor((pos.x + food_d) / 4.0))
-	var z0 := int(floor((pos.z - food_d) / 4.0))
-	var z1 := int(floor((pos.z + food_d) / 4.0))
+		var gap := _xz_dist(pos, other.pos)
+		if gap < 3.2 and gap > 0.001:
+			var away: Vector3 = pos - other.pos
+			push += away.normalized() * ((3.2 - gap) / 3.2)
+	if push.length_squared() < 0.0001:
+		return Vector3.ZERO
+	return push.normalized()
+
+func _rival_cluster_aim(pos: Vector3, radius: float, sense: float) -> Vector3:
+	var bins := {}
+	var x0 := int(floor((pos.x - sense) / 4.0))
+	var x1 := int(floor((pos.x + sense) / 4.0))
+	var z0 := int(floor((pos.z - sense) / 4.0))
+	var z1 := int(floor((pos.z + sense) / 4.0))
 	for gx in range(x0, x1 + 1):
 		for gz in range(z0, z1 + 1):
 			var key := gx * 128 + gz + 8192
@@ -5268,16 +5339,113 @@ func _rival_aim(i: int) -> Vector3:
 				if not _fits_r(float(o.base), radius):
 					continue
 				var fd := _xz_dist(pos, o.pos)
-				if fd < food_d:
-					food_d = fd
-					food = o.pos
-					found = true
-	if found:
-		var bite := food - pos
-		if bite.length_squared() > 0.0001:
-			return bite.normalized()
-	rival.wander = float(rival.wander) + randf_range(-0.9, 0.9)
-	return Vector3(cos(float(rival.wander)), 0.0, sin(float(rival.wander)))
+				if fd > sense or fd < 0.04:
+					continue
+				var bk := int(floor(float(o.pos.x) / 6.0)) * 128 + int(floor(float(o.pos.z) / 6.0))
+				if not bins.has(bk):
+					bins[bk] = [0, Vector3.ZERO]
+				var rec: Array = bins[bk]
+				rec[0] = int(rec[0]) + 1
+				rec[1] = (rec[1] as Vector3) + (o.pos as Vector3)
+	var best := -1.0
+	var at := Vector3.ZERO
+	var found := false
+	for bk in bins:
+		var rec2: Array = bins[bk]
+		var n := int(rec2[0])
+		if n <= 0:
+			continue
+		var centroid: Vector3 = (rec2[1] as Vector3) / float(n)
+		var d := _xz_dist(pos, centroid)
+		var score := float(n) / pow(1.4 + d, 1.12)
+		if score > best:
+			best = score
+			at = centroid
+			found = true
+	if not found:
+		return Vector3.ZERO
+	var bite := at - pos
+	bite.y = 0.0
+	if bite.length_squared() < 0.0001:
+		return Vector3.ZERO
+	return bite.normalized()
+
+func _steer_blend(primary: Vector3, extra: Vector3, extra_w: float) -> Vector3:
+	var mixed := primary + extra * extra_w
+	if mixed.length_squared() < 0.0001:
+		if primary.length_squared() > 0.0001:
+			return primary.normalized()
+		return Vector3(1.0, 0.0, 0.0)
+	return mixed.normalized()
+
+func _rival_aim(i: int) -> Vector3:
+	var rival: Dictionary = rivals[i]
+	var pos: Vector3 = rival.pos
+	var radius := float(rival.radius)
+	var t := _rival_diff()
+	var grace := float(rival.get("grace", 0.0)) > 0.0
+	var flee_ratio := lerpf(1.18, 1.08, t)
+	var flee_extra := lerpf(5.2, 9.5, t)
+	var chase_ratio := lerpf(1.34, 1.16, t)
+	var chase_range := lerpf(4.2, 8.2, t)
+	var sense := lerpf(8.5, 16.0, t)
+	var avoid := _rival_avoid(i)
+	var flee_from := Vector3.ZERO
+	var fleeing := false
+	var flee_d := 999.0
+	if hole_radius > radius * flee_ratio:
+		var d := _xz_dist(pos, hole_pos)
+		if d < hole_radius + flee_extra and d < flee_d:
+			flee_d = d
+			flee_from = hole_pos
+			fleeing = true
+	for j in rivals.size():
+		if j == i or not bool(rivals[j].alive):
+			continue
+		var other: Dictionary = rivals[j]
+		if float(other.radius) <= radius * flee_ratio:
+			continue
+		var od := _xz_dist(pos, other.pos)
+		if od < float(other.radius) + flee_extra and od < flee_d:
+			flee_d = od
+			flee_from = other.pos
+			fleeing = true
+	if fleeing:
+		var away := pos - flee_from
+		if away.length_squared() < 0.01:
+			away = Vector3(1.0, 0.0, 0.0)
+		return _steer_blend(away, avoid, 0.35)
+	if not grace:
+		var chase_at := Vector3.ZERO
+		var chasing := false
+		var chase_d := 999.0
+		if player_invuln <= 0.0 and radius > hole_radius * chase_ratio:
+			var pd := _xz_dist(pos, hole_pos)
+			if pd < chase_range and pd < chase_d:
+				chase_d = pd
+				chase_at = hole_pos
+				chasing = true
+		for j in rivals.size():
+			if j == i or not bool(rivals[j].alive):
+				continue
+			var other2: Dictionary = rivals[j]
+			if radius <= float(other2.radius) * chase_ratio:
+				continue
+			var cd := _xz_dist(pos, other2.pos)
+			if cd < chase_range and cd < chase_d:
+				chase_d = cd
+				chase_at = other2.pos
+				chasing = true
+		if chasing:
+			var toward := chase_at - pos
+			if toward.length_squared() > 0.0001:
+				return _steer_blend(toward, avoid, 0.25)
+	var food := _rival_cluster_aim(pos, radius, sense)
+	if food.length_squared() > 0.0001:
+		return _steer_blend(food, avoid, 0.85)
+	rival.wander = float(rival.wander) + randf_range(-0.7, 0.7)
+	var wander := Vector3(cos(float(rival.wander)), 0.0, sin(float(rival.wander)))
+	return _steer_blend(wander, avoid, 0.6)
 
 func _separate_hole(pos: Vector3, radius: float, ignore: int) -> Vector3:
 	var out := pos
@@ -5382,6 +5550,8 @@ func _respawn_rival(rival: Dictionary) -> void:
 	rival.alive = true
 	rival.wander = ang
 	rival.aim = Vector3(cos(ang), 0.0, sin(ang))
+	rival.grace = 1.6
+	rival.think = _rival_think_time()
 
 func _credit_rival(rival: Dictionary, bites: int) -> void:
 	rival.eaten = int(rival.get("eaten", 0)) + maxi(bites, 1)
@@ -5953,7 +6123,8 @@ func _commit_active_covers() -> void:
 		var hr := _sink_radius(sink)
 		var dist := _xz_dist(b.global_position, _sink_pos(sink))
 		if hr > 0.05 and _fits_r(float(o.base), hr) and _center_in_opening(float(o.base), dist, hr):
-			_commit_fall(o, b)
+			if _drops_instant(o):
+				_commit_fall(o, b)
 
 func _take_body(o: Dictionary) -> bool:
 	if pool_free.is_empty() or bool(o.in_body):
@@ -5980,21 +6151,161 @@ func _take_body(o: Dictionary) -> bool:
 	b.angular_velocity = Vector3.ZERO
 	b.sleeping = false
 	o.pit = false
+	o.perch = false
+	o.tilt = 0.0
+	o.spin = 0.0
 	o.body = b
 	o.in_body = true
 	active.append(o)
 	var sink_at := _sink_pos(int(o.get("sink", -1)))
 	var sink_r := _sink_radius(int(o.get("sink", -1)))
-	if _center_in_opening(float(o.base), _xz_dist(Vector3(p.x, 0.0, p.z), sink_at), sink_r):
+	var covered := _center_in_opening(float(o.base), _xz_dist(Vector3(p.x, 0.0, p.z), sink_at), sink_r)
+	if covered and _drops_instant(o):
 		_commit_fall(o, b)
+	elif not _drops_instant(o):
+		_begin_perch(o, b, Vector3(p.x, 0.0, p.z))
 	else:
 		b.collision_mask = RIM_MASK
 		_push_prop_visual(o, b.global_transform)
 	return true
 
+func _drops_instant(o: Dictionary) -> bool:
+	var base := float(o.base)
+	var height := float(o.get("height", 0.0))
+	if base < 0.55 and height < 1.15:
+		return true
+	var role := str(o.get("role", ""))
+	return role in ["small", "clutter", "person"] and height < 1.4 and base < 0.7
+
+func _overhang_ratio(base: float, dist: float, radius: float) -> float:
+	var span := maxf(base * 2.0, 0.001)
+	return clampf((radius + base - dist) / span, 0.0, 1.0)
+
+func _lip_frame(from: Vector3, hole: Vector3) -> Dictionary:
+	var inward := Vector3(hole.x - from.x, 0.0, hole.z - from.z)
+	if inward.length_squared() < 0.0004:
+		inward = Vector3(0.0, 0.0, -1.0)
+	else:
+		inward = inward.normalized()
+	var axis := Vector3.UP.cross(inward)
+	if axis.length_squared() < 0.0004:
+		axis = Vector3.RIGHT
+	else:
+		axis = axis.normalized()
+	return {"inward": inward, "axis": axis}
+
+func _begin_perch(o: Dictionary, b: RigidBody3D, center: Vector3) -> void:
+	o.perch = true
+	o.pit = false
+	o.tilt = 0.0
+	o.spin = 0.0
+	o.perch_pos = Vector3(center.x, 0.0, center.z)
+	b.freeze = true
+	b.gravity_scale = 0.0
+	b.collision_mask = 0
+	b.linear_velocity = Vector3.ZERO
+	b.angular_velocity = Vector3.ZERO
+	b.sleeping = false
+	_pose_topple(o, b, o.perch_pos, _sink_pos(int(o.get("sink", -1))), _sink_radius(int(o.get("sink", -1))), 0.0)
+
+func _pose_topple(o: Dictionary, b: RigidBody3D, center: Vector3, hole: Vector3, radius: float, theta: float) -> void:
+	var frame := _lip_frame(center, hole)
+	var inward: Vector3 = frame.inward
+	var axis: Vector3 = frame.axis
+	var pivot := Vector3(hole.x, 0.0, hole.z) - inward * radius
+	var rel := Vector3(center.x - pivot.x, 0.0, center.z - pivot.z)
+	var swung: Vector3 = Basis(axis, theta) * rel
+	var basis := Basis(axis, theta) * Basis(Vector3.UP, float(o.yaw))
+	var xf := Transform3D(basis, pivot + swung)
+	b.freeze = true
+	b.global_transform = xf
+	_push_prop_visual(o, xf)
+
+func _tick_perch(o: Dictionary, b: RigidBody3D) -> void:
+	var delta := get_physics_process_delta_time()
+	var sink := int(o.get("sink", -1))
+	var hp := _sink_pos(sink)
+	var hr := _sink_radius(sink)
+	var base := float(o.base)
+	var height := maxf(float(o.get("height", base)), 0.2)
+	var center := Vector3(float(o.perch_pos.x), 0.0, float(o.perch_pos.z))
+	var dist := _xz_dist(center, hp)
+	if hr < 0.05 or not _fits_r(base, hr):
+		_release_body(o, center)
+		return
+	var ratio := _overhang_ratio(base, dist, hr)
+	var over := _center_in_opening(base, dist, hr)
+	var reaching := dist < hr + maxf(base * 0.45, 0.2)
+	var theta := float(o.get("tilt", 0.0))
+	var omega := float(o.get("spin", 0.0))
+	var phase := float(o.get("uid", 0)) * 1.7
+	var clock := float(Time.get_ticks_msec()) * 0.001
+	if ratio >= 0.22 or over:
+		var accel := (maxf(ratio, 0.22) - 0.10) * (2.6 + clampf(height, 0.3, 9.0) * 0.48)
+		if over:
+			accel += 1.6
+		# Tall pieces pick up more lean, so a barn topples instead of dropping flat.
+		accel *= clampf(0.75 + height * 0.08, 0.85, 1.45)
+		omega = minf(omega + accel * delta, 3.1)
+		theta += omega * delta
+		if ratio > 0.20:
+			var frame := _lip_frame(center, hp)
+			var creep := minf((0.28 + ratio * 0.55) * delta, 0.02)
+			center += (frame.inward as Vector3) * creep
+			o.perch_pos = center
+	else:
+		var amp := clampf((ratio - 0.02) * 0.55, 0.0, 0.11)
+		var target := sin(clock * 6.4 + phase) * amp
+		var back := 1.0 - exp(-4.2 * delta)
+		theta = lerpf(theta, target, back)
+		omega *= 0.9
+		if not reaching and ratio < 0.05 and absf(theta) < 0.045:
+			_release_body(o, center)
+			return
+	o.tilt = theta
+	o.spin = omega
+	_pose_topple(o, b, center, hp, hr, theta)
+	var unsupported := dist + base < hr - 0.02
+	if theta > 0.48 or unsupported or (over and theta > 0.16) or ratio > 0.84:
+		_handoff_tumble(o, b, hp, omega)
+
+func _handoff_tumble(o: Dictionary, b: RigidBody3D, hole: Vector3, omega: float) -> void:
+	if bool(o.get("pit", false)):
+		return
+	var xf := b.global_transform
+	var frame := _lip_frame(xf.origin, hole)
+	var axis: Vector3 = frame.axis
+	var inward: Vector3 = frame.inward
+	var hr := _sink_radius(int(o.get("sink", -1)))
+	var pivot := Vector3(hole.x, 0.0, hole.z) - inward * hr
+	var height := maxf(float(o.get("height", 1.0)), 0.2)
+	var com := xf.origin + xf.basis.y.normalized() * height * 0.5
+	var spin := maxf(omega, 1.05)
+	var w := axis * spin
+	var vel := w.cross(com - pivot)
+	if xf.origin.y < 0.05:
+		vel.y = minf(vel.y, -0.35)
+	vel += inward * 0.22
+	o.perch = false
+	o.pit = true
+	b.freeze = false
+	b.collision_mask = 0
+	b.gravity_scale = TUMBLE_GRAVITY
+	b.can_sleep = false
+	b.sleeping = false
+	b.linear_velocity = vel
+	b.angular_velocity = w
+	var rid := b.get_rid()
+	PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_TRANSFORM, xf)
+	PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, vel)
+	PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, w)
+	PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_SLEEPING, false)
+	_push_prop_visual(o, xf)
+
 func _commit_fall(o: Dictionary, b: RigidBody3D) -> void:
 	if bool(o.get("pit", false)):
 		return
+	o.perch = false
 	o.pit = true
 	var sink := int(o.get("sink", -1))
 	var hp := _sink_pos(sink)
@@ -6062,37 +6373,49 @@ func _drive_body(o: Dictionary) -> void:
 	var sink := int(o.get("sink", -1))
 	var hp := _sink_pos(sink)
 	var hr := _sink_radius(sink)
-	var dx := p.x - hp.x
-	var dz := p.z - hp.z
-	var dist := sqrt(dx * dx + dz * dz)
 	var base := float(o.base)
-	if hr < 0.05 or not _fits_r(base, hr):
-		_release_body(o, p)
+	var gone := hr < 0.05 or not _fits_r(base, hr)
+	if gone:
+		if bool(o.get("pit", false)) and p.y < -0.15:
+			b.collision_mask = 0
+			b.gravity_scale = TUMBLE_GRAVITY if not _drops_instant(o) else PIT_GRAVITY
+			_push_prop_visual(o, b.global_transform)
+			return
+		var back := p
+		if bool(o.get("perch", false)):
+			back = o.perch_pos
+		_release_body(o, back)
+		return
+	if bool(o.get("perch", false)):
+		_tick_perch(o, b)
+		return
+	if not bool(o.get("pit", false)) and not _drops_instant(o):
+		_begin_perch(o, b, Vector3(p.x, 0.0, p.z))
+		_tick_perch(o, b)
 		return
 	if b.sleeping:
 		b.sleeping = false
+	var dx := p.x - hp.x
+	var dz := p.z - hp.z
+	var dist := sqrt(dx * dx + dz * dz)
 	var upright := b.global_transform.basis.y.dot(Vector3.UP)
 	var tilt := 1.0 - upright
 	var reaching := dist < hr + maxf(base * 0.45, 0.2)
 	var falling := p.y < -0.2
 	var tipped := tilt > 0.1 or p.y < -0.04
 	var over := _center_in_opening(base, dist, hr)
-	if over:
-		if not bool(o.get("pit", false)):
-			_commit_fall(o, b)
-		else:
-			b.collision_mask = 0
-			b.gravity_scale = PIT_GRAVITY
-			b.can_sleep = false
-			b.sleeping = false
+	if over and not bool(o.get("pit", false)):
+		_commit_fall(o, b)
+	elif bool(o.get("pit", false)):
+		b.collision_mask = 0
+		b.gravity_scale = PIT_GRAVITY if _drops_instant(o) else TUMBLE_GRAVITY
+		b.can_sleep = false
+		b.sleeping = false
 	elif reaching or tipped:
 		b.gravity_scale = FALL_GRAVITY
 		b.collision_mask = RIM_MASK
 	elif not falling:
 		_release_body(o, p)
-		return
-	var shown := float(o.get("shown_y", p.y))
-	if bool(o.get("pit", false)) and shown < -0.05 and p.y > shown + 0.02:
 		return
 	_push_prop_visual(o, b.global_transform)
 
@@ -6164,6 +6487,9 @@ func _release_body(o: Dictionary, p: Vector3) -> void:
 		o.body = null
 	o.in_body = false
 	o.pit = false
+	o.perch = false
+	o.tilt = 0.0
+	o.spin = 0.0
 	var grounded := Vector3(p.x, 0, p.z)
 	o.pos = grounded
 	o.shown_y = 0.0

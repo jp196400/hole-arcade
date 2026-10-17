@@ -1,5 +1,6 @@
-Music loop: original calm loop written for Hole Arcade.
-Tempo 76 BPM. Soft sine pads, a quiet bass, and slow pentatonic plucks.
+Music loop: original light groove written for Hole Arcade.
+Tempo 108 BPM. Warm sine and triangle chords, a bouncy root-fifth bass,
+a pentatonic lead, a soft kick, and quiet claps and hats.
 No third-party recording is included. This composition is original and
 released under CC0 1.0 Universal (public domain).
 https://creativecommons.org/publicdomain/zero/1.0/
