@@ -89,12 +89,15 @@ vec3 theme_ground(vec3 base, vec2 xz, float which, float mode) {
 		float furrow = smoothstep(0.38, 0.48, row);
 		col *= mix(1.0, 0.78, furrow);
 		col = mix(col, col * vec3(1.08, 1.05, 0.75), h * 0.25);
+		float lane = abs(fract((xz.y + sin(xz.x * 0.07) * 1.6) * 0.16) - 0.5);
+		float path = 1.0 - smoothstep(0.04, 0.1, lane);
+		col = mix(col, vec3(0.55, 0.4, 0.22), path * 0.42);
 	} else if (which < 1.5) {
 		float stripe = 0.5 + 0.5 * sin(xz.x * 2.2 + xz.y * 0.4);
 		col = mix(col, col * vec3(1.08, 0.94, 1.02), stripe * 0.45);
 		vec2 cell = fract(xz * 0.7) - vec2(0.5);
 		float dots = 1.0 - smoothstep(0.08, 0.16, length(cell));
-		col = mix(col, vec3(1.0, 0.93, 0.55), dots * 0.35);
+		col = mix(col, vec3(1.0, 0.9, 0.45), dots * 0.5);
 	} else if (which < 2.5) {
 		float blob = 0.5 + 0.5 * sin(xz.x * 0.85) * sin(xz.y * 0.7);
 		col = mix(col * vec3(0.75, 0.9, 0.6), col * vec3(1.05, 1.12, 0.7), blob);
@@ -143,6 +146,9 @@ vec3 theme_ground(vec3 base, vec2 xz, float which, float mode) {
 		col = mix(col, tint, conf * 0.28);
 		float stripe = smoothstep(0.94, 0.99, fract(xz.x * 0.8));
 		col *= mix(1.0, 0.86, stripe);
+		float lane = abs(fract((xz.y + sin(xz.x * 0.05) * 1.2) * 0.14) - 0.5);
+		float path = 1.0 - smoothstep(0.05, 0.11, lane);
+		col = mix(col, vec3(0.72, 0.5, 0.32), path * 0.34);
 	}
 	return clamp(col, vec3(0.0), vec3(1.0));
 }
@@ -298,10 +304,12 @@ void fragment() {
 const KIT_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_disabled;
 void fragment() {
-	float ao = clamp(NORMAL.y * 0.4 + 0.74, 0.58, 1.05);
-	ALBEDO = COLOR.rgb * ao;
-	ROUGHNESS = 1.0;
-	SPECULAR = 0.0;
+	float n = clamp(NORMAL.y, -1.0, 1.0);
+	float ao = clamp(n * 0.46 + 0.68, 0.5, 1.12);
+	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
+	ALBEDO = COLOR.rgb * ao + COLOR.rgb * fres * 0.07;
+	ROUGHNESS = 0.78;
+	SPECULAR = 0.1;
 	if (COLOR.a < 0.98) {
 		float dots = fract(sin(dot(floor(FRAGCOORD.xy * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
 		if (dots > COLOR.a) {
@@ -310,6 +318,41 @@ void fragment() {
 	}
 }
 """
+const LIFE_SHADER := """shader_type spatial;
+render_mode diffuse_lambert, cull_disabled;
+void vertex() {
+	float amp = INSTANCE_CUSTOM.r;
+	float phase = INSTANCE_CUSTOM.g;
+	float spd = max(INSTANCE_CUSTOM.b, 0.8);
+	float h = max(VERTEX.y, 0.0);
+	float wave = sin(TIME * spd + phase) * amp * h;
+	VERTEX.x += wave;
+	VERTEX.z += cos(TIME * spd * 0.73 + phase) * amp * h * 0.45;
+	VERTEX.y += sin(TIME * spd * 1.25 + phase) * amp * 0.35;
+}
+void fragment() {
+	float n = clamp(NORMAL.y, -1.0, 1.0);
+	float ao = clamp(n * 0.46 + 0.68, 0.5, 1.12);
+	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
+	ALBEDO = COLOR.rgb * ao + COLOR.rgb * fres * 0.07;
+	ROUGHNESS = 0.78;
+	SPECULAR = 0.1;
+	if (COLOR.a < 0.98) {
+		float dots = fract(sin(dot(floor(FRAGCOORD.xy * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
+		if (dots > COLOR.a) {
+			discard;
+		}
+	}
+}
+"""
+const LIFE_AMP := {
+	"chicken": 0.12, "piglet": 0.08, "cow": 0.05, "raptord": 0.06, "trike": 0.04,
+	"tyrant": 0.035, "brachio": 0.03, "dcamel": 0.05, "hbat": 0.22, "hcrow": 0.18,
+	"teddybear": 0.04, "scare": 0.045, "fernleaf": 0.1, "jpalm": 0.045, "jpalmtall": 0.04,
+	"ppalm": 0.045, "dpalm": 0.045, "hpine": 0.04, "htree": 0.05, "dcactus": 0.03,
+	"dtallcac": 0.028, "fwheat": 0.1, "fflower": 0.12, "blossom": 0.1, "pflag": 0.16,
+	"fballoon": 0.11, "hsnowman": 0.03, "gbread": 0.045, "skier": 0.04,
+}
 const HOLE_SHADER := """shader_type spatial;
 render_mode unshaded, cull_disabled, blend_mix, depth_draw_opaque;
 uniform vec3 rim_color : source_color = vec3(0.05, 0.86, 1.0);
@@ -439,6 +482,7 @@ var kind_multimeshes: Array = []
 var kind_mats: Array = []
 var kind_by_id := {}
 var kit_mat: ShaderMaterial
+var life_mat: ShaderMaterial
 var tex_cache := {}
 var ground_shader: Shader
 var ground_mats: Array = []
@@ -522,6 +566,7 @@ var mat_nature: StandardMaterial3D
 var sky_mat: ProceduralSkyMaterial
 var world_env: Environment
 var sun: DirectionalLight3D
+var fill_light: DirectionalLight3D
 var pit_mat: ShaderMaterial
 var city_root: Node3D
 var prop_defs: Array = []
@@ -681,6 +726,12 @@ func _ready() -> void:
 		call_deferred("_probe_tiers")
 	elif preview == "glfail":
 		call_deferred("_fail_graphics")
+	elif preview.begins_with("close"):
+		var close_rest := preview.substr(5)
+		var close_idx := start_idx
+		if close_rest.is_valid_int():
+			close_idx = int(close_rest)
+		call_deferred("_preview_close", close_idx)
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
@@ -1197,6 +1248,40 @@ func _probe_maps() -> void:
 		print("MAP %s props %d total %d tiles %d nodes %d load %d ms mem %d maxb %.3f final %.3f unfit %d %s" % [str(map.name), props.size(), clear_total, city_tiles, nodes, city_load_ms, mem, max_base, final_radius, unfit, str(roles)])
 	get_tree().quit()
 
+func _preview_close(idx: int) -> void:
+	start_round(idx)
+	playing = false
+	cam_hold = true
+	_set_match_hud(false)
+	if hud_layer:
+		hud_layer.visible = false
+	if hole_mesh:
+		hole_mesh.visible = false
+	var look := Vector3(0.0, 0.8, -8.0)
+	var best_score := -1.0
+	var best_id := ""
+	for o in props:
+		var p: Vector3 = o.pos
+		if p.z > -3.5 or p.length() > 20.0:
+			continue
+		var role := str(o.role)
+		if role == "clutter":
+			continue
+		var weight := float(o.base)
+		if role in ["barn", "ride", "boat", "stall"]:
+			weight += 1.6
+		var band := 1.0 - clampf(Vector2(p.x, p.z + 9.0).length() / 10.0, 0.0, 1.0)
+		var score := weight * (0.45 + band)
+		if score > best_score:
+			best_score = score
+			best_id = kind_id_of(int(o.kind))
+			look = p + Vector3(0.0, maxf(float(o.height) * 0.4, 0.35), 0.0)
+	print("CLOSE %s %s" % [str(map.get("name", "")), best_id])
+	if cam:
+		cam.fov = 44.0
+		cam.position = look + Vector3(2.1, 2.15, 4.9)
+		cam.look_at(look, Vector3.UP)
+
 func _preview_overview() -> void:
 	quality_locked = true
 	_apply_quality(1.0, Viewport.MSAA_2X, false)
@@ -1396,6 +1481,12 @@ func _build_world() -> void:
 	sun.light_energy = 0.4
 	sun.shadow_enabled = false
 	add_child(sun)
+	fill_light = DirectionalLight3D.new()
+	fill_light.rotation_degrees = Vector3(-24, 200, 0)
+	fill_light.light_color = Color(0.62, 0.78, 1.0)
+	fill_light.light_energy = 0.24
+	fill_light.shadow_enabled = false
+	add_child(fill_light)
 	var floor := StaticBody3D.new()
 	floor.collision_layer = 1
 	floor.collision_mask = 0
@@ -2092,14 +2183,23 @@ func _stage_showcase() -> void:
 		_bucket_move(o)
 		n += 1
 
+func _life_amp(id: String) -> float:
+	return float(LIFE_AMP.get(id, 0.0))
+
+func _prop_material(id: String) -> Material:
+	if _life_amp(id) > 0.0 and life_mat != null:
+		return life_mat
+	return kit_mat
+
 func _register_kit_item(item: Dictionary) -> void:
-	var spec := ["", kit_mat, 1.0, 1.0, int(item.points), str(item.role), int(item.mover), 0.0]
+	var mat := _prop_material(str(item.id))
+	var spec := ["", mat, 1.0, 1.0, int(item.points), str(item.role), int(item.mover), 0.0]
 	prop_defs.append(spec)
 	kind_lists.append(_empty_slots())
 	kind_meshes.append(item.mesh)
 	kind_native.append(item.size)
 	kind_base.append(float(item.base))
-	kind_mats.append(kit_mat)
+	kind_mats.append(mat)
 	kind_multimeshes.append(null)
 	kind_by_id[str(item.id)] = prop_defs.size() - 1
 
@@ -2131,13 +2231,14 @@ func _register_scaled(id: String, info: Dictionary, target: float, role: String,
 		hcap = 9.0
 	if size.y * scale > hcap:
 		scale = hcap / maxf(size.y, 0.05)
-	var spec := ["theme", kit_mat, scale, scale, points, role, 0, 0.0]
+	var mat := _prop_material(id)
+	var spec := ["theme", mat, scale, scale, points, role, 0, 0.0]
 	prop_defs.append(spec)
 	kind_lists.append(_empty_slots())
 	kind_meshes.append(info.mesh)
 	kind_native.append(info.size)
 	kind_base.append(basis)
-	kind_mats.append(kit_mat)
+	kind_mats.append(mat)
 	kind_multimeshes.append(null)
 	kind_by_id[id] = prop_defs.size() - 1
 
@@ -2241,6 +2342,10 @@ func _ensure_models() -> void:
 	kit_shader.code = KIT_SHADER
 	kit_mat = ShaderMaterial.new()
 	kit_mat.shader = kit_shader
+	var life_shader := Shader.new()
+	life_shader.code = LIFE_SHADER
+	life_mat = ShaderMaterial.new()
+	life_mat.shader = life_shader
 	prop_defs = [
 		["res://assets/kenney/roads/construction-cone.glb", mat_roads, 3.4, 3.4, 1, "small", 0, 0.0],
 		["res://assets/kenney/roads/construction-barrier.glb", mat_roads, 2.1, 2.1, 2, "small", 0, 0.0],
@@ -2956,6 +3061,36 @@ func _scatter_theme(layout: String) -> void:
 			_scatter_on(["haybale", "railfence", "fwheat"], 6, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
 			_scatter_on(["cow", "scare", "farmtractor"], 3, [SURF_GRASS, SURF_FIELD], 1.0)
 			_scatter_on(["redbarn"], 2, [SURF_DIRT, SURF_GRASS], 1.0)
+	_scatter_detail(layout)
+
+func _scatter_detail(layout: String) -> void:
+	var land := [SURF_GRASS, SURF_FIELD, SURF_DIRT]
+	match layout:
+		"candy":
+			_scatter_on(["blossom", "pebbles"], 8, [SURF_GRASS, SURF_CONCRETE, SURF_FIELD], 1.0)
+		"jungle":
+			_scatter_on(["blossom", "pebbles"], 8, land, 1.0)
+			_scatter_on(["puddle"], 3, [SURF_GRASS, SURF_DIRT], 1.0, Color(0.45, 0.78, 0.58))
+		"pirate":
+			_scatter_on(["pebbles"], 6, [SURF_SAND, SURF_WOOD, SURF_GRASS], 1.0)
+			_scatter_on(["puddle"], 3, [SURF_SAND, SURF_WOOD], 1.0, Color(0.5, 0.72, 0.9))
+		"snow":
+			_scatter_on(["pebbles"], 6, [SURF_SAND, SURF_GRASS], 1.0, Color(0.94, 0.96, 1.0))
+		"desert":
+			_scatter_on(["pebbles", "blossom"], 7, [SURF_SAND, SURF_DIRT], 1.0)
+			_scatter_on(["puddle"], 2, [SURF_SAND], 1.0, Color(0.35, 0.72, 0.78))
+		"toy":
+			_scatter_on(["blossom", "pebbles"], 7, [SURF_FIELD, SURF_CONCRETE, SURF_GRASS], 1.0)
+		"space":
+			_scatter_on(["pebbles"], 6, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0, Color(0.72, 0.76, 0.84))
+		"haunt":
+			_scatter_on(["pebbles"], 6, [SURF_GRASS, SURF_DIRT], 1.0, Color(0.42, 0.4, 0.36))
+			_scatter_on(["puddle"], 3, [SURF_GRASS, SURF_DIRT], 1.0, Color(0.32, 0.42, 0.3))
+		"fair":
+			_scatter_on(["blossom", "pebbles"], 8, [SURF_GRASS, SURF_CONCRETE, SURF_DIRT], 1.0)
+		_:
+			_scatter_on(["blossom", "pebbles"], 8, land, 1.0)
+			_scatter_on(["puddle"], 3, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0, Color(0.58, 0.8, 0.96))
 
 func _signature_ids(layout: String) -> Array:
 	match layout:
@@ -3410,6 +3545,8 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 		spd = randf_range(0.55, 0.85)
 	elif mover == 2:
 		spd = randf_range(1.3, 2.1)
+	elif mover == 4:
+		spd = randf_range(0.4, 0.75)
 	var tint := Color.WHITE
 	var role := str(spec[5])
 	if role in ["building", "wide", "house", "tower"]:
@@ -3417,6 +3554,9 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 		if palette.is_empty():
 			palette = [Color(0.76, 0.36, 0.36), Color(0.84, 0.70, 0.34), Color(0.36, 0.60, 0.64), Color(0.78, 0.48, 0.52), Color(0.40, 0.50, 0.72)]
 		tint = palette[randi() % palette.size()]
+		tint = Color(tint.r * randf_range(0.94, 1.06), tint.g * randf_range(0.94, 1.06), tint.b * randf_range(0.94, 1.06))
+	else:
+		tint = Color(randf_range(0.92, 1.08), randf_range(0.92, 1.08), randf_range(0.92, 1.08))
 	var chunk := _chunk_for(p, mover)
 	var list: Array = (kind_lists[ki] as Array)[chunk]
 	var o := {
@@ -3445,6 +3585,8 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 		"sink": -1,
 		"faded": false,
 		"uid": prop_seq,
+		"phase": randf() * TAU,
+		"lspd": randf_range(1.15, 2.35),
 		"fadeable": role in ["building", "wide", "house", "tower", "barn", "ride", "tank", "bus", "boat", "truck", "landmark"],
 	}
 	prop_seq += 1
@@ -3501,6 +3643,9 @@ func _build_kind_multimesh(ki: int) -> void:
 	var mms: Array = []
 	mms.resize(SLOT_COUNT)
 	var any := false
+	var kid := kind_id_of(ki)
+	var amp := _life_amp(kid)
+	var lod := _lod_end(str(prop_defs[ki][5]), kid)
 	for c in SLOT_COUNT:
 		var list: Array = slots[c]
 		if list.is_empty():
@@ -3510,7 +3655,88 @@ func _build_kind_multimesh(ki: int) -> void:
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.use_colors = true
+		if amp > 0.0:
+			mm.use_custom_data = true
 		mm.mesh = kind_meshes[ki]
+		mm.instance_count = list.size()
+		mm.visible_instance_count = list.size()
+		for obj in list:
+			mm.set_instance_transform(obj.index, obj.xform)
+			mm.set_instance_color(obj.index, obj.color)
+			if amp > 0.0:
+				mm.set_instance_custom_data(obj.index, Color(amp, float(obj.phase), float(obj.lspd), 1.0))
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		inst.material_override = kind_mats[ki]
+		inst.custom_aabb = _chunk_aabb(c, -6.0, 36.0)
+		inst.extra_cull_margin = 0.0
+		if c < STATIC_CHUNKS and lod > 0.0:
+			inst.visibility_range_end = lod
+			inst.visibility_range_end_margin = 8.0
+			inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		_no_shadow(inst)
+		_add_city(inst)
+		mms[c] = mm
+	kind_multimeshes[ki] = mms if any else null
+	if _wants_impostor(kid):
+		_build_impostors(ki, slots, kid)
+
+func _wants_impostor(id: String) -> bool:
+	return id in ["jpalm", "jpalmtall", "ppalm", "dpalm", "hpine", "htree"]
+
+func _impostor_color(id: String) -> Color:
+	if id == "htree":
+		return Color(0.34, 0.3, 0.26)
+	if id == "hpine":
+		return Color(0.1, 0.4, 0.2)
+	return Color(0.14, 0.52, 0.22)
+
+func _card_quad(st: SurfaceTool, w: float, h: float, yaw: float, top: Color, bot: Color) -> void:
+	var c := cos(yaw)
+	var s := sin(yaw)
+	var dx := c * w
+	var dz := s * w
+	var a := Vector3(-dx, 0.0, -dz)
+	var b := Vector3(dx, 0.0, dz)
+	var c0 := Vector3(dx, h, dz)
+	var d := Vector3(-dx, h, -dz)
+	var nrm := Vector3(-s, 0.72, c).normalized()
+	var pts := [a, b, c0, a, c0, d]
+	var cols := [bot, bot, top, bot, top, top]
+	for i in pts.size():
+		st.set_normal(nrm)
+		st.set_color(cols[i])
+		st.add_vertex(pts[i])
+	var back := -nrm
+	var pts_b := [a, d, c0, a, c0, b]
+	var cols_b := [bot, top, top, bot, top, bot]
+	for i in pts_b.size():
+		st.set_normal(back)
+		st.set_color(cols_b[i])
+		st.add_vertex(pts_b[i])
+
+func _cross_card(size: Vector3, col: Color) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var h := maxf(size.y, 0.5)
+	var w := maxf(maxf(size.x, size.z) * 0.42, 0.25)
+	var bot := Color(col.r * 0.45, col.g * 0.45, col.b * 0.42)
+	_card_quad(st, w, h, 0.0, col, bot)
+	_card_quad(st, w, h, PI * 0.5, col, bot)
+	return st.commit()
+
+func _build_impostors(ki: int, slots: Array, id: String) -> void:
+	var mesh := _cross_card(kind_native[ki], _impostor_color(id))
+	for c in SLOT_COUNT:
+		if c >= STATIC_CHUNKS:
+			continue
+		var list: Array = slots[c]
+		if list.is_empty():
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = mesh
 		mm.instance_count = list.size()
 		mm.visible_instance_count = list.size()
 		for obj in list:
@@ -3518,21 +3744,20 @@ func _build_kind_multimesh(ki: int) -> void:
 			mm.set_instance_color(obj.index, obj.color)
 		var inst := MultiMeshInstance3D.new()
 		inst.multimesh = mm
-		inst.material_override = kind_mats[ki]
+		inst.material_override = kit_mat
 		inst.custom_aabb = _chunk_aabb(c, -6.0, 36.0)
 		inst.extra_cull_margin = 0.0
-		if c < STATIC_CHUNKS and not list.is_empty():
-			var lod := _lod_end(str(list[0].get("role", "")))
-			if lod > 0.0:
-				inst.visibility_range_end = lod
-				inst.visibility_range_end_margin = 6.0
-				inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		inst.visibility_range_begin = 34.0
+		inst.visibility_range_begin_margin = 10.0
+		inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		_no_shadow(inst)
 		_add_city(inst)
-		mms[c] = mm
-	kind_multimeshes[ki] = mms if any else null
 
-func _lod_end(role: String) -> float:
+func _lod_end(role: String, id: String) -> float:
+	if _wants_impostor(id):
+		return 48.0
+	if role == "clutter":
+		return 22.0
 	if role in ["building", "wide", "house", "tower", "barn", "ride", "tank", "boat", "landmark"]:
 		return 0.0
 	if role in ["tree", "palm", "lamp", "truck", "bus", "dumpster"]:
@@ -4903,6 +5128,8 @@ func _process(delta: float) -> void:
 			_tick_movers(delta)
 			_tick_rivals(delta)
 			_activate_nearby()
+	elif cam_hold:
+		_tick_movers(delta)
 	_smooth_camera(delta)
 	hole_open = shown_radius
 	hole_mesh.position = hole_pos
@@ -4976,6 +5203,16 @@ func _tick_movers(delta: float) -> void:
 		if not hot.has(chunk):
 			hot[chunk] = _mover_hot(chunk)
 		if not bool(hot[chunk]):
+			continue
+		if int(o.mover) == 4:
+			o.yaw = float(o.yaw) + float(o.speed) * delta
+			var spin_basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
+			var spin_xf := Transform3D(spin_basis, o.pos)
+			o.xform = spin_xf
+			if bool(o.in_mesh):
+				var spin_mm := _mm_of(o)
+				if spin_mm:
+					spin_mm.set_instance_transform(int(o.index), spin_xf)
 			continue
 		var dir: Vector3 = o.dir
 		var spd := float(o.speed)
@@ -5463,6 +5700,29 @@ func _motif_for(layout: String) -> float:
 		_:
 			return 0.0
 
+func _theme_light(layout: String) -> Dictionary:
+	match layout:
+		"candy":
+			return {"sun_e": 1.02, "amb": Color(1.0, 0.9, 0.95), "amb_e": 0.58, "fill": Color(1.0, 0.68, 0.82), "fill_e": 0.3}
+		"jungle":
+			return {"sun_e": 0.96, "amb": Color(0.78, 0.92, 0.72), "amb_e": 0.52, "fill": Color(0.55, 0.82, 0.48), "fill_e": 0.26}
+		"pirate":
+			return {"sun_e": 1.08, "amb": Color(1.0, 0.9, 0.78), "amb_e": 0.56, "fill": Color(0.55, 0.74, 1.0), "fill_e": 0.28}
+		"snow":
+			return {"sun_e": 1.12, "amb": Color(0.82, 0.9, 1.0), "amb_e": 0.66, "fill": Color(0.7, 0.82, 1.0), "fill_e": 0.32}
+		"desert":
+			return {"sun_e": 1.18, "amb": Color(1.0, 0.9, 0.72), "amb_e": 0.5, "fill": Color(1.0, 0.72, 0.42), "fill_e": 0.22}
+		"toy":
+			return {"sun_e": 1.04, "amb": Color(1.0, 0.94, 0.88), "amb_e": 0.6, "fill": Color(0.7, 0.78, 1.0), "fill_e": 0.28}
+		"space":
+			return {"sun_e": 1.16, "amb": Color(0.7, 0.78, 0.95), "amb_e": 0.42, "fill": Color(0.45, 0.62, 1.0), "fill_e": 0.2}
+		"haunt":
+			return {"sun_e": 0.82, "amb": Color(0.72, 0.62, 0.84), "amb_e": 0.48, "fill": Color(0.55, 0.4, 0.72), "fill_e": 0.22}
+		"fair":
+			return {"sun_e": 1.08, "amb": Color(1.0, 0.92, 0.84), "amb_e": 0.58, "fill": Color(1.0, 0.62, 0.48), "fill_e": 0.3}
+		_:
+			return {"sun_e": 1.05, "amb": Color(1.0, 0.96, 0.86), "amb_e": 0.56, "fill": Color(0.68, 0.84, 1.0), "fill_e": 0.26}
+
 func _apply_theme(m: Dictionary) -> void:
 	sky_mat.sky_top_color = m.sky_top
 	sky_mat.sky_horizon_color = m.horizon
@@ -5472,8 +5732,15 @@ func _apply_theme(m: Dictionary) -> void:
 	if skirt_mat:
 		skirt_mat.albedo_color = m.ground
 	sun.light_color = m.sun
-	sun.light_energy = 0.62
-	sun.rotation_degrees = Vector3(-62, float(m.sun_yaw), 0)
+	var look := _theme_light(str(m.layout))
+	sun.light_energy = float(look.sun_e)
+	sun.rotation_degrees = Vector3(-58, float(m.sun_yaw), 0)
+	world_env.ambient_light_color = look.amb
+	world_env.ambient_light_energy = float(look.amb_e)
+	if fill_light:
+		fill_light.light_color = look.fill
+		fill_light.light_energy = float(look.fill_e)
+		fill_light.rotation_degrees = Vector3(-22, float(m.sun_yaw) + 168.0, 0)
 	var paints: Array = m.get("paints", [])
 	for i in ground_mats.size():
 		var mat := ground_mats[i] as ShaderMaterial
