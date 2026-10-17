@@ -32,6 +32,21 @@ static func defs() -> Array:
 		_def("truck", "truck", 18, 1.08, _truck(), 2),
 		_def("bike", "small", 3, 0.36, _bike()),
 		_def("police", "car", 14, 0.40, _police(), 2),
+		# Swallow `base` matches the footprint half-width so each kind sits on one rung.
+		_def("scooter", "small", 4, 0.58, _scooter()),
+		_def("kiosk", "stall", 6, 0.72, _kiosk()),
+		_def("cart", "stall", 12, 1.28, _cart()),
+		_def("fountain", "stall", 14, 1.40, _fountain()),
+		_def("bigtree", "tree", 12, 1.30, _bigtree()),
+		_def("cabana", "barn", 16, 1.72, _cabana()),
+		_def("gazebo", "barn", 20, 2.05, _gazebo()),
+		_def("warehouse", "landmark", 32, 2.55, _warehouse()),
+		_def("shop", "landmark", 34, 2.55, _shop()),
+		_def("silo", "tank", 36, 2.85, _silo()),
+		_def("apartment", "landmark", 44, 2.95, _apartment()),
+		_def("crane", "landmark", 48, 3.25, _crane()),
+		_def("windmill", "landmark", 52, 3.40, _windmill()),
+		_def("landmark", "landmark", 60, 3.62, _landmark()),
 	]
 
 static func _def(id: String, role: String, points: int, base: float, mesh: ArrayMesh, mover: int = 0) -> Dictionary:
@@ -375,6 +390,184 @@ static func _police() -> ArrayMesh:
 	_box(st, Vector3(0.24, 0.30, -0.75), Vector3(0.10, 0.06, 0.03), Color(0.85, 0.15, 0.12))
 	_wheel(st, Vector3(0, 0.16, 0.46), 0.16, 0.76, dark)
 	_wheel(st, Vector3(0, 0.16, -0.46), 0.16, 0.76, dark)
+	return _commit(st)
+
+static func _scooter() -> ArrayMesh:
+	var st := _begin()
+	var body := Color(0.86, 0.28, 0.32)
+	var dark := Color(0.16, 0.17, 0.20)
+	var metal := Color(0.72, 0.74, 0.78)
+	_box(st, Vector3(0, 0.20, 0.0), Vector3(0.28, 0.06, 1.00), body)
+	_box(st, Vector3(0, 0.48, -0.40), Vector3(0.06, 0.58, 0.06), metal)
+	_box(st, Vector3(0, 0.78, -0.40), Vector3(0.46, 0.045, 0.06), metal)
+	_wheel(st, Vector3(0, 0.16, 0.42), 0.16, 0.08, dark, 8)
+	_wheel(st, Vector3(0, 0.14, -0.42), 0.14, 0.07, dark, 8)
+	return _commit(st)
+
+static func _kiosk() -> ArrayMesh:
+	var st := _begin()
+	var wall := Color(0.90, 0.86, 0.72)
+	var trim := Color(0.20, 0.45, 0.62)
+	var awning := Color(0.82, 0.28, 0.32)
+	_box(st, Vector3(0, 0.70, 0), Vector3(1.20, 1.40, 1.05), wall)
+	_box(st, Vector3(0, 1.15, 0.48), Vector3(0.70, 0.42, 0.06), Color(0.55, 0.78, 0.86))
+	_box(st, Vector3(0, 1.55, 0.15), Vector3(1.50, 0.10, 1.20), awning)
+	_box(st, Vector3(0, 1.68, 0), Vector3(1.10, 0.22, 0.08), trim)
+	_box(st, Vector3(0, 0.40, 0.54), Vector3(0.40, 0.70, 0.06), Color(0.45, 0.32, 0.22))
+	return _commit(st)
+
+static func _cart() -> ArrayMesh:
+	var st := _begin()
+	var red := Color(0.78, 0.32, 0.28)
+	var cream := Color(0.95, 0.90, 0.78)
+	var dark := Color(0.18, 0.18, 0.20)
+	_box(st, Vector3(0, 0.78, 0), Vector3(2.40, 0.90, 1.55), red)
+	_box(st, Vector3(0, 1.30, 0), Vector3(2.56, 0.12, 1.70), Color(0.92, 0.74, 0.28))
+	_box(st, Vector3(0, 0.95, 0.80), Vector3(1.50, 0.42, 0.08), cream)
+	_box(st, Vector3(1.20, 0.62, 0), Vector3(0.12, 0.55, 0.80), cream)
+	_wheel(st, Vector3(0, 0.26, 0.62), 0.26, 1.70, dark)
+	_wheel(st, Vector3(0, 0.26, -0.62), 0.26, 1.70, dark)
+	return _commit(st)
+
+static func _fountain() -> ArrayMesh:
+	var st := _begin()
+	var stone := Color(0.78, 0.78, 0.74)
+	var water := Color(0.40, 0.68, 0.78)
+	_cyl(st, Vector3.ZERO, 1.40, 0.45, stone, 10)
+	_cyl(st, Vector3(0, 0.45, 0), 1.15, 0.12, water, 10)
+	_cyl(st, Vector3(0, 0.20, 0), 0.28, 1.15, stone, 8)
+	_cyl(st, Vector3(0, 1.35, 0), 0.42, 0.12, water, 8)
+	return _commit(st)
+
+static func _bigtree() -> ArrayMesh:
+	var st := _begin()
+	var trunk := Color(0.42, 0.30, 0.20)
+	var leaf := Color(0.28, 0.55, 0.26)
+	var leaf_b := Color(0.36, 0.62, 0.28)
+	_cyl(st, Vector3.ZERO, 1.30, 1.80, trunk, 8)
+	_cyl(st, Vector3(0, 1.70, 0), 0.70, 1.10, trunk, 7)
+	_box(st, Vector3(0, 3.40, 0), Vector3(3.40, 1.80, 3.20), leaf)
+	_box(st, Vector3(0.40, 4.30, 0.20), Vector3(2.40, 1.20, 2.20), leaf_b)
+	_box(st, Vector3(-0.80, 3.10, 0.60), Vector3(1.80, 1.10, 1.60), leaf_b)
+	return _commit(st)
+
+static func _cabana() -> ArrayMesh:
+	var st := _begin()
+	var straw := Color(0.78, 0.62, 0.28)
+	var wood := Color(0.50, 0.36, 0.22)
+	var cloth := Color(0.90, 0.48, 0.38)
+	_box(st, Vector3(0, 1.20, 0), Vector3(3.20, 1.40, 2.70), cloth)
+	_cone(st, Vector3(0, 1.80, 0), 1.72, 0.90, straw, 8)
+	_box(st, Vector3(-1.30, 0.55, -1.05), Vector3(0.14, 1.10, 0.14), wood)
+	_box(st, Vector3(1.30, 0.55, -1.05), Vector3(0.14, 1.10, 0.14), wood)
+	_box(st, Vector3(-1.30, 0.55, 1.05), Vector3(0.14, 1.10, 0.14), wood)
+	_box(st, Vector3(1.30, 0.55, 1.05), Vector3(0.14, 1.10, 0.14), wood)
+	return _commit(st)
+
+static func _gazebo() -> ArrayMesh:
+	var st := _begin()
+	var white := Color(0.92, 0.92, 0.88)
+	var roof := Color(0.55, 0.68, 0.55)
+	var wood := Color(0.48, 0.34, 0.22)
+	_cyl(st, Vector3.ZERO, 2.05, 0.16, wood, 8)
+	_cyl(st, Vector3(0, 0.16, 0), 0.10, 2.15, white, 6)
+	_box(st, Vector3(1.45, 1.15, 0), Vector3(0.12, 2.10, 0.12), white)
+	_box(st, Vector3(-1.45, 1.15, 0), Vector3(0.12, 2.10, 0.12), white)
+	_box(st, Vector3(0, 1.15, 1.45), Vector3(0.12, 2.10, 0.12), white)
+	_box(st, Vector3(0, 1.15, -1.45), Vector3(0.12, 2.10, 0.12), white)
+	_cone(st, Vector3(0, 2.15, 0), 2.35, 1.15, roof, 8)
+	_cyl(st, Vector3(0, 3.20, 0), 0.06, 0.55, white, 5)
+	return _commit(st)
+
+static func _warehouse() -> ArrayMesh:
+	var st := _begin()
+	var wall := Color(0.62, 0.64, 0.66)
+	var door := Color(0.32, 0.36, 0.40)
+	var stripe := Color(0.78, 0.55, 0.18)
+	_box(st, Vector3(0, 1.90, 0), Vector3(4.70, 3.80, 5.00), wall)
+	_box(st, Vector3(0, 3.90, 0), Vector3(4.90, 0.24, 5.10), Color(0.45, 0.48, 0.50))
+	_box(st, Vector3(0, 1.30, 2.52), Vector3(2.10, 2.30, 0.08), door)
+	_box(st, Vector3(0, 3.10, 2.54), Vector3(3.20, 0.24, 0.08), stripe)
+	return _commit(st)
+
+static func _shop() -> ArrayMesh:
+	var st := _begin()
+	var wall := Color(0.93, 0.90, 0.84)
+	var glass := Color(0.55, 0.75, 0.84)
+	var awning := Color(0.78, 0.28, 0.34)
+	_box(st, Vector3(0, 2.30, 0), Vector3(5.10, 4.60, 3.60), wall)
+	_box(st, Vector3(0, 1.50, 1.82), Vector3(3.40, 2.20, 0.08), glass)
+	_box(st, Vector3(0, 0.70, 1.84), Vector3(1.10, 1.30, 0.10), Color(0.40, 0.28, 0.20))
+	_box(st, Vector3(0, 4.15, 0.40), Vector3(5.10, 0.22, 2.20), awning)
+	_box(st, Vector3(0, 4.55, 0), Vector3(3.20, 0.55, 0.12), Color(0.20, 0.40, 0.58))
+	return _commit(st)
+
+static func _silo() -> ArrayMesh:
+	var st := _begin()
+	var steel := Color(0.72, 0.74, 0.76)
+	var band := Color(0.55, 0.58, 0.60)
+	_cyl(st, Vector3.ZERO, 2.85, 6.40, steel, 10)
+	_cyl(st, Vector3(0, 2.20, 0), 2.85, 0.28, band, 10)
+	_cyl(st, Vector3(0, 4.40, 0), 2.85, 0.22, band, 10)
+	_cone(st, Vector3(0, 6.40, 0), 2.85, 1.50, Color(0.55, 0.62, 0.58), 10)
+	_box(st, Vector3(1.40, 0.70, 2.40), Vector3(1.10, 1.40, 0.80), Color(0.62, 0.48, 0.32))
+	return _commit(st)
+
+static func _apartment() -> ArrayMesh:
+	var st := _begin()
+	var wall := Color(0.86, 0.84, 0.80)
+	var glass := Color(0.45, 0.62, 0.74)
+	var ledge := Color(0.55, 0.56, 0.58)
+	_box(st, Vector3(0, 5.40, 0), Vector3(5.90, 10.80, 4.40), wall)
+	_box(st, Vector3(0, 10.90, 0), Vector3(5.90, 0.28, 4.40), ledge)
+	for row in 4:
+		var y := 2.20 + float(row) * 2.15
+		_box(st, Vector3(-1.30, y, 2.22), Vector3(0.70, 0.90, 0.08), glass)
+		_box(st, Vector3(0.20, y, 2.22), Vector3(0.70, 0.90, 0.08), glass)
+		_box(st, Vector3(1.60, y, 2.22), Vector3(0.70, 0.90, 0.08), glass)
+	_box(st, Vector3(0, 0.90, 2.24), Vector3(1.20, 1.70, 0.10), Color(0.35, 0.32, 0.30))
+	return _commit(st)
+
+static func _crane() -> ArrayMesh:
+	var st := _begin()
+	var yellow := Color(0.90, 0.72, 0.16)
+	var steel := Color(0.45, 0.48, 0.52)
+	var cab := Color(0.30, 0.55, 0.70)
+	_box(st, Vector3(0, 0.35, 0), Vector3(6.50, 0.70, 4.20), steel)
+	_box(st, Vector3(0, 4.80, 0), Vector3(0.55, 8.20, 0.55), yellow)
+	_box(st, Vector3(1.80, 8.60, 0), Vector3(4.20, 0.35, 0.40), yellow)
+	_box(st, Vector3(-1.40, 8.40, 0), Vector3(2.20, 0.28, 0.35), steel)
+	_box(st, Vector3(0.40, 6.40, 0), Vector3(0.90, 0.80, 0.80), cab)
+	_box(st, Vector3(3.60, 7.80, 0), Vector3(0.12, 1.40, 0.12), steel)
+	return _commit(st)
+
+static func _windmill() -> ArrayMesh:
+	var st := _begin()
+	var stone := Color(0.78, 0.74, 0.66)
+	var cap := Color(0.55, 0.34, 0.26)
+	var blade := Color(0.90, 0.90, 0.86)
+	_cyl(st, Vector3.ZERO, 3.40, 1.10, stone, 8)
+	_cyl(st, Vector3(0, 1.10, 0), 1.35, 6.40, stone, 8)
+	_cone(st, Vector3(0, 7.40, 0), 1.70, 1.40, cap, 8)
+	_box(st, Vector3(0, 7.20, 0.20), Vector3(0.28, 4.60, 0.08), blade)
+	_box(st, Vector3(0, 7.20, 0.20), Vector3(4.60, 0.28, 0.08), blade)
+	_box(st, Vector3(0, 1.40, 1.20), Vector3(0.90, 1.60, 0.12), Color(0.40, 0.28, 0.20))
+	return _commit(st)
+
+static func _landmark() -> ArrayMesh:
+	var st := _begin()
+	var stone := Color(0.82, 0.80, 0.74)
+	var dark := Color(0.35, 0.38, 0.44)
+	var gold := Color(0.86, 0.68, 0.28)
+	_box(st, Vector3(0, 0.45, 0), Vector3(7.24, 0.90, 7.24), stone)
+	_box(st, Vector3(0, 1.05, 0), Vector3(5.40, 0.35, 5.40), dark)
+	_cyl(st, Vector3(0, 1.30, 0), 1.15, 8.40, stone, 8)
+	_cyl(st, Vector3(0, 9.70, 0), 1.45, 0.45, gold, 8)
+	_cone(st, Vector3(0, 10.15, 0), 0.55, 2.40, gold, 8)
+	_box(st, Vector3(2.20, 3.40, 2.20), Vector3(0.40, 4.20, 0.40), stone)
+	_box(st, Vector3(-2.20, 3.40, 2.20), Vector3(0.40, 4.20, 0.40), stone)
+	_box(st, Vector3(2.20, 3.40, -2.20), Vector3(0.40, 4.20, 0.40), stone)
+	_box(st, Vector3(-2.20, 3.40, -2.20), Vector3(0.40, 4.20, 0.40), stone)
 	return _commit(st)
 
 static func _bike() -> ArrayMesh:

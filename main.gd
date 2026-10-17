@@ -55,6 +55,13 @@ const SURF_DOCK := 9
 const LEVEL_SCORE := [0, 14, 36, 70, 120, 190]
 const LEVEL_RADIUS := [0.50, 0.78, 1.05, 1.42, 1.9, 2.5]
 const CLEAR_RATIO := 0.95
+# Swallow-size rungs. Each band is what "just fits" at the next step from the
+# starting hole up to just under a 10x clear, so every radius has new food.
+const TIER_LO := [0.05, 0.48, 0.84, 1.20, 1.58, 1.96, 2.34, 2.72, 3.10, 3.48]
+const TIER_HI := [0.48, 0.84, 1.20, 1.58, 1.96, 2.34, 2.72, 3.10, 3.48, 3.86]
+const TIER_NAME := ["tiny", "small", "compact", "medium", "mid", "large", "big", "huge", "massive", "landmark"]
+const TIER_MIN := [240, 360, 260, 200, 150, 120, 96, 72, 56, 40]
+const BASE_CAP := 3.86
 const COIN_RATE := 0.012
 const CLEAR_COIN_BONUS := 100
 const RIVAL_GROW := 0.40
@@ -553,6 +560,10 @@ func _ready() -> void:
 		call_deferred("_probe_latency")
 	elif preview == "growtime":
 		call_deferred("_probe_grow_time")
+	elif preview == "kinds":
+		call_deferred("_probe_kinds")
+	elif preview == "tiers":
+		call_deferred("_probe_tiers")
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
@@ -966,6 +977,86 @@ func _preview_size() -> void:
 	_set_chrome(false)
 	_set_match_hud(true)
 	_refresh_hud()
+
+func _probe_kinds() -> void:
+	_ensure_models()
+	var ids: Array = kind_by_id.keys()
+	ids.sort()
+	for id in ids:
+		var ki: int = int(kind_by_id[id])
+		var scale := float(prop_defs[ki][2])
+		var placed := float(kind_base[ki]) * scale
+		var native: Vector3 = kind_native[ki]
+		print("KIND %s role=%s kbase=%.3f scale=%.2f placed=%.3f foot=%.2f h=%.2f" % [str(id), str(prop_defs[ki][5]), float(kind_base[ki]), scale, placed, maxf(native.x, native.z), native.y])
+	get_tree().quit()
+
+func _probe_tiers() -> void:
+	for i in CatalogScript.maps().size():
+		start_round(i)
+		var counts := _tier_counts()
+		var max_in: Array = []
+		var min_in: Array = []
+		var districts: Array = []
+		max_in.resize(TIER_NAME.size())
+		min_in.resize(TIER_NAME.size())
+		districts.resize(TIER_NAME.size())
+		for t in TIER_NAME.size():
+			max_in[t] = 0.0
+			min_in[t] = 99.0
+			districts[t] = {}
+		var near_tiny := 0
+		var near_small := 0
+		for o in props:
+			if not bool(o.get("alive", true)):
+				continue
+			var base := float(o.base)
+			var t := _tier_of(base)
+			max_in[t] = maxf(float(max_in[t]), base)
+			min_in[t] = minf(float(min_in[t]), base)
+			var d := _district(int(round((o.pos as Vector3).x)), int(round((o.pos as Vector3).z)))
+			(districts[t] as Dictionary)[d] = int((districts[t] as Dictionary).get(d, 0)) + 1
+			var home := (o.pos as Vector3).length()
+			if home < 30.0 and t == 0:
+				near_tiny += 1
+			elif home < 30.0 and t == 1:
+				near_small += 1
+		var unfit := 0
+		var limit := final_radius * FIT_RATIO
+		for o in props:
+			if float(o.base) > limit:
+				unfit += 1
+		var id_name := {}
+		for key in kind_by_id.keys():
+			id_name[int(kind_by_id[key])] = str(key)
+		var mixes: Array = []
+		mixes.resize(TIER_NAME.size())
+		for t in TIER_NAME.size():
+			mixes[t] = {}
+		for o in props:
+			if not bool(o.get("alive", true)):
+				continue
+			var t := _tier_of(float(o.base))
+			var nm := str(id_name.get(int(o.kind), "?"))
+			(mixes[t] as Dictionary)[nm] = int((mixes[t] as Dictionary).get(nm, 0)) + 1
+		print("TIERMAP %s props %d final %.3f maxb %.3f limit %.3f unfit %d near30 tiny %d small %d" % [str(map.name), props.size(), final_radius, map_max_base, limit, unfit, near_tiny, near_small])
+		for t in TIER_NAME.size():
+			var pairs: Array = []
+			for nm in (mixes[t] as Dictionary).keys():
+				pairs.append({"id": str(nm), "n": int((mixes[t] as Dictionary)[nm])})
+			pairs.sort_custom(func(a, b): return int(a.n) > int(b.n))
+			var bits: PackedStringArray = []
+			for k in mini(4, pairs.size()):
+				bits.append("%s %d" % [str(pairs[k].id), int(pairs[k].n)])
+			print("MIX %s %s %s" % [str(map.name), str(TIER_NAME[t]), " ".join(bits)])
+		for t in TIER_NAME.size():
+			var n := int(counts[t])
+			var mx := float(max_in[t])
+			var unlock := mx / FIT_RATIO if n > 0 else 0.0
+			var mult := unlock / maxf(_start_radius(), 0.001)
+			var edible := n > 0 and unlock < final_radius - 0.02
+			var dist_n := (districts[t] as Dictionary).size()
+			print("TIER %s %-9s n=%4d band=%.2f-%.2f max=%.2f unlock=%.2f x%.2f %s dist=%d" % [str(map.name), str(TIER_NAME[t]), n, float(TIER_LO[t]), float(TIER_HI[t]), mx, unlock, mult, "edible" if edible else "SHORT", dist_n])
+	get_tree().quit()
 
 func _probe_maps() -> void:
 	for i in CatalogScript.maps().size():
@@ -1841,10 +1932,10 @@ func _ensure_models() -> void:
 		["res://assets/kenney/roads/dumpster.glb", mat_roads, 2.7, 2.7, 4, "dumpster", 0, 0.0],
 		["res://assets/kenney/suburban/tree-large.glb", mat_suburban, 3.2, 3.2, 6, "tree", 0, 0.0],
 		["res://assets/kenney/nature/tree_simple.glb", mat_nature, 2.4, 2.2, 8, "tree", 0, 0.0],
-		["res://assets/kenney/cars/sedan.glb", mat_cars, 0.62, 0.62, 12, "car", 2, 0.0],
-		["res://assets/kenney/cars/taxi.glb", mat_cars, 0.58, 0.58, 12, "car", 2, 0.0],
-		["res://assets/kenney/cars/hatchback-sports.glb", mat_cars, 0.6, 0.6, 14, "car", 2, 0.0],
-		["res://assets/kenney/cars/van.glb", mat_cars, 0.55, 0.55, 16, "car", 2, 0.0],
+		["res://assets/kenney/cars/sedan.glb", mat_cars, 1.40, 1.40, 12, "car", 2, 0.0],
+		["res://assets/kenney/cars/taxi.glb", mat_cars, 1.25, 1.25, 12, "car", 2, 0.0],
+		["res://assets/kenney/cars/hatchback-sports.glb", mat_cars, 1.25, 1.25, 14, "car", 2, 0.0],
+		["res://assets/kenney/cars/van.glb", mat_cars, 1.65, 1.65, 16, "car", 2, 0.0],
 		["res://assets/kenney/commercial/low-detail-building-a.glb", mat_commercial, 4.0, 2.3, 22, "building", 0, 0.0],
 		["res://assets/kenney/commercial/low-detail-building-b.glb", mat_commercial, 3.8, 2.5, 22, "building", 0, 0.0],
 		["res://assets/kenney/commercial/low-detail-building-c.glb", mat_commercial, 4.1, 2.15, 24, "building", 0, 0.0],
@@ -2206,7 +2297,213 @@ func _tile_multimesh(mesh: Mesh, items: Array, has_yaw: bool, mat: Material) -> 
 		_no_shadow(inst)
 		_add_city(inst)
 
+func _tier_of(base: float) -> int:
+	var b := clampf(base, 0.0, BASE_CAP)
+	for t in range(TIER_LO.size() - 1, -1, -1):
+		if b >= float(TIER_LO[t]) - 0.0001:
+			return t
+	return 0
+
+func _tier_counts() -> Array:
+	var counts: Array = []
+	counts.resize(TIER_NAME.size())
+	counts.fill(0)
+	for o in props:
+		if not bool(o.get("alive", true)):
+			continue
+		counts[_tier_of(float(o.base))] += 1
+	return counts
+
+func _natural_base(id: String) -> float:
+	if not kind_by_id.has(id):
+		return 0.0
+	var ki: int = int(kind_by_id[id])
+	return float(kind_base[ki]) * float(prop_defs[ki][2])
+
+func _scale_cap(id: String) -> float:
+	if id in ["scooter", "kiosk", "cart", "fountain", "bigtree", "cabana", "gazebo", "warehouse", "shop", "silo", "apartment", "crane", "windmill", "landmark"]:
+		return 1.18
+	if id == "planter":
+		return 3.20
+	if id == "van":
+		return 1.50
+	if id in ["sedan", "taxi", "hatch"]:
+		return 1.35
+	if id in ["police", "forklift", "tractor"]:
+		return 2.40
+	if id == "bus":
+		return 2.20
+	if id == "truck":
+		return 2.35
+	if not kind_by_id.has(id):
+		return 1.0
+	var role := str(prop_defs[int(kind_by_id[id])][5])
+	if role in ["tower", "barn", "ride"]:
+		return 2.55
+	if role in ["building", "wide", "house", "tank", "boat"]:
+		return 2.15
+	if role in ["tree", "palm"]:
+		return 1.80
+	return 1.45
+
+func _can_reach(id: String, lo: float, hi: float) -> bool:
+	var natural := _natural_base(id)
+	if natural < 0.02:
+		return false
+	var min_b := natural * 0.80
+	var max_b := minf(natural * _scale_cap(id), BASE_CAP)
+	return max_b >= lo and min_b <= hi
+
+func _target_base(id: String, lo: float, hi: float) -> float:
+	var natural := _natural_base(id)
+	if natural < 0.02:
+		return -1.0
+	var min_b := natural * 0.80
+	var max_b := minf(natural * _scale_cap(id), BASE_CAP)
+	var a := maxf(lo, min_b)
+	var b := minf(hi, max_b)
+	if a > b:
+		return -1.0
+	return randf_range(a, b)
+
+func _ladder_ids(layout: String) -> Array:
+	var themed: Array = []
+	match layout:
+		"grid":
+			themed = ["cone", "hydrant", "barrier", "dumpster", "planter", "planter", "kiosk", "scooter", "scooter", "sedan", "taxi", "hatch", "cart", "stall", "bigtree", "bigtree", "van", "bus", "truck", "house_a", "gazebo", "shop", "wide", "apartment", "tower_a", "tower_c", "landmark"]
+		"suburb":
+			themed = ["mailbox", "planter", "planter", "fence", "bike", "scooter", "scooter", "bench", "kiosk", "tree_small", "bigtree", "bigtree", "sedan", "van", "cart", "house_a", "house_b", "house_c", "gazebo", "truck", "shop", "apartment", "landmark"]
+		"park":
+			themed = ["bush", "bench", "picnic", "chair", "bike", "scooter", "fountain", "bigtree", "bigtree", "tree_large", "stall", "cart", "kiosk", "cabana", "gazebo", "shop", "landmark"]
+		"boardwalk":
+			themed = ["umbrella", "chair", "surf", "palm", "bike", "scooter", "stall", "cart", "kiosk", "cabana", "truck", "van", "gazebo", "shop", "apartment", "landmark"]
+		"farm":
+			themed = ["hay", "animal", "fence", "tractor", "tree_large", "bigtree", "cart", "kiosk", "gazebo", "barn", "silo", "truck", "shop", "windmill", "landmark"]
+		"harbor":
+			themed = ["crate", "cone", "barrier", "forklift", "pipe", "boat", "tank", "truck", "cart", "kiosk", "warehouse", "shop", "crane", "landmark"]
+		"campus":
+			themed = ["bench", "locker", "bike", "scooter", "planter", "kiosk", "bus", "van", "cart", "bigtree", "gazebo", "house_a", "wide", "shop", "apartment", "landmark"]
+		"fair":
+			themed = ["cone", "bench", "stall", "ride", "cart", "kiosk", "bike", "scooter", "gazebo", "shop", "apartment", "landmark"]
+		"industrial":
+			themed = ["cone", "barrier", "crate", "pipe", "forklift", "tank", "truck", "kiosk", "warehouse", "silo", "shop", "crane", "landmark"]
+		_:
+			themed = ["cone", "hydrant", "kiosk", "scooter", "sedan", "taxi", "cart", "van", "bus", "truck", "gazebo", "shop", "apartment", "tower_a", "tower_c", "landmark"]
+	var common := ["cone", "bin", "sign", "mailbox", "person_a", "hydrant", "bike", "scooter", "bench", "kiosk", "cart", "sedan", "taxi", "bigtree", "van", "gazebo", "bus", "truck", "shop", "apartment", "landmark"]
+	var ids: Array = []
+	ids.append_array(themed)
+	ids.append_array(themed)
+	ids.append_array(common)
+	return ids
+
+func _tier_surface_ok(p: Vector3, tier: int) -> bool:
+	if _layout_blocked(p):
+		return false
+	if tier >= 3 and p.length() < 12.0:
+		return false
+	var s := _surf_f(p.x, p.z)
+	if s == SURF_WATER or s == SURF_TRACK:
+		return false
+	if tier >= 2 and s == SURF_ROAD:
+		return false
+	return true
+
+func _tier_pool(ids: Array, lo: float, hi: float) -> Array:
+	var pool: Array = []
+	for id in ids:
+		var key := str(id)
+		if _can_reach(key, lo, hi):
+			pool.append(key)
+	return pool
+
+func _try_tier_place(pool: Array, tier: int, p: Vector3) -> bool:
+	if not _tier_surface_ok(p, tier):
+		return false
+	var lo := float(TIER_LO[tier])
+	var hi := float(TIER_HI[tier]) - 0.008
+	var pick := str(pool[randi() % pool.size()])
+	var mid := (lo + hi) * 0.5
+	var half := (hi - lo) * 0.28
+	var target := _target_base(pick, maxf(lo, mid - half), minf(hi, mid + half))
+	if target < 0.0:
+		return false
+	var grow := target / _natural_base(pick)
+	return _place_id(pick, p, Vector3.ZERO, randf() * TAU, grow)
+
+func _district_point(d: int) -> Vector3:
+	var center := _district_center(d)
+	var reach := (CITY_HALF * 2.0) / 3.0 * 0.46
+	var ang := randf() * TAU
+	var rr := reach * sqrt(randf())
+	return center + Vector3(cos(ang) * rr, 0.0, sin(ang) * rr)
+
+func _scatter_tier(ids: Array, tier: int, need: int, near_spawn: bool) -> int:
+	var lo := float(TIER_LO[tier])
+	var hi := float(TIER_HI[tier]) - 0.008
+	var pool := _tier_pool(ids, lo, hi)
+	if pool.is_empty() or need <= 0:
+		return 0
+	var made := 0
+	if near_spawn:
+		var tries := 0
+		while made < need and tries < need * 40 and props.size() < PROP_CAP:
+			tries += 1
+			var ang := randf() * TAU
+			var inner := 4.2
+			var outer := 18.0 if made % 3 != 0 else 32.0
+			var rr := sqrt(randf_range(inner * inner, outer * outer))
+			var p := Vector3(cos(ang) * rr, 0.0, sin(ang) * rr)
+			if _try_tier_place(pool, tier, p):
+				made += 1
+		return made
+	var share := maxi(int(ceil(float(need) / 9.0)), 1)
+	for d in 9:
+		var got := 0
+		var tries := 0
+		while got < share and made < need and tries < share * 48 and props.size() < PROP_CAP:
+			tries += 1
+			if _try_tier_place(pool, tier, _district_point(d)):
+				got += 1
+				made += 1
+	var extra := 0
+	while made < need and extra < need * 50 and props.size() < PROP_CAP:
+		extra += 1
+		var span := CITY_HALF - 3.0
+		var p := Vector3(randf_range(-span, span), 0.0, randf_range(-span, span))
+		if _try_tier_place(pool, tier, p):
+			made += 1
+	return made
+
+func _balance_tiers() -> void:
+	var ids := _ladder_ids(str(map.get("layout", "grid")))
+	var counts := _tier_counts()
+	for t in TIER_NAME.size():
+		var need := int(TIER_MIN[t]) - int(counts[t])
+		if need > 0:
+			_scatter_tier(ids, t, need, t <= 1)
+
+func _seed_ladder() -> void:
+	# Large rungs go down first so their footprints claim ground before the
+	# street clutter fills every gap. Small snacks crowd the spawn.
+	var ids := _ladder_ids(str(map.get("layout", "grid")))
+	# Four waves, largest first inside each wave, so every district grows a
+	# full ladder instead of the biggest props paving the map.
+	var left: Array = []
+	left.resize(TIER_NAME.size())
+	for t in TIER_NAME.size():
+		left[t] = int(TIER_MIN[t]) if t >= 2 else 0
+	for _round in 4:
+		for t in range(TIER_NAME.size() - 1, 1, -1):
+			if int(left[t]) <= 0:
+				continue
+			var chunk := mini(int(ceil(float(TIER_MIN[t]) / 4.0)), int(left[t]))
+			left[t] = int(left[t]) - _scatter_tier(ids, t, chunk, false)
+	_scatter_tier(ids, 0, 220, true)
+	_scatter_tier(ids, 1, 180, true)
+	_scatter_tier(ids, 1, 100, false)
+
 func _populate() -> void:
+	_seed_ladder()
 	var layout := str(map.get("layout", "grid"))
 	if layout == "grid":
 		_fill_blocks(5, ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "tower_a", "tower_c"], 0.92, 1.55)
@@ -2325,6 +2622,7 @@ func _populate() -> void:
 		_edge_props(["hydrant", "bin", "cone", "sign", "crate"], 2, 200)
 		_crowd(100)
 	_dress_districts()
+	_balance_tiers()
 	_tint_animals()
 
 func _fill_blocks(step: int, ids: Array, grow_min: float, grow_max: float) -> void:
@@ -2458,8 +2756,12 @@ func _traffic(moving: int, parked: int) -> void:
 		var mover := 0 if parked_now else -1
 		var traffic_id := str(ids[made % ids.size()])
 		var traffic_grow := 1.0
-		if traffic_id == "bus" or traffic_id == "truck":
-			traffic_grow = 0.82
+		if traffic_id == "bus":
+			traffic_grow = 1.80
+		elif traffic_id == "truck":
+			traffic_grow = 1.95
+		elif traffic_id == "police":
+			traffic_grow = 2.20
 		if _place_id(traffic_id, at, use_dir, -1.0, traffic_grow, Color.WHITE, -1, mover):
 			made += 1
 
@@ -2508,8 +2810,10 @@ func _swallow_bucket(id: String) -> String:
 		return "cars"
 	if id in ["tree_small", "tree_large", "tree_simple", "palm"]:
 		return "trees"
-	if id in ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "house_a", "house_b", "house_c", "tower_a", "tower_c", "barn"]:
+	if id in ["bld_a", "bld_b", "bld_c", "bld_d", "wide", "house_a", "house_b", "house_c", "tower_a", "tower_c", "barn", "shop", "apartment", "warehouse", "gazebo", "cabana", "landmark", "windmill", "crane", "silo"]:
 		return "buildings"
+	if id == "bigtree":
+		return "trees"
 	if id in ["person_a", "person_b", "person_c"]:
 		return "people"
 	if id == "boat":
@@ -2689,6 +2993,12 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 	if str(spec[5]) in ["building", "wide", "house", "tower"]:
 		sy *= randf_range(0.86, 1.22)
 		sxz *= randf_range(0.94, 1.06)
+	var base := maxf(float(kind_base[ki]) * sxz, 0.05)
+	if base > BASE_CAP:
+		var cut := BASE_CAP / base
+		sxz *= cut
+		sy *= cut
+		base = BASE_CAP
 	var yaw_off := float(spec[7])
 	var yaw := yaw_in
 	if dir.length_squared() > 0.001:
@@ -2697,7 +3007,6 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 	var basis := Basis(Vector3.UP, yaw).scaled(scale)
 	var xform := Transform3D(basis, p)
 	var foot := maxf(native.x, native.z) * sxz * 0.5
-	var base := maxf(float(kind_base[ki]) * sxz, 0.05)
 	var height := native.y * sy
 	var mover := int(spec[6])
 	var spd := 0.0
@@ -2740,7 +3049,7 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 		"sink": -1,
 		"faded": false,
 		"uid": prop_seq,
-		"fadeable": role in ["building", "wide", "house", "tower", "barn", "ride", "tank", "bus", "boat", "truck"],
+		"fadeable": role in ["building", "wide", "house", "tower", "barn", "ride", "tank", "bus", "boat", "truck", "landmark"],
 	}
 	prop_seq += 1
 	o.pi = props.size()
@@ -2828,7 +3137,7 @@ func _build_kind_multimesh(ki: int) -> void:
 	kind_multimeshes[ki] = mms if any else null
 
 func _lod_end(role: String) -> float:
-	if role in ["building", "wide", "house", "tower", "barn", "ride", "tank", "boat"]:
+	if role in ["building", "wide", "house", "tower", "barn", "ride", "tank", "boat", "landmark"]:
 		return 0.0
 	if role in ["tree", "palm", "lamp", "truck", "bus", "dumpster"]:
 		return 56.0
