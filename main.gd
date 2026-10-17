@@ -20,7 +20,7 @@ const CAM_FOV := 56.0
 const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
 const SPEED_SCREEN := 1.0
-const POOL := 8
+const POOL := 40
 const FIT_RATIO := 0.84
 const POP_TIME := 0.42
 const GROW_MULTIPLE := 8.0
@@ -28,6 +28,9 @@ const SCREEN_FRAC_START := 0.25
 const SCREEN_FRAC_END := 0.40
 const RIVAL_CAP := 0.70
 const FALL_GRAVITY := 2.15
+const PIT_GRAVITY := 8.0
+const DROP_SNAP := 0.16
+const DROP_VY := -8.0
 const RIM_MASK := 8
 const RIM_COUNT := 16
 const COMBO_WINDOW := 1.15
@@ -298,6 +301,22 @@ var score := 0
 var time_left := ROUND_TIME
 var playing := true
 var edge_probe := false
+var latency_probe := false
+var lat_arm := false
+var lat_sample_now := false
+var lat_phase := "slide"
+var lat_frame := 0
+var lat_prop: Dictionary = {}
+var lat_burst: Array = []
+var lat_lines: PackedStringArray = []
+var lat_trace: PackedStringArray = []
+var lat_geo := -1
+var lat_fit := -1
+var lat_body := -1
+var lat_drop := -1
+var lat_y0 := 0.0
+var lat_hold := 0
+var lat_radius := 0.55
 var props: Array = []
 var movers: Array = []
 var active: Array = []
@@ -534,6 +553,8 @@ func _ready() -> void:
 		call_deferred("_preview_size")
 	elif preview == "eat":
 		call_deferred("_probe_edge_eat")
+	elif preview == "latency":
+		call_deferred("_probe_latency")
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
@@ -611,6 +632,215 @@ func _probe_edge_eat() -> void:
 		ok = ok and bool(outside.ok)
 	print("EAT_PROBE %s" % " | ".join(lines))
 	get_tree().quit(0 if ok else 1)
+
+func _probe_latency() -> void:
+	start_round(0)
+	playing = true
+	velocity = Vector3.ZERO
+	joy_held = false
+	for rv in rivals:
+		rv.alive = false
+		rv.respawn = 99999.0
+	_latency_begin_slide(0.55)
+	latency_probe = true
+	for _i in 180:
+		await get_tree().physics_frame
+		if lat_phase == "done":
+			break
+	print("LAT " + " || ".join(lat_lines))
+	get_tree().quit(0 if lat_phase == "done" else 1)
+
+func _latency_begin_slide(rad: float) -> void:
+	var sample := _probe_small_prop(rad)
+	lat_prop = sample
+	lat_phase = "slide"
+	lat_frame = 0
+	lat_geo = -1
+	lat_fit = -1
+	lat_body = -1
+	lat_drop = -1
+	lat_trace = PackedStringArray()
+	lat_hold = 0
+	if sample.is_empty():
+		lat_lines.append("slide r=%.2f no-prop" % rad)
+		lat_phase = "burst" if rad < 1.0 else "partial"
+		return
+	var base := float(sample.base)
+	var at := Vector3(18.0, 0.0, 14.0)
+	_plant_prop(sample, at)
+	lat_radius = rad
+	hole_radius = rad
+	shown_radius = rad
+	hole_open = rad
+	hole_pos = at + Vector3(-(rad - base * 0.16) - 0.2, 0.0, 0.0)
+	lat_y0 = _visual_y(sample)
+
+func _latency_advance() -> void:
+	lat_frame += 1
+	lat_sample_now = true
+	hole_radius = lat_radius
+	shown_radius = lat_radius
+	hole_open = lat_radius
+	if lat_phase == "slide":
+		hole_pos.x += 0.06
+	elif lat_phase == "burst":
+		if lat_frame == 1:
+			_latency_plant_burst()
+
+func _latency_sample() -> void:
+	if lat_phase == "slide":
+		_latency_sample_slide()
+	elif lat_phase == "burst":
+		_latency_sample_burst()
+	elif lat_phase == "partial":
+		_latency_sample_partial()
+
+func _latency_sample_slide() -> void:
+	if lat_prop.is_empty():
+		return
+	var base := float(lat_prop.base)
+	var dist := _xz_dist(lat_prop.pos if lat_prop.body == null else (lat_prop.body as RigidBody3D).global_position, hole_pos)
+	var y := _visual_y(lat_prop)
+	if lat_geo < 0 and dist < hole_radius:
+		lat_geo = lat_frame
+	if lat_fit < 0 and _center_in_opening(base, dist, hole_radius):
+		lat_fit = lat_frame
+	if lat_body < 0 and bool(lat_prop.in_body):
+		lat_body = lat_frame
+	if lat_drop < 0 and lat_fit >= 0 and (y < lat_y0 - 0.05 or not bool(lat_prop.alive)):
+		lat_drop = lat_frame
+	if lat_trace.size() < 16:
+		var by := -9.0
+		if lat_prop.body != null:
+			by = (lat_prop.body as RigidBody3D).global_position.y
+		lat_trace.append("%.2f/%.2f" % [y, by])
+	if lat_drop >= 0:
+		lat_hold += 1
+	if lat_hold >= 2 or lat_frame >= 28:
+		var vis := (lat_drop - lat_fit) if lat_drop >= 0 and lat_fit >= 0 else -1
+		var geo := (lat_drop - lat_geo) if lat_drop >= 0 and lat_geo >= 0 else -1
+		var act := (lat_body - lat_fit) if lat_body >= 0 and lat_fit >= 0 else -1
+		lat_lines.append("slide r=%.2f base=%.3f geo=%d fit=%d body=%d drop=%d visFrames=%d geoFrames=%d actFrames=%d ys=%s" % [hole_radius, base, lat_geo, lat_fit, lat_body, lat_drop, vis, geo, act, ",".join(lat_trace)])
+		if hole_radius < 1.0:
+			_latency_begin_slide(4.0)
+		else:
+			_latency_begin_burst()
+
+func _latency_begin_burst() -> void:
+	lat_phase = "burst"
+	lat_frame = 0
+	lat_burst = []
+	lat_fit = -1
+	lat_drop = -1
+	lat_hold = 0
+	lat_radius = 1.8
+	hole_radius = 1.8
+	shown_radius = 1.8
+	hole_open = 1.8
+	hole_pos = Vector3(-22.0, 0.0, 16.0)
+
+func _latency_plant_burst() -> void:
+	var used := {}
+	var n := 0
+	for o in props:
+		if n >= 12:
+			break
+		if bool(o.get("in_body", false)) or not bool(o.get("alive", false)):
+			continue
+		var base := float(o.base)
+		if base < 0.08 or base > 0.35:
+			continue
+		var uid := int(o.get("uid", n))
+		if used.has(uid):
+			continue
+		used[uid] = true
+		var ang := TAU * float(n) / 12.0
+		_plant_prop(o, hole_pos + Vector3(cos(ang) * 0.45, 0.0, sin(ang) * 0.45))
+		o["lat_y0"] = _visual_y(o)
+		o["lat_drop"] = -1
+		lat_burst.append(o)
+		n += 1
+
+func _latency_sample_burst() -> void:
+	if lat_burst.is_empty():
+		if lat_frame > 2:
+			lat_lines.append("burst no-props")
+			_latency_begin_partial()
+		return
+	if lat_fit < 0:
+		lat_fit = lat_frame
+	var pending := 0
+	var worst := 0
+	for o in lat_burst:
+		var y := _visual_y(o)
+		var dropped := int(o.lat_drop)
+		if dropped < 0 and (y < float(o.lat_y0) - 0.05 or not bool(o.alive)):
+			o.lat_drop = lat_frame
+			dropped = lat_frame
+		if dropped < 0:
+			pending += 1
+		else:
+			worst = maxi(worst, dropped - lat_fit)
+	if pending == 0 or lat_frame >= 36:
+		lat_lines.append("burst n=%d fit=%d pending=%d worstFrames=%d" % [lat_burst.size(), lat_fit, pending, worst])
+		_latency_begin_partial()
+
+func _latency_begin_partial() -> void:
+	lat_phase = "partial"
+	lat_frame = 0
+	lat_hold = 0
+	lat_prop = _probe_small_prop(1.2)
+	lat_radius = 1.2
+	hole_radius = 1.2
+	shown_radius = 1.2
+	hole_open = 1.2
+	if lat_prop.is_empty():
+		lat_lines.append("partial no-prop")
+		lat_phase = "done"
+		return
+	var base := float(lat_prop.base)
+	var at := Vector3(-8.0, 0.0, -12.0)
+	_plant_prop(lat_prop, at)
+	hole_pos = at + Vector3(-(hole_radius + base * 0.45), 0.0, 0.0)
+	lat_prop.sink = -1
+	_take_body(lat_prop)
+	lat_y0 = _visual_y(lat_prop)
+
+func _latency_sample_partial() -> void:
+	if lat_prop.is_empty():
+		lat_phase = "done"
+		return
+	lat_hold += 1
+	var y := _visual_y(lat_prop)
+	var mask := -1
+	if lat_prop.body != null:
+		mask = int((lat_prop.body as RigidBody3D).collision_mask)
+	if lat_hold >= 6:
+		var snapped := mask == 0 or y < lat_y0 - 0.12
+		lat_lines.append("partial base=%.3f y=%.3f mask=%d instant=%s" % [float(lat_prop.base), y, mask, str(snapped)])
+		lat_phase = "done"
+
+func _plant_prop(o: Dictionary, at: Vector3) -> void:
+	o.pos = at
+	o.vel = Vector3.ZERO
+	o.alive = true
+	o.shown_y = at.y
+	var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
+	var xf := Transform3D(basis, at)
+	o.xform = xf
+	if bool(o.in_mesh):
+		var mm := _mm_of(o)
+		if mm:
+			mm.set_instance_transform(int(o.index), xf)
+	_bucket_move(o)
+	_set_shadow(o)
+
+func _visual_y(o: Dictionary) -> float:
+	if not bool(o.get("alive", false)):
+		return -3.0
+	if o.has("shown_y"):
+		return float(o.shown_y)
+	return float((o.pos as Vector3).y)
 
 func _probe_one_eat(rad: float, want_fall: bool) -> Dictionary:
 	hole_radius = rad
@@ -3101,9 +3331,10 @@ func _mostly_over(size: float, dist: float) -> bool:
 	return _center_in_opening(size, dist, hole_radius)
 
 func _center_in_opening(size: float, dist: float, radius: float) -> bool:
-	# The footprint center is inside the opening, inset by a small fraction of
-	# the object's own size so a wide base still has to clear the lip.
-	return dist < radius - size * 0.16
+	# Center is inside the opening. The lip inset is a small fraction of the
+	# footprint, capped so it is less than one frame of travel.
+	var lip := minf(size * 0.08, 0.04)
+	return dist < radius - lip
 
 func _clear_ratio() -> float:
 	if clear_total <= 0:
@@ -3165,7 +3396,8 @@ func _sync_level() -> void:
 		_sfx("fanfare", 1.0, false)
 		if size_lbl:
 			size_lbl.text = "Size %d" % (level + 1)
-	hole_radius = maxf(_radius_for(_start_radius(), progress), _start_radius())
+	if not latency_probe:
+		hole_radius = maxf(_radius_for(_start_radius(), progress), _start_radius())
 	hole_open = maxf(hole_open, hole_radius)
 	if grew:
 		_announce_skins(Save.note_size(level + 1))
@@ -3709,9 +3941,15 @@ func _process(delta: float) -> void:
 		else:
 			if player_invuln > 0.0:
 				player_invuln = maxf(0.0, player_invuln - delta)
-			_move_hole(delta)
+			if latency_probe:
+				if lat_arm:
+					lat_arm = false
+					_latency_advance()
+			else:
+				_move_hole(delta)
 			_tick_movers(delta)
 			_tick_rivals(delta)
+			_activate_nearby()
 	shown_radius = lerpf(shown_radius, hole_radius, 1.0 - exp(-7.0 * delta))
 	var pop := 1.0
 	if pop_t > 0.0:
@@ -3738,6 +3976,9 @@ func _process(delta: float) -> void:
 		_refresh_hud()
 	if debug_on:
 		_update_debug(frame_delta)
+	if latency_probe and lat_sample_now:
+		lat_sample_now = false
+		_latency_sample()
 
 func _tick_floaters(delta: float) -> void:
 	for f in floaters:
@@ -3781,6 +4022,8 @@ func _mover_hot(chunk: int) -> bool:
 	return false
 
 func _tick_movers(delta: float) -> void:
+	if latency_probe:
+		return
 	var lim := float(GRID_MAX) + 0.15
 	var hot := {}
 	for o in movers:
@@ -3869,6 +4112,8 @@ func _physics_process(_delta: float) -> void:
 	while i >= 0:
 		_drive_body(active[i])
 		i -= 1
+	if latency_probe:
+		lat_arm = true
 
 func _flat_dist(p: Vector3) -> float:
 	var dx := p.x - hole_pos.x
@@ -3932,49 +4177,96 @@ func _bucket_move(o: Dictionary) -> void:
 func _activate_nearby() -> void:
 	if edge_probe:
 		return
+	if not pool_free.is_empty():
+		var centers: Array = [hole_pos]
+		var radii: Array = [hole_radius]
+		var sinks: Array = [-1]
+		for i in rivals.size():
+			var rv: Dictionary = rivals[i]
+			if bool(rv.alive):
+				centers.append(rv.pos)
+				radii.append(float(rv.radius))
+				sinks.append(i)
+		for s in centers.size():
+			_take_covered(centers[s], float(radii[s]), int(sinks[s]))
+			if pool_free.is_empty():
+				break
+		if not pool_free.is_empty():
+			_take_partials(centers, radii, sinks)
+	_commit_active_covers()
+
+func _scan_buckets(sp: Vector3, reach: float) -> Array:
+	var found: Array = []
+	var x0 := int(floor((sp.x - reach) / 4.0))
+	var x1 := int(floor((sp.x + reach) / 4.0))
+	var z0 := int(floor((sp.z - reach) / 4.0))
+	var z1 := int(floor((sp.z + reach) / 4.0))
+	for gx in range(x0, x1 + 1):
+		for gz in range(z0, z1 + 1):
+			var key := gx * 128 + gz + 8192
+			if buckets.has(key):
+				found.append_array(buckets[key])
+	return found
+
+func _take_covered(sp: Vector3, rad: float, sink: int) -> void:
+	var reach := rad + 0.2
+	for o in _scan_buckets(sp, reach):
+		if pool_free.is_empty():
+			return
+		if bool(o.in_body) or not bool(o.alive):
+			continue
+		var base := float(o.base)
+		if not _fits_r(base, rad):
+			continue
+		if not _center_in_opening(base, _xz_dist(o.pos, sp), rad):
+			continue
+		o.sink = sink
+		_take_body(o)
+
+func _take_partials(centers: Array, radii: Array, sinks: Array) -> void:
 	var budget := 2
 	while budget > 0 and not pool_free.is_empty():
 		budget -= 1
 		var best: Dictionary = {}
 		var best_d := INF
-		var found := false
+		var best_sink := -2
 		var seen := {}
-		var centers: Array = [hole_pos]
-		var radii: Array = [hole_radius]
-		for rv in rivals:
-			if bool(rv.alive):
-				centers.append(rv.pos)
-				radii.append(float(rv.radius))
 		for s in centers.size():
 			var sp: Vector3 = centers[s]
 			var rad := float(radii[s])
-			var reach := rad + maxf(3.0, rad * 0.45)
-			var x0 := int(floor((sp.x - reach) / 4.0))
-			var x1 := int(floor((sp.x + reach) / 4.0))
-			var z0 := int(floor((sp.z - reach) / 4.0))
-			var z1 := int(floor((sp.z + reach) / 4.0))
-			for gx in range(x0, x1 + 1):
-				for gz in range(z0, z1 + 1):
-					var key := gx * 128 + gz + 8192
-					if not buckets.has(key):
-						continue
-					for o in buckets[key]:
-						var uid := int(o.get("uid", -1))
-						if seen.has(uid):
-							continue
-						seen[uid] = true
-						if bool(o.in_body) or not bool(o.alive):
-							continue
-						var pick := _best_sink(o)
-						if bool(pick.ok) and float(pick.dist) < best_d:
-							best = o
-							best.sink = int(pick.sink)
-							best_d = float(pick.dist)
-							found = true
-		if not found:
+			for o in _scan_buckets(sp, rad + maxf(1.4, rad * 0.35)):
+				var uid := int(o.get("uid", -1))
+				if seen.has(uid) or bool(o.in_body) or not bool(o.alive):
+					continue
+				seen[uid] = true
+				var base := float(o.base)
+				if not _fits_r(base, rad):
+					continue
+				var dist := _xz_dist(o.pos, sp)
+				if _center_in_opening(base, dist, rad):
+					continue
+				if dist >= rad + maxf(base * 0.85, 0.2):
+					continue
+				if dist < best_d:
+					best = o
+					best_d = dist
+					best_sink = int(sinks[s])
+		if best.is_empty():
 			return
+		best.sink = best_sink
 		if not _take_body(best):
 			return
+
+func _commit_active_covers() -> void:
+	for o in active:
+		if bool(o.get("pit", false)) or o.body == null:
+			continue
+		var b: RigidBody3D = o.body
+		var sink := int(o.get("sink", -1))
+		var hr := _sink_radius(sink)
+		var dist := _xz_dist(b.global_position, _sink_pos(sink))
+		if hr > 0.05 and _fits_r(float(o.base), hr) and _center_in_opening(float(o.base), dist, hr):
+			_commit_fall(o, b)
 
 func _take_body(o: Dictionary) -> bool:
 	if pool_free.is_empty() or bool(o.in_body):
@@ -3983,10 +4275,12 @@ func _take_body(o: Dictionary) -> bool:
 	var cs := b.get_node("Shape") as CollisionShape3D
 	var native: Vector3 = kind_native[int(o.kind)]
 	var sc: Vector3 = o.scale
-	var box := BoxShape3D.new()
+	var box := cs.shape as BoxShape3D
+	if box == null:
+		box = BoxShape3D.new()
+		cs.shape = box
 	var foot_w := maxf(float(o.base) * 2.0, 0.08)
 	box.size = Vector3(foot_w, maxf(native.y * sc.y, 0.08), foot_w)
-	cs.shape = box
 	cs.position = Vector3(0, box.size.y * 0.5, 0)
 	b.mass = clampf(foot_w * foot_w * box.size.y * 1.6, 0.35, 6.0)
 	var p: Vector3 = o.pos
@@ -3994,34 +4288,81 @@ func _take_body(o: Dictionary) -> bool:
 	b.global_transform = Transform3D(Basis(Vector3.UP, float(o.yaw)), Vector3(p.x, 0.0, p.z))
 	b.freeze = false
 	b.can_sleep = false
-	var sink_at := _sink_pos(int(o.get("sink", -1)))
-	var sink_r := _sink_radius(int(o.get("sink", -1)))
-	var over := _center_in_opening(float(o.base), _xz_dist(Vector3(p.x, 0, p.z), sink_at), sink_r)
-	b.collision_mask = 0 if over else RIM_MASK
-	var vel: Vector3 = o.vel
-	if over and vel.y > -1.2:
-		vel.y = -1.8
-	b.linear_velocity = vel
+	b.gravity_scale = FALL_GRAVITY
+	b.linear_velocity = o.vel
 	b.angular_velocity = Vector3.ZERO
 	b.sleeping = false
+	o.pit = false
 	o.body = b
 	o.in_body = true
 	active.append(o)
+	var sink_at := _sink_pos(int(o.get("sink", -1)))
+	var sink_r := _sink_radius(int(o.get("sink", -1)))
+	if _center_in_opening(float(o.base), _xz_dist(Vector3(p.x, 0.0, p.z), sink_at), sink_r):
+		_commit_fall(o, b)
+	else:
+		b.collision_mask = RIM_MASK
+		_push_prop_visual(o, b.global_transform)
 	return true
+
+func _commit_fall(o: Dictionary, b: RigidBody3D) -> void:
+	if bool(o.get("pit", false)):
+		return
+	o.pit = true
+	var sink := int(o.get("sink", -1))
+	var hp := _sink_pos(sink)
+	var p := b.global_position
+	var inward := Vector3(hp.x - p.x, 0.0, hp.z - p.z)
+	if inward.length_squared() < 0.0004:
+		inward = Vector3(0.0, 0.0, -1.0)
+	else:
+		inward = inward.normalized()
+	var axis := Vector3.UP.cross(inward)
+	if axis.length_squared() < 0.0004:
+		axis = Vector3.RIGHT
+	else:
+		axis = axis.normalized()
+	var basis := Basis(axis, 0.42) * Basis(Vector3.UP, float(o.yaw))
+	var dropped := Vector3(p.x, minf(p.y, 0.0) - DROP_SNAP, p.z)
+	var xf := Transform3D(basis, dropped)
+	var vel := Vector3(inward.x * 1.4, DROP_VY, inward.z * 1.4)
+	var spin := axis * 2.6
+	b.collision_mask = 0
+	b.gravity_scale = PIT_GRAVITY
+	b.can_sleep = false
+	b.freeze = false
+	b.global_transform = xf
+	b.linear_velocity = vel
+	b.angular_velocity = spin
+	b.sleeping = false
+	var rid := b.get_rid()
+	PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_TRANSFORM, xf)
+	PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_LINEAR_VELOCITY, vel)
+	PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_ANGULAR_VELOCITY, spin)
+	PhysicsServer3D.body_set_state(rid, PhysicsServer3D.BODY_STATE_SLEEPING, false)
+	_push_prop_visual(o, xf)
+
+func _push_prop_visual(o: Dictionary, xf: Transform3D) -> void:
+	var sc: Vector3 = o.scale
+	var src := xf.basis
+	var basis := Basis(src.x.normalized() * sc.x, src.y.normalized() * sc.y, src.z.normalized() * sc.z)
+	var vis := Transform3D(basis, xf.origin)
+	o.xform = vis
+	o.shown_y = vis.origin.y
+	if bool(o.in_mesh):
+		var mm := _mm_of(o)
+		if mm:
+			mm.set_instance_transform(int(o.index), vis)
+	_set_shadow(o)
 
 func _pool_body(b: RigidBody3D) -> void:
 	b.freeze = true
 	b.collision_mask = 1
+	b.gravity_scale = FALL_GRAVITY
 	b.linear_velocity = Vector3.ZERO
 	b.angular_velocity = Vector3.ZERO
 	b.position = Vector3(0, -50, 0)
 	pool_free.append(b)
-
-func _visual_from_body(o: Dictionary, b: RigidBody3D) -> Transform3D:
-	var t := b.global_transform
-	var sc: Vector3 = o.scale
-	var basis := Basis(t.basis.x.normalized() * sc.x, t.basis.y.normalized() * sc.y, t.basis.z.normalized() * sc.z)
-	return Transform3D(basis, t.origin)
 
 func _drive_body(o: Dictionary) -> void:
 	var b: RigidBody3D = o.body
@@ -4049,27 +4390,24 @@ func _drive_body(o: Dictionary) -> void:
 	var falling := p.y < -0.2
 	var tipped := tilt > 0.1 or p.y < -0.04
 	var over := _center_in_opening(base, dist, hr)
-	# Once the footprint center is inside the opening, ignore the shelf so a
-	# small prop is not held up until it reaches the middle.
-	if over or (falling and dist < hr):
-		b.collision_mask = 0
-		b.sleeping = false
-		if p.y > -0.06 and b.linear_velocity.y > -0.6:
-			var kick := b.linear_velocity
-			kick.y = -1.8
-			b.linear_velocity = kick
+	if over:
+		if not bool(o.get("pit", false)):
+			_commit_fall(o, b)
+		else:
+			b.collision_mask = 0
+			b.gravity_scale = PIT_GRAVITY
+			b.can_sleep = false
+			b.sleeping = false
 	elif reaching or tipped:
+		b.gravity_scale = FALL_GRAVITY
 		b.collision_mask = RIM_MASK
-	else:
+	elif not falling:
 		_release_body(o, p)
 		return
-	if bool(o.in_mesh):
-		var mm := _mm_of(o)
-		var xf := _visual_from_body(o, b)
-		o.xform = xf
-		if mm:
-			mm.set_instance_transform(int(o.index), xf)
-		_set_shadow(o)
+	var shown := float(o.get("shown_y", p.y))
+	if bool(o.get("pit", false)) and shown < -0.05 and p.y > shown + 0.02:
+		return
+	_push_prop_visual(o, b.global_transform)
 
 func _burst(at: Vector3, points: int, tint: Color) -> void:
 	pop_fx.global_position = at + Vector3(0, 0.45, 0)
@@ -4118,6 +4456,7 @@ func _swallow_done(o: Dictionary) -> void:
 		_pool_body(o.body)
 		o.body = null
 	o.in_body = false
+	o.pit = false
 	_unmesh(o)
 	active.erase(o)
 
@@ -4137,8 +4476,10 @@ func _release_body(o: Dictionary, p: Vector3) -> void:
 		_pool_body(o.body)
 		o.body = null
 	o.in_body = false
+	o.pit = false
 	var grounded := Vector3(p.x, 0, p.z)
 	o.pos = grounded
+	o.shown_y = 0.0
 	active.erase(o)
 	if bool(o.in_mesh):
 		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
