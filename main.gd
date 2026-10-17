@@ -284,12 +284,7 @@ void fragment() {
 		ROUGHNESS = mix(0.45, 1.0, luma);
 		SPECULAR = 0.0;
 	}
-	if (COLOR.a < 0.98) {
-		float dots = fract(sin(dot(floor(FRAGCOORD.xy * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
-		if (dots > COLOR.a) {
-			discard;
-		}
-	}
+	
 }
 """
 const CAR_SHADER := """shader_type spatial;
@@ -313,12 +308,7 @@ void fragment() {
 	ALBEDO = COLOR.rgb * ao + COLOR.rgb * fres * 0.07;
 	ROUGHNESS = 0.78;
 	SPECULAR = 0.1;
-	if (COLOR.a < 0.98) {
-		float dots = fract(sin(dot(floor(FRAGCOORD.xy * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
-		if (dots > COLOR.a) {
-			discard;
-		}
-	}
+	
 }
 """
 const LIFE_SHADER := """shader_type spatial;
@@ -340,12 +330,7 @@ void fragment() {
 	ALBEDO = COLOR.rgb * ao + COLOR.rgb * fres * 0.07;
 	ROUGHNESS = 0.78;
 	SPECULAR = 0.1;
-	if (COLOR.a < 0.98) {
-		float dots = fract(sin(dot(floor(FRAGCOORD.xy * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
-		if (dots > COLOR.a) {
-			discard;
-		}
-	}
+	
 }
 """
 const LIFE_AMP := {
@@ -1326,7 +1311,9 @@ func _preview_eaten() -> void:
 func _focus_canvas() -> void:
 	if not OS.has_feature("web"):
 		return
-	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c)return;c.setAttribute('tabindex','0');var f=function(){try{c.focus({preventScroll:true});}catch(e){c.focus();}};if(!c.__holeFocus){c.__holeFocus=true;c.addEventListener('pointerdown',f,true);c.addEventListener('touchstart',f,true);}f();})();", true)
+	# Focusing on pointerdown cancels that gesture in desktop browsers, so the
+	# first mouse drag never reaches the game. Focus on hover and on release.
+	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeFocus)return;c.__holeFocus=true;c.setAttribute('tabindex','0');var f=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointermove',f,true);c.addEventListener('pointerup',f,true);c.addEventListener('touchend',f,true);f();})();", true)
 
 func _probe_gate() -> void:
 	var kept := Save.unlocked_level
@@ -1608,14 +1595,26 @@ func _view_aspect() -> float:
 		return 720.0 / 1280.0
 	return sz.x / sz.y
 
+func _wide_blend() -> float:
+	# 0 on a tall phone, 1 on a 16:10 desktop. The blend starts once the
+	# window is wider than it is tall.
+	return clampf((_view_aspect() - 0.8) / 0.6, 0.0, 1.0)
+
 func _hfov_half_tan() -> float:
 	return tan(deg_to_rad(CAM_FOV) * 0.5) * _view_aspect()
+
+func _frame_half_tan() -> float:
+	# Framing a wide monitor on its full width pulls the camera into a
+	# top-down close-up. Ease landscape back toward a narrower aspect.
+	var aspect := _view_aspect()
+	var framed := lerpf(aspect, minf(aspect, 1.15), _wide_blend())
+	return tan(deg_to_rad(CAM_FOV) * 0.5) * framed
 
 func _screen_frac(radius: float, dist: float) -> float:
 	return (2.0 * radius / maxf(dist, 0.001)) / _hfov_half_tan()
 
 func _dist_for_frac(radius: float, frac: float) -> float:
-	return (2.0 * radius) / maxf(frac * _hfov_half_tan(), 0.001)
+	return (2.0 * radius) / maxf(frac * _frame_half_tan(), 0.001)
 
 func _cam_ref_dist() -> float:
 	return _dist_for_frac(LEVEL_RADIUS[0], SCREEN_FRAC_START)
@@ -1632,12 +1631,20 @@ func _cam_dist_for(radius: float) -> float:
 	var frac := lerpf(SCREEN_FRAC_START, SCREEN_FRAC_END, shaped)
 	return _dist_for_frac(r, frac) * cam_dist_mul
 
+func _cam_fov_for() -> float:
+	# Extra vertical field on a wide window, so the horizon and sky fit
+	# without tipping the phone view onto its side.
+	return lerpf(CAM_FOV, 70.0, _wide_blend())
+
 func _cam_pitch_for(radius: float) -> float:
 	var start_r := maxf(_start_radius(), 0.12)
 	var end_r := maxf(final_radius, start_r + 0.2)
 	var t := clampf((radius - start_r) / (end_r - start_r), 0.0, 1.0)
 	t = t * t * (3.0 - 2.0 * t)
-	return lerpf(CAM_PITCH_DEG, CAM_PITCH_FAR, t)
+	var wide := _wide_blend()
+	var near := lerpf(CAM_PITCH_DEG, 32.0, wide)
+	var far := lerpf(CAM_PITCH_FAR, 46.0, wide)
+	return lerpf(near, far, t)
 
 func _snap_camera() -> void:
 	if cam_dist_mul > 0.9:
@@ -1647,6 +1654,7 @@ func _snap_camera() -> void:
 	cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
 	if cam == null:
 		return
+	cam.fov = _cam_fov_for()
 	cam.position = hole_pos + _camera_offset(cam_distance)
 	cam.look_at(cam_look, Vector3.UP)
 
@@ -3016,6 +3024,7 @@ func _theme_ids(layout: String) -> Array:
 func _populate() -> void:
 	var layout := str(map.get("layout", "farm"))
 	_place_signatures(layout)
+	_place_near_icons(layout)
 	_seed_ladder()
 	_scatter_theme(layout)
 	_balance_tiers()
@@ -3141,13 +3150,50 @@ func _finale_id(layout: String) -> String:
 		_:
 			return "farmmill"
 
+func _near_icons(layout: String) -> Array:
+	match layout:
+		"candy":
+			return ["lollypop", "donut", "partycake", "sweetcup"]
+		"jungle":
+			return ["dinoegg", "fernleaf", "raptord", "jpalm"]
+		"pirate":
+			return ["pbarrel", "pcannon", "prowboat", "ppalm"]
+		"snow":
+			return ["hsnowman", "hpresent", "hsled", "hpine"]
+		"desert":
+			return ["dcactus", "dcamel", "dtent", "dpalm"]
+		"toy":
+			return ["tblock", "tracer", "teddybear", "ttruck"]
+		"space":
+			return ["astro", "spacerover", "moonlet", "satdish"]
+		"haunt":
+			return ["hpumpkin", "htomb", "hghost", "hcandle"]
+		"fair":
+			return ["fballoon", "fteacup", "fpop", "teacups"]
+		_:
+			return ["haybale", "fwheat", "scare", "fapple"]
+
+func _place_near_icons(layout: String) -> void:
+	# The camera looks toward -Z, so the opening view is that forward arc.
+	var ids: Array = _near_icons(layout)
+	var made := 0
+	var tries := 0
+	while made < 8 and tries < 90 and props.size() < PROP_CAP:
+		tries += 1
+		var ang := randf_range(-PI * 0.92, -PI * 0.08)
+		var rr := randf_range(3.5, 8.6)
+		var p := Vector3(cos(ang) * rr, 0.0, sin(ang) * rr)
+		var id := str(ids[made % ids.size()])
+		if _place_id(id, p, Vector3.ZERO, randf() * TAU, 1.0):
+			made += 1
+
 func _place_signatures(layout: String) -> void:
 	var ids: Array = _signature_ids(layout)
 	var spots: Array = [
-		Vector3(5.4, 0, -8.2),
-		Vector3(-6.2, 0, -7.4),
-		Vector3(3.2, 0, -13.5),
-		Vector3(-4.0, 0, -15.0),
+		Vector3(3.4, 0, -4.8),
+		Vector3(-3.6, 0, -5.4),
+		Vector3(6.2, 0, -7.6),
+		Vector3(-5.8, 0, -8.2),
 	]
 	for i in mini(ids.size(), spots.size()):
 		var base: Vector3 = spots[i]
@@ -3676,7 +3722,7 @@ func _build_kind_multimesh(ki: int) -> void:
 		if c < STATIC_CHUNKS and lod > 0.0:
 			inst.visibility_range_end = lod
 			inst.visibility_range_end_margin = 8.0
-			inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+			inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 		_no_shadow(inst)
 		_add_city(inst)
 		mms[c] = mm
@@ -3752,7 +3798,7 @@ func _build_impostors(ki: int, slots: Array, id: String) -> void:
 		inst.extra_cull_margin = 0.0
 		inst.visibility_range_begin = 34.0
 		inst.visibility_range_begin_margin = 10.0
-		inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		inst.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 		_no_shadow(inst)
 		_add_city(inst)
 
@@ -3778,7 +3824,8 @@ func _build_shadows() -> void:
 	var tex := ImageTexture.create_from_image(img)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	mat.alpha_scissor_threshold = 0.22
 	mat.albedo_texture = tex
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
@@ -4382,8 +4429,18 @@ func _unhandled_input(event: InputEvent) -> void:
 				_begin_play()
 			joy_held = false
 		_refresh_joystick()
-	elif event is InputEventMouseMotion and joy_held and joy_id == -1:
-		joy_finger = event.position
+	elif event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		# A desktop browser can drop the first mousedown while it focuses the
+		# canvas. A held move still steers, same as a touch drag.
+		if not joy_held or joy_id != -1:
+			if _blocks_world(event.position):
+				return
+			joy_held = true
+			joy_id = -1
+			joy_anchor = event.position - event.relative
+			joy_finger = event.position
+		else:
+			joy_finger = event.position
 		if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
 			_begin_play()
 		_refresh_joystick()
@@ -4402,9 +4459,11 @@ func _start_radius() -> float:
 func _move_speed() -> float:
 	# Follow the eased camera so a size-up does not kick the stick ahead of the zoom.
 	# Divide by the d985204 start distance, not today's wider start, so a full
-	# drag still crosses the screen at that same pace.
+	# drag still crosses the screen at that same pace. A wide monitor also sees
+	# more ground across the same distance, so speed up with the extra width.
 	var dist := cam_distance if cam_distance > 0.5 else STICK_REF_DIST
-	var factor := pow(maxf(dist, 0.001) / STICK_REF_DIST, SPEED_SCREEN)
+	var wide := maxf(_view_aspect() / (720.0 / 1280.0), 1.0)
+	var factor := pow(maxf(dist, 0.001) / STICK_REF_DIST, SPEED_SCREEN) * wide
 	return BASE_SPEED * speed_scale * Save.speed_mul() * factor
 
 func _stick_velocity() -> Vector3:
@@ -4471,6 +4530,7 @@ func _smooth_camera(delta: float) -> void:
 		cam_pitch = _cam_pitch_for(shown_radius)
 	if cam_hold or cam == null:
 		return
+	cam.fov = _cam_fov_for()
 	cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
 	cam.position = hole_pos + _camera_offset(cam_distance)
 	cam.look_at(cam_look, Vector3.UP)
@@ -5039,6 +5099,8 @@ func _push_openings() -> void:
 		gm.set_shader_parameter("opening_r", opening_radii)
 
 func _fade_blockers() -> void:
+	# Alpha-hash fades speckled the ground in front of the camera. Props stay solid.
+	return
 	if cam == null:
 		return
 	var eye := cam.global_position
