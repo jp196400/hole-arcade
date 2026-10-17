@@ -123,9 +123,9 @@ vec3 theme_ground(vec3 base, vec2 xz, float which) {
 	float blot = vnoise(xz * 0.11 + vec2(4.1, 9.3));
 	float patch = vnoise(xz * 0.045 + vec2(1.7, 8.2));
 	// Same-hue light and dark patches. No furrows or diagonal waves.
-	col = mix(col, col * 0.72, smoothstep(0.58, 0.88, blot) * 0.62);
-	col = mix(col, col * 1.28, smoothstep(0.55, 0.9, patch) * 0.55);
-	col = mix(col, col * vec3(1.06, 1.04, 0.98), h * 0.16);
+	col = mix(col, col * 0.88, smoothstep(0.58, 0.88, blot) * 0.28);
+	col = mix(col, col * 1.08, smoothstep(0.55, 0.9, patch) * 0.22);
+	col = mix(col, col * vec3(1.04, 1.02, 0.98), h * 0.12);
 	if (which > 0.5 && which < 1.5) {
 		vec2 cell = fract(xz * 0.55) - vec2(0.5);
 		float dots = 1.0 - smoothstep(0.08, 0.16, length(cell));
@@ -143,7 +143,7 @@ vec3 theme_ground(vec3 base, vec2 xz, float which) {
 		}
 		col = mix(col, tint, conf * 0.28);
 	}
-	return clamp(col, vec3(0.0), vec3(1.4));
+	return clamp(col, vec3(0.0), vec3(1.0));
 }
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -176,7 +176,7 @@ void fragment() {
 	if (paint_mode > 0.5) {
 		float broad = vnoise(world_pos.xz * 0.07);
 		float mid = vnoise(world_pos.xz * 0.31 + vec2(2.7, 8.1));
-		shade = clamp(broad * 0.58 + mid * 0.42, 0.0, 1.0);
+		shade = mix(0.42, 0.68, clamp(broad * 0.58 + mid * 0.42, 0.0, 1.0));
 	}
 	if (paint_mode > 8.5) {
 		outc = mix(vec3(0.40, 0.30, 0.18), vec3(0.66, 0.50, 0.32), shade);
@@ -231,7 +231,7 @@ void fragment() {
 		outc = clamp(vec3(luma) + (col - vec3(luma)) * 1.35, vec3(0.0), vec3(1.0));
 	}
 	if (paint_mode > 0.5 && band_lo.r >= 0.0) {
-		outc = mix(band_lo * 0.82, band_hi * 1.18, shade);
+		outc = mix(band_lo, band_hi, shade);
 		outc = theme_ground(outc, world_pos.xz, motif);
 	}
 	vec2 xz = world_pos.xz;
@@ -257,29 +257,27 @@ void fragment() {
 		vec2 gf = fract(xz * 0.85) - 0.5;
 		float tuft = 1.0 - smoothstep(0.1, 0.42, length(gf));
 		if (gh > 0.42) {
-			vec3 clump = gh > 0.72 ? outc * vec3(1.22, 1.34, 0.78) : outc * vec3(0.62, 0.78, 0.5);
-			outc = mix(outc, clump, tuft * 0.78);
+			vec3 clump = gh > 0.72 ? outc * vec3(1.04, 1.08, 0.96) : outc * vec3(0.86, 0.9, 0.82);
+			outc = mix(outc, clump, tuft * 0.4);
 		}
 		vec2 fc = floor(xz * 0.38 + vec2(2.0, 5.0));
 		float fh = thash(fc);
 		vec2 ff = fract(xz * 0.38 + vec2(2.0, 5.0)) - 0.5;
 		float bloom = 1.0 - smoothstep(0.06, 0.32, length(ff));
-		if (fh > 0.8) {
-			vec3 flower = vec3(0.98, 0.32, 0.45);
-			if (fh > 0.94) {
-				flower = vec3(1.0, 0.88, 0.22);
-			} else if (fh > 0.9) {
-				flower = vec3(0.98, 0.98, 1.0);
-			} else if (fh > 0.86) {
-				flower = vec3(0.62, 0.38, 0.96);
+		if (fh > 0.9) {
+			vec3 flower = vec3(0.9, 0.48, 0.55);
+			if (fh > 0.96) {
+				flower = vec3(0.88, 0.76, 0.36);
+			} else if (fh > 0.94) {
+				flower = vec3(0.96, 0.95, 0.92);
 			}
-			outc = mix(outc, flower, bloom * 0.92);
+			outc = mix(outc, flower, bloom * 0.48);
 		}
 		if (paint_mode > 6.5 && motif < 0.5) {
 			float row = abs(fract(xz.x * 0.42) - 0.5);
 			float gap = smoothstep(0.06, 0.16, abs(fract(xz.y * 0.16) - 0.5));
 			float stalk = smoothstep(0.2, 0.04, row) * gap;
-			outc = mix(outc, vec3(0.86, 0.74, 0.16), stalk * 0.62);
+			outc = mix(outc, vec3(0.62, 0.58, 0.28), stalk * 0.35);
 		}
 	} else if (paint_mode > 1.5 && paint_mode < 3.5) {
 		vec2 pc = floor(xz * 1.5);
@@ -355,7 +353,7 @@ void fragment() {
 	}
 	outc = mix(outc, border, rim);
 	outc = mix(outc, vec3(0.004, 0.005, 0.008), cover);
-	ALBEDO = outc * grade_tint;
+	ALBEDO = clamp(outc * grade_tint, vec3(0.0), vec3(1.0));
 	ROUGHNESS = mix(1.0, 0.55, step(3.5, paint_mode) * (1.0 - step(4.5, paint_mode)));
 	METALLIC = 0.0;
 	float wet = step(3.5, paint_mode) * (1.0 - step(4.5, paint_mode));
@@ -421,13 +419,11 @@ void fragment() {
 const KIT_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_disabled;
 void fragment() {
-	vec3 src = COLOR.rgb;
-	float luma = dot(src, vec3(0.299, 0.587, 0.114));
-	src = mix(vec3(luma), src, 1.45);
+	vec3 src = clamp(COLOR.rgb, vec3(0.0), vec3(1.0));
 	float n = clamp(NORMAL.y, -1.0, 1.0);
-	float ao = clamp(n * 0.35 + 0.78, 0.62, 1.12);
+	float ao = clamp(n * 0.35 + 0.78, 0.62, 1.0);
 	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
-	ALBEDO = src * ao + src * fres * 0.1;
+	ALBEDO = clamp(src * ao + src * fres * 0.06, vec3(0.0), vec3(1.0));
 	ROUGHNESS = 0.72;
 	SPECULAR = 0.08;
 }
@@ -445,13 +441,11 @@ void vertex() {
 	VERTEX.y += sin(TIME * spd * 1.25 + phase) * amp * 0.35;
 }
 void fragment() {
-	vec3 src = COLOR.rgb;
-	float luma = dot(src, vec3(0.299, 0.587, 0.114));
-	src = mix(vec3(luma), src, 1.45);
+	vec3 src = clamp(COLOR.rgb, vec3(0.0), vec3(1.0));
 	float n = clamp(NORMAL.y, -1.0, 1.0);
-	float ao = clamp(n * 0.35 + 0.78, 0.62, 1.12);
+	float ao = clamp(n * 0.35 + 0.78, 0.62, 1.0);
 	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
-	ALBEDO = src * ao + src * fres * 0.1;
+	ALBEDO = clamp(src * ao + src * fres * 0.06, vec3(0.0), vec3(1.0));
 	ROUGHNESS = 0.72;
 	SPECULAR = 0.08;
 }
@@ -467,14 +461,10 @@ void vertex() {
 	VERTEX.z += cos(TIME * 0.9 + VERTEX.z * 1.3) * sway * h * 0.4;
 }
 void fragment() {
-	vec3 tex = texture(albedo_tex, UV).rgb;
-	float luma = dot(tex, vec3(0.299, 0.587, 0.114));
-	tex = mix(vec3(luma), tex, 1.35);
-	float green = smoothstep(0.02, 0.14, tex.g - max(tex.r, tex.b));
-	tex.g += green * 0.08;
-	float ao = clamp(NORMAL.y * 0.35 + 0.78, 0.62, 1.08);
+	vec3 tex = clamp(texture(albedo_tex, UV).rgb, vec3(0.0), vec3(1.0));
+	float ao = clamp(NORMAL.y * 0.35 + 0.78, 0.62, 1.0);
 	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
-	ALBEDO = tex * ao + tex * fres * 0.08;
+	ALBEDO = clamp(tex * ao + tex * fres * 0.06, vec3(0.0), vec3(1.0));
 	ROUGHNESS = 0.8;
 	SPECULAR = 0.04;
 }
@@ -2136,14 +2126,14 @@ func _build_world() -> void:
 	e.background_mode = Environment.BG_SKY
 	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.98, 0.94, 0.86)
-	e.ambient_light_energy = 0.5
-	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	e.tonemap_exposure = 1.08
+	e.ambient_light_color = Color(0.93, 0.91, 0.87)
+	e.ambient_light_energy = 0.4
+	e.tonemap_mode = Environment.TONE_MAPPER_ACES
+	e.tonemap_exposure = 1.02
 	e.adjustment_enabled = true
-	e.adjustment_brightness = 1.06
+	e.adjustment_brightness = 1.0
 	e.adjustment_contrast = 1.06
-	e.adjustment_saturation = 1.32
+	e.adjustment_saturation = 1.08
 	e.fog_enabled = false
 	world_env = e
 	env.environment = e
@@ -2160,7 +2150,7 @@ func _build_world() -> void:
 	add_child(sun)
 	fill_light = DirectionalLight3D.new()
 	fill_light.rotation_degrees = Vector3(-24, 200, 0)
-	fill_light.light_color = Color(1.0, 0.94, 0.82)
+	fill_light.light_color = Color(0.95, 0.92, 0.86)
 	fill_light.light_energy = 0.12
 	fill_light.shadow_enabled = false
 	fill_light.shadow_bias = 0.5
@@ -4344,25 +4334,27 @@ func _dress_vista(layout: String) -> void:
 func _coat_for(id: String) -> Color:
 	match id:
 		"piglet":
-			return Color(1.45, 0.72, 0.82)
+			return Color(1.02, 0.96, 0.98)
 		"sheep":
-			return Color(1.48, 1.46, 1.4)
+			return Color(0.96, 0.96, 0.94)
 		"cow":
-			return Color(1.22, 1.18, 1.1)
+			return Color(1.02, 1.0, 0.98)
 		"chicken":
-			return Color(1.2, 1.12, 0.7)
+			return Color(1.02, 1.0, 0.94)
 		"farmtractor":
-			return Color(0.62, 1.5, 0.55)
+			return Color(0.9, 1.06, 0.88)
 		"redbarn":
-			return Color(1.55, 0.42, 0.38)
+			return Color(1.06, 0.98, 0.96)
 		"haybale":
-			return Color(1.45, 1.15, 0.38)
+			return Color(0.8, 0.74, 0.6)
+		"fwheat":
+			return Color(0.82, 0.76, 0.62)
 		"railfence":
-			return Color(1.4, 1.36, 1.28)
+			return Color(1.04, 1.03, 1.0)
 		"roundtree":
-			return Color(0.55, 1.4, 0.48)
+			return Color(0.92, 1.04, 0.9)
 		"animal":
-			return Color(1.4, 0.62, 0.7)
+			return Color(1.02, 0.96, 0.98)
 		_:
 			return Color.WHITE
 
@@ -7696,25 +7688,25 @@ func _motif_for(layout: String) -> float:
 func _theme_light(layout: String) -> Dictionary:
 	match layout:
 		"candy":
-			return {"sun_e": 1.2, "amb": Color(1.0, 0.94, 0.96), "amb_e": 0.48, "fill": Color(1.0, 0.9, 0.94), "fill_e": 0.12, "grade": Vector3(1.02, 0.98, 1.0), "sat": 1.36, "contrast": 1.06, "bright": 1.06, "expo": 1.08}
+			return {"sun_e": 1.06, "amb": Color(0.96, 0.92, 0.94), "amb_e": 0.34, "fill": Color(0.98, 0.9, 0.92), "fill_e": 0.08, "grade": Vector3(1.0, 0.99, 1.0), "sat": 1.1, "contrast": 1.06, "bright": 1.0, "expo": 1.02}
 		"jungle":
-			return {"sun_e": 1.16, "amb": Color(0.9, 0.98, 0.82), "amb_e": 0.46, "fill": Color(0.9, 0.98, 0.84), "fill_e": 0.12, "grade": Vector3(0.98, 1.04, 0.96), "sat": 1.32, "contrast": 1.06, "bright": 1.05, "expo": 1.08}
+			return {"sun_e": 1.02, "amb": Color(0.88, 0.94, 0.86), "amb_e": 0.32, "fill": Color(0.9, 0.94, 0.84), "fill_e": 0.08, "grade": Vector3(0.98, 1.02, 0.97), "sat": 1.08, "contrast": 1.06, "bright": 1.0, "expo": 1.02}
 		"pirate":
-			return {"sun_e": 1.24, "amb": Color(1.0, 0.94, 0.84), "amb_e": 0.44, "fill": Color(1.0, 0.92, 0.8), "fill_e": 0.12, "grade": Vector3(1.04, 1.0, 0.96), "sat": 1.34, "contrast": 1.06, "bright": 1.06, "expo": 1.08}
+			return {"sun_e": 1.06, "amb": Color(0.94, 0.9, 0.84), "amb_e": 0.32, "fill": Color(0.96, 0.9, 0.82), "fill_e": 0.08, "grade": Vector3(1.02, 1.0, 0.97), "sat": 1.08, "contrast": 1.06, "bright": 1.0, "expo": 1.02}
 		"snow":
-			return {"sun_e": 1.18, "amb": Color(0.9, 0.94, 1.0), "amb_e": 0.52, "fill": Color(0.92, 0.95, 1.0), "fill_e": 0.14, "grade": Vector3(0.98, 1.0, 1.04), "sat": 1.2, "contrast": 1.04, "bright": 1.08, "expo": 1.1}
+			return {"sun_e": 0.72, "amb": Color(0.9, 0.93, 0.98), "amb_e": 0.22, "fill": Color(0.92, 0.94, 0.98), "fill_e": 0.05, "grade": Vector3(0.99, 1.0, 1.01), "sat": 1.02, "contrast": 1.02, "bright": 1.0, "expo": 0.96}
 		"desert":
-			return {"sun_e": 1.28, "amb": Color(1.0, 0.94, 0.82), "amb_e": 0.42, "fill": Color(1.0, 0.92, 0.78), "fill_e": 0.1, "grade": Vector3(1.06, 1.0, 0.94), "sat": 1.34, "contrast": 1.06, "bright": 1.06, "expo": 1.08}
+			return {"sun_e": 1.06, "amb": Color(0.96, 0.9, 0.82), "amb_e": 0.32, "fill": Color(0.96, 0.9, 0.8), "fill_e": 0.06, "grade": Vector3(1.02, 1.0, 0.96), "sat": 1.08, "contrast": 1.06, "bright": 1.0, "expo": 1.02}
 		"toy":
-			return {"sun_e": 1.18, "amb": Color(1.0, 0.96, 0.9), "amb_e": 0.48, "fill": Color(1.0, 0.94, 0.88), "fill_e": 0.12, "grade": Vector3(1.02, 1.0, 0.98), "sat": 1.36, "contrast": 1.05, "bright": 1.06, "expo": 1.08}
+			return {"sun_e": 1.04, "amb": Color(0.96, 0.93, 0.88), "amb_e": 0.34, "fill": Color(0.96, 0.92, 0.86), "fill_e": 0.08, "grade": Vector3(1.0, 1.0, 0.99), "sat": 1.1, "contrast": 1.06, "bright": 1.0, "expo": 1.02}
 		"space":
-			return {"sun_e": 1.22, "amb": Color(0.86, 0.86, 0.9), "amb_e": 0.4, "fill": Color(0.82, 0.84, 0.92), "fill_e": 0.1, "grade": Vector3(1.02, 1.0, 0.98), "sat": 1.28, "contrast": 1.06, "bright": 1.04, "expo": 1.06}
+			return {"sun_e": 1.02, "amb": Color(0.86, 0.86, 0.9), "amb_e": 0.3, "fill": Color(0.86, 0.86, 0.92), "fill_e": 0.06, "grade": Vector3(1.0, 0.99, 0.99), "sat": 1.04, "contrast": 1.06, "bright": 1.0, "expo": 1.0}
 		"haunt":
-			return {"sun_e": 1.02, "amb": Color(0.86, 0.8, 0.9), "amb_e": 0.4, "fill": Color(0.8, 0.74, 0.9), "fill_e": 0.1, "grade": Vector3(1.02, 0.98, 1.0), "sat": 1.22, "contrast": 1.08, "bright": 1.02, "expo": 1.02}
+			return {"sun_e": 0.94, "amb": Color(0.84, 0.8, 0.88), "amb_e": 0.3, "fill": Color(0.82, 0.78, 0.86), "fill_e": 0.06, "grade": Vector3(1.0, 0.99, 0.99), "sat": 1.04, "contrast": 1.06, "bright": 1.0, "expo": 1.0}
 		"fair":
-			return {"sun_e": 1.22, "amb": Color(1.0, 0.94, 0.86), "amb_e": 0.46, "fill": Color(1.0, 0.9, 0.82), "fill_e": 0.12, "grade": Vector3(1.04, 1.0, 0.96), "sat": 1.36, "contrast": 1.06, "bright": 1.06, "expo": 1.08}
+			return {"sun_e": 1.06, "amb": Color(0.96, 0.92, 0.86), "amb_e": 0.34, "fill": Color(0.96, 0.9, 0.84), "fill_e": 0.08, "grade": Vector3(1.01, 1.0, 0.98), "sat": 1.1, "contrast": 1.06, "bright": 1.0, "expo": 1.02}
 		_:
-			return {"sun_e": 1.2, "amb": Color(1.0, 0.96, 0.86), "amb_e": 0.48, "fill": Color(1.0, 0.94, 0.82), "fill_e": 0.12, "grade": Vector3(1.02, 1.04, 0.98), "sat": 1.34, "contrast": 1.06, "bright": 1.06, "expo": 1.08}
+			return {"sun_e": 0.94, "amb": Color(0.93, 0.91, 0.86), "amb_e": 0.32, "fill": Color(0.95, 0.92, 0.86), "fill_e": 0.07, "grade": Vector3(1.01, 1.01, 0.99), "sat": 1.06, "contrast": 1.04, "bright": 1.0, "expo": 1.0}
 
 func _draw_sky_haze() -> void:
 	if sky_haze == null:
@@ -7749,7 +7741,7 @@ func _apply_theme(m: Dictionary) -> void:
 	sky_mat.ground_bottom_color = m.ground
 	_tint_sky_haze(m)
 	var look := _theme_light(str(m.layout))
-	world_env.adjustment_saturation = clampf(float(look.sat), 1.0, 1.45)
+	world_env.adjustment_saturation = clampf(float(look.sat), 1.0, 1.12)
 	world_env.adjustment_contrast = float(look.contrast)
 	world_env.adjustment_brightness = float(look.bright)
 	world_env.tonemap_exposure = float(look.expo)

@@ -203,8 +203,8 @@ static func _chicken() -> ArrayMesh:
 static func _round_tree() -> ArrayMesh:
 	var st := _begin()
 	var trunk := Color(0.55, 0.34, 0.16)
-	var leaf := Color(0.14, 0.7, 0.22)
-	var lite := Color(0.46, 0.88, 0.32)
+	var leaf := Color(0.28, 0.55, 0.26)
+	var lite := Color(0.42, 0.66, 0.32)
 	_cyl(st, Vector3(0, 0, 0), 0.16, 1.15, trunk, 8)
 	_ellip(st, Vector3(0, 1.75, 0), Vector3(0.98, 0.74, 0.98), leaf)
 	_ellip(st, Vector3(0.18, 2.1, 0.08), Vector3(0.52, 0.4, 0.52), lite)
@@ -212,8 +212,8 @@ static func _round_tree() -> ArrayMesh:
 
 static func _pig() -> ArrayMesh:
 	var st := _begin()
-	var pink := Color(0.98, 0.45, 0.58)
-	var dark := Color(0.9, 0.28, 0.42)
+	var pink := Color(0.95, 0.62, 0.68)
+	var dark := Color(0.84, 0.4, 0.5)
 	_ellip(st, Vector3(0, 0.38, 0), Vector3(0.32, 0.22, 0.42), pink)
 	_ellip(st, Vector3(0, 0.46, 0.38), Vector3(0.18, 0.16, 0.16), pink)
 	_cyl(st, Vector3(0, 0.42, 0.5), 0.07, 0.08, dark, 8)
@@ -251,7 +251,7 @@ static func _cow() -> ArrayMesh:
 
 static func _sheep() -> ArrayMesh:
 	var st := _begin()
-	var wool := Color(0.98, 0.98, 0.97)
+	var wool := Color(0.94, 0.93, 0.9)
 	var face := Color(0.28, 0.24, 0.22)
 	_ellip(st, Vector3(0, 0.46, 0), Vector3(0.38, 0.3, 0.48), wool)
 	_ellip(st, Vector3(0, 0.52, 0.4), Vector3(0.14, 0.12, 0.16), face)
