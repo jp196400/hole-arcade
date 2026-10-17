@@ -13,13 +13,16 @@ const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?s
 const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
 const STOP_RATE := 34.0
-const CAM_PITCH_DEG := 62.0
-const CAM_PITCH_FAR := 62.0
-# Vertical field. A wide lens bent towers inward and opened a big sky band.
+# Vertical field. A wide lens bent towers inward.
 const CAM_FOV := 40.0
 # Stick speed still uses the previous framing so a pulled-back camera does not race.
 const STICK_FOV := 56.0
-const CAM_SKY_SLIVER := 0.06
+# Share of the screen above the horizon. A 62 degree look at the hole leaves
+# that horizon outside a 40 degree lens, so the rig is the steepest view that
+# keeps this strip and keeps the hole on screen.
+const CAM_SKY_SLIVER := 0.055
+# Hole center, measured from the top. Low in the frame so the rig stays steep.
+const CAM_HOLE_Y := 0.80
 const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
 const SPEED_SCREEN := 1.0
@@ -74,8 +77,11 @@ const CLEAR_RATIO := 0.95
 const SPAWN_CLEAR := 8.0
 const SPAWN_MID := 13.0
 const VIEW_TALL_CAP := 3
-# Rival name tags sit under the HUD panel so they cannot cover the level name.
-const HUD_TAG_MIN_Y := 248.0
+# Rival name tags sit under the goal line so they cannot cover the pills.
+const HUD_TAG_MIN_Y := 232.0
+const EDGE_MARKERS := 3
+const GOAL_HOLD := 3.0
+const GOAL_FADE := 0.45
 # Swallow-size rungs. Each band is what "just fits" at the next step from the
 # starting hole up to just under a 10x clear, so every radius has new food.
 const TIER_LO := [0.05, 0.48, 0.84, 1.20, 1.58, 1.96, 2.34, 2.72, 3.10, 3.48]
@@ -428,7 +434,14 @@ var next_lbl: Label
 var next_fill: ColorRect
 var combo_lbl: Label
 var size_lbl: Label
-var size_badge: ColorRect
+var size_badge: Panel
+var size_style: StyleBoxFlat
+var score_pill: Panel
+var map_pill: Panel
+var center_pill: Panel
+var next_bg: ColorRect
+var goal_hold := 0.0
+var goal_seen := ""
 var kept_lbl: Label
 var kept_pulse := false
 var ui_swallow_frames := 0
@@ -492,7 +505,7 @@ var floaters: Array = []
 var cam: Camera3D
 var cam_look := Vector3.ZERO
 var cam_distance := 8.0
-var cam_pitch := CAM_PITCH_DEG
+var cam_pitch := 29.4
 var cam_dist_mul := 1.0
 var cam_look_lift := 0.0
 var skirt_mat: StandardMaterial3D
@@ -774,6 +787,7 @@ func _preview_zoom(kind: String) -> void:
 		hud_layer.visible = false
 
 func _probe_cam() -> void:
+	var bad := 0
 	var sizes := [["portrait", 390.0 / 844.0], ["landscape", 844.0 / 390.0]]
 	for sz in sizes:
 		aspect_lock = float(sz[1])
@@ -788,9 +802,19 @@ func _probe_cam() -> void:
 				shown_radius = hole_radius
 			_snap_camera()
 			var frac := _screen_frac(shown_radius, cam_distance)
-			var strip := _sky_strip(cam_pitch, cam.fov)
-			print("CAM %s aspect %.2f %s fov %.1f pitch %.1f dist %.2f frac %.3f sky %.3f speed %.2f" % [str(sz[0]), aspect_lock, "grown" if grown else "start", cam.fov, cam_pitch, cam_distance, frac, strip, _move_speed()])
-	print("CAM_OK")
+			var look := _look_depression()
+			var strip := _sky_strip(look, cam.fov)
+			var vp := get_viewport().get_visible_rect().size
+			var hole_y := 0.5
+			if cam != null and vp.y > 2.0:
+				hole_y = cam.unproject_position(hole_pos).y / vp.y
+			print("CAM %s aspect %.2f %s fov %.1f pitch %.1f look %.1f dist %.2f frac %.3f sky %.3f hole_y %.3f speed %.2f" % [str(sz[0]), aspect_lock, "grown" if grown else "start", cam.fov, cam_pitch, look, cam_distance, frac, strip, hole_y, _move_speed()])
+			if absf(cam.fov - CAM_FOV) > 0.2 or strip < 0.05 or strip > 0.08 or absf(hole_y - CAM_HOLE_Y) > 0.04:
+				bad += 1
+	if bad == 0:
+		print("CAM_OK")
+	else:
+		print("CAM_BAD %d" % bad)
 	get_tree().quit()
 
 func _quiet_spot() -> Vector3:
@@ -1772,14 +1796,16 @@ func _query_preview() -> String:
 	return rest
 
 func _load_font() -> void:
-	var file := load("res://assets/fonts/Fredoka.ttf") as Font
+	# The variable file's default master is weight 300, and a runtime
+	# FontVariation does not rebake the MSDF, so the web build drew the light
+	# master. This file is that family instanced at weight 700.
+	var file := load("res://assets/fonts/FredokaBold.ttf") as Font
+	if file == null:
+		file = load("res://assets/fonts/Fredoka.ttf") as Font
 	if file == null:
 		ui_font = ThemeDB.fallback_font
 		return
-	var variation := FontVariation.new()
-	variation.base_font = file
-	variation.variation_opentype = {"wght": 700.0, "wdth": 100.0}
-	ui_font = variation
+	ui_font = file
 
 func _query_speed() -> float:
 	var search := _web_search()
@@ -1870,8 +1896,9 @@ func _style(l: Label, size: int) -> void:
 
 func _style_hud(l: Label, size: int) -> void:
 	_style(l, size)
-	l.add_theme_color_override("font_outline_color", Color(0.04, 0.06, 0.1, 0.95))
-	l.add_theme_constant_override("outline_size", maxi(8, int(size / 3.2)))
+	l.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.92))
+	# Kept inside the bold font's MSDF range so the ring is not clipped on web.
+	l.add_theme_constant_override("outline_size", maxi(6, int(float(size) / 4.5)))
 
 func _load_textures() -> void:
 	tex_roads = load("res://assets/kenney/roads/Textures/colormap.png")
@@ -2122,8 +2149,14 @@ func _cam_frac_for(radius: float) -> float:
 func _cam_fov_for() -> float:
 	return CAM_FOV
 
+func _look_depression() -> float:
+	# Center ray, degrees below the horizon, so the top sliver is sky.
+	return CAM_FOV * (0.5 - CAM_SKY_SLIVER)
+
 func _cam_pitch_for(_radius: float) -> float:
-	return lerpf(CAM_PITCH_DEG, CAM_PITCH_FAR, 0.0)
+	# Elevation of the camera from the hole. Steeper than the look ray
+	# because the hole sits below center.
+	return _look_depression() + (CAM_HOLE_Y - 0.5) * CAM_FOV
 
 func _sky_strip(pitch: float, fov: float) -> float:
 	# Share of the frame above the horizon. Zero means the sky sits just off the top.
@@ -2132,17 +2165,24 @@ func _sky_strip(pitch: float, fov: float) -> float:
 		return 0.0
 	return clampf((-top_down) / maxf(fov, 0.001), 0.0, 1.0)
 
+func _aim_camera() -> void:
+	if cam == null:
+		return
+	cam.fov = _cam_fov_for()
+	cam.position = hole_pos + _camera_offset(cam_distance)
+	if cam_dist_mul > 0.9:
+		var dep := deg_to_rad(_look_depression())
+		cam_look = cam.position + Vector3(0.0, -sin(dep), -cos(dep))
+	else:
+		cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
+	cam.look_at(cam_look, Vector3.UP)
+
 func _snap_camera() -> void:
 	if cam_dist_mul > 0.9:
 		cam_pitch = _cam_pitch_for(shown_radius)
 	cam_distance = _cam_dist_for(shown_radius)
 	shown_vel = 0.0
-	cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
-	if cam == null:
-		return
-	cam.fov = _cam_fov_for()
-	cam.position = hole_pos + _camera_offset(cam_distance)
-	cam.look_at(cam_look, Vector3.UP)
+	_aim_camera()
 
 func _build_rival_view() -> void:
 	var sh := Shader.new()
@@ -4616,128 +4656,123 @@ func _build_ui() -> void:
 	ui.layer = 2
 	hud_layer = ui
 	add_child(ui)
-	clear_track = ColorRect.new()
-	clear_track.anchor_left = 0.5
-	clear_track.anchor_right = 0.5
-	clear_track.offset_left = -332
-	clear_track.offset_right = 168
-	clear_track.offset_top = 16
-	clear_track.offset_bottom = 76
-	clear_track.color = Color(0.06, 0.08, 0.12, 0.92)
-	clear_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(clear_track)
-	clear_fill = ColorRect.new()
-	clear_fill.position = Vector2(6, 6)
-	clear_fill.size = Vector2(0, 48)
-	clear_fill.color = BRAND_CYAN
-	clear_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	clear_track.add_child(clear_fill)
-	var goal_pip := ColorRect.new()
-	goal_pip.anchor_left = 1.0
-	goal_pip.anchor_right = 1.0
-	goal_pip.anchor_top = 0.0
-	goal_pip.anchor_bottom = 1.0
-	goal_pip.offset_left = -10
-	goal_pip.offset_right = -4
-	goal_pip.offset_top = 4
-	goal_pip.offset_bottom = -4
-	goal_pip.color = Color(1.0, 0.86, 0.22)
-	goal_pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	clear_track.add_child(goal_pip)
-	var hud_back := ColorRect.new()
-	hud_back.anchor_left = 0.0
-	hud_back.anchor_right = 1.0
-	hud_back.offset_left = 10
-	hud_back.offset_right = -10
-	hud_back.offset_top = 78
-	hud_back.offset_bottom = 236
-	hud_back.color = Color(0.05, 0.07, 0.12, 0.62)
-	hud_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(hud_back)
-	clear_lbl = Label.new()
-	clear_lbl.anchor_left = 0.5
-	clear_lbl.anchor_right = 0.5
-	clear_lbl.offset_left = -332
-	clear_lbl.offset_right = 332
-	clear_lbl.offset_top = 80
-	clear_lbl.offset_bottom = 128
-	clear_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	clear_lbl.text = "Clear the map  0% / 95%"
-	_style_hud(clear_lbl, 34)
-	ui.add_child(clear_lbl)
+	var hud_ink := Color(0.14, 0.18, 0.30, 0.90)
+	score_pill = _make_hud_panel(hud_ink, 22)
+	score_pill.anchor_left = 0.0
+	score_pill.anchor_right = 0.0
+	score_pill.offset_left = 16
+	score_pill.offset_right = 214
+	score_pill.offset_top = 12
+	score_pill.offset_bottom = 68
+	score_pill.visible = false
+	ui.add_child(score_pill)
 	score_lbl = Label.new()
-	score_lbl.anchor_left = 0.5
-	score_lbl.anchor_right = 0.5
-	score_lbl.offset_left = -332
-	score_lbl.offset_right = -16
-	score_lbl.offset_top = 128
-	score_lbl.offset_bottom = 176
-	_style_hud(score_lbl, 36)
-	ui.add_child(score_lbl)
+	score_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	score_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	score_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	score_lbl.clip_text = true
+	_style_hud(score_lbl, 28)
+	score_pill.add_child(score_lbl)
+	map_pill = _make_hud_panel(hud_ink, 22)
+	map_pill.anchor_left = 1.0
+	map_pill.anchor_right = 1.0
+	map_pill.offset_left = -276
+	map_pill.offset_right = -16
+	map_pill.offset_top = 12
+	map_pill.offset_bottom = 68
+	map_pill.visible = false
+	ui.add_child(map_pill)
 	level_lbl = Label.new()
-	level_lbl.anchor_left = 0.5
-	level_lbl.anchor_right = 0.5
-	level_lbl.offset_left = 16
-	level_lbl.offset_right = 332
-	level_lbl.offset_top = 128
-	level_lbl.offset_bottom = 176
-	level_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_style_hud(level_lbl, 32)
-	ui.add_child(level_lbl)
-	next_lbl = Label.new()
-	next_lbl.anchor_left = 0.5
-	next_lbl.anchor_right = 0.5
-	next_lbl.offset_left = -332
-	next_lbl.offset_right = 332
-	next_lbl.offset_top = 180
-	next_lbl.offset_bottom = 228
-	next_lbl.visible = false
-	next_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_style_hud(next_lbl, 28)
-	ui.add_child(next_lbl)
-	var next_bg := ColorRect.new()
-	next_bg.anchor_left = 0.5
-	next_bg.anchor_right = 0.5
-	next_bg.offset_left = -332
-	next_bg.offset_right = -80
-	next_bg.offset_top = 224
-	next_bg.offset_bottom = 242
-	next_bg.color = Color(0.08, 0.10, 0.16, 0.55)
-	next_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(next_bg)
-	next_fill = ColorRect.new()
-	next_fill.position = Vector2(3, 3)
-	next_fill.size = Vector2(0, 12)
-	next_fill.color = Color(1.0, 0.45, 0.7)
-	next_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	next_bg.add_child(next_fill)
-	combo_lbl = Label.new()
-	combo_lbl.position = Vector2(160, 260)
-	combo_lbl.size = Vector2(400, 56)
-	combo_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	combo_lbl.visible = false
-	_style(combo_lbl, 44)
-	combo_lbl.modulate = Color(1, 0.86, 0.2)
-	ui.add_child(combo_lbl)
-	size_badge = ColorRect.new()
-	size_badge.anchor_left = 0.5
-	size_badge.anchor_right = 0.5
-	size_badge.offset_left = 184
-	size_badge.offset_right = 332
-	size_badge.offset_top = 16
-	size_badge.offset_bottom = 76
-	size_badge.color = Color(0.11, 0.16, 0.29, 0.92)
+	level_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	level_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	level_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	level_lbl.clip_text = true
+	_style_hud(level_lbl, 26)
+	map_pill.add_child(level_lbl)
+	center_pill = _make_hud_panel(hud_ink, 26)
+	center_pill.anchor_left = 0.5
+	center_pill.anchor_right = 0.5
+	center_pill.offset_left = -330
+	center_pill.offset_right = 330
+	center_pill.offset_top = 78
+	center_pill.offset_bottom = 170
+	center_pill.visible = false
+	ui.add_child(center_pill)
+	size_style = _hud_pill(Color(0.11, 0.16, 0.29, 0.96), 18)
+	size_badge = Panel.new()
 	size_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	size_badge.pivot_offset = Vector2(74, 30)
-	ui.add_child(size_badge)
+	size_badge.add_theme_stylebox_override("panel", size_style)
+	size_badge.position = Vector2(12, 12)
+	size_badge.size = Vector2(150, 68)
+	size_badge.pivot_offset = Vector2(75, 34)
+	center_pill.add_child(size_badge)
 	size_lbl = Label.new()
 	size_lbl.text = "Size 1"
 	size_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
 	size_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	size_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	size_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_style(size_lbl, 30)
+	_style_hud(size_lbl, 26)
 	size_badge.add_child(size_lbl)
+	clear_lbl = Label.new()
+	clear_lbl.position = Vector2(196, 8)
+	clear_lbl.size = Vector2(448, 42)
+	clear_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	clear_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	clear_lbl.clip_text = true
+	clear_lbl.text = "Clear the map  0% / 95%"
+	_style_hud(clear_lbl, 24)
+	center_pill.add_child(clear_lbl)
+	clear_track = ColorRect.new()
+	clear_track.position = Vector2(196, 56)
+	clear_track.size = Vector2(448, 16)
+	clear_track.color = Color(0.05, 0.07, 0.12, 0.72)
+	clear_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center_pill.add_child(clear_track)
+	clear_fill = ColorRect.new()
+	clear_fill.position = Vector2(2, 3)
+	clear_fill.size = Vector2(0, 10)
+	clear_fill.color = BRAND_CYAN
+	clear_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clear_track.add_child(clear_fill)
+	next_lbl = Label.new()
+	next_lbl.anchor_left = 0.5
+	next_lbl.anchor_right = 0.5
+	next_lbl.offset_left = -300
+	next_lbl.offset_right = 300
+	next_lbl.offset_top = 178
+	next_lbl.offset_bottom = 214
+	next_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	next_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	next_lbl.visible = false
+	next_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_style_hud(next_lbl, 22)
+	ui.add_child(next_lbl)
+	next_bg = ColorRect.new()
+	next_bg.anchor_left = 0.5
+	next_bg.anchor_right = 0.5
+	next_bg.offset_left = -180
+	next_bg.offset_right = 180
+	next_bg.offset_top = 214
+	next_bg.offset_bottom = 226
+	next_bg.color = Color(0.05, 0.07, 0.12, 0.55)
+	next_bg.visible = false
+	next_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(next_bg)
+	next_fill = ColorRect.new()
+	next_fill.position = Vector2(2, 2)
+	next_fill.size = Vector2(0, 8)
+	next_fill.color = Color(1.0, 0.45, 0.7)
+	next_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	next_bg.add_child(next_fill)
+	combo_lbl = Label.new()
+	combo_lbl.position = Vector2(160, 248)
+	combo_lbl.size = Vector2(400, 56)
+	combo_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	combo_lbl.visible = false
+	_style(combo_lbl, 44)
+	combo_lbl.modulate = Color(1, 0.86, 0.2)
+	ui.add_child(combo_lbl)
 	kept_lbl = Label.new()
 	kept_lbl.anchor_left = 0.5
 	kept_lbl.anchor_right = 0.5
@@ -5374,10 +5409,7 @@ func _smooth_camera(delta: float) -> void:
 		cam_pitch = _cam_pitch_for(shown_radius)
 	if cam_hold or cam == null:
 		return
-	cam.fov = _cam_fov_for()
-	cam_look = hole_pos + Vector3(0.0, cam_look_lift, 0.0)
-	cam.position = hole_pos + _camera_offset(cam_distance)
-	cam.look_at(cam_look, Vector3.UP)
+	_aim_camera()
 
 func _fits(size: float) -> bool:
 	return size < hole_radius * OPEN_FIT
@@ -5482,9 +5514,9 @@ func _tick_clear_bar(delta: float) -> void:
 	if absf(clear_shown - goal) < 0.002:
 		clear_shown = goal
 	if clear_fill != null and clear_track != null:
-		var inner := maxf(clear_track.size.x - 16.0, 0.0)
+		var inner := maxf(clear_track.size.x - 4.0, 0.0)
 		var toward := clampf(clear_shown / CLEAR_RATIO, 0.0, 1.0)
-		clear_fill.size = Vector2(inner * toward, 48)
+		clear_fill.size = Vector2(inner * toward, maxf(clear_track.size.y - 6.0, 4.0))
 	if clear_lbl:
 		clear_lbl.text = _clear_caption()
 	guide_wait = maxf(0.0, guide_wait - delta)
@@ -5557,35 +5589,70 @@ func _refresh_hud() -> void:
 	shown_score = score
 	shown_level = level
 
+func _wake_goal() -> void:
+	goal_hold = GOAL_HOLD
+	if next_lbl:
+		next_lbl.modulate.a = 1.0
+	if next_bg:
+		next_bg.modulate.a = 1.0
+
 func _refresh_next_skin() -> void:
 	if next_lbl == null:
 		return
 	if not match_hud:
 		next_lbl.visible = false
+		if next_bg:
+			next_bg.visible = false
 		if next_fill:
 			next_fill.visible = false
-			var bar := next_fill.get_parent() as CanvasItem
-			if bar:
-				bar.visible = false
 		return
 	var nxt: Dictionary = Save.next_skin()
 	if nxt.is_empty():
 		next_lbl.visible = false
+		if next_bg:
+			next_bg.visible = false
 		if next_fill:
 			next_fill.visible = false
 		return
 	var skin: Dictionary = nxt.skin
 	var prog: Dictionary = nxt.progress
+	var line := _goal_line(prog)
+	var key := "%s|%d" % [line, int(round(float(prog.ratio) * 100.0))]
+	if key != goal_seen:
+		goal_seen = key
+		_wake_goal()
 	next_lbl.visible = true
-	next_lbl.text = _goal_line(prog)
+	next_lbl.text = line
+	if next_bg:
+		next_bg.visible = true
 	if next_fill:
 		next_fill.visible = true
 		var track := next_fill.get_parent() as ColorRect
 		var inner := 400.0
 		if track:
-			inner = maxf(track.size.x - 6.0, 0.0)
+			inner = maxf(track.size.x - 4.0, 0.0)
 		next_fill.size = Vector2(inner * float(prog.ratio), next_fill.size.y)
 		next_fill.color = skin.a
+
+func _tick_goal(delta: float) -> void:
+	if not match_hud:
+		return
+	# The cover can sit up for a few seconds. Hold the line until the round is visible.
+	if round_cover != null and round_cover.visible:
+		if goal_hold < GOAL_HOLD:
+			_wake_goal()
+		return
+	_refresh_next_skin()
+	if next_lbl == null or not next_lbl.visible:
+		return
+	if goal_hold > 0.0:
+		goal_hold = maxf(0.0, goal_hold - delta)
+	var alpha := 1.0
+	if goal_hold < GOAL_FADE:
+		alpha = clampf(goal_hold / GOAL_FADE, 0.0, 1.0)
+	next_lbl.modulate.a = alpha
+	if next_bg:
+		next_bg.modulate.a = alpha
 
 func _tick_feedback(delta: float) -> void:
 	if combo_left > 0.0:
@@ -5598,15 +5665,18 @@ func _tick_feedback(delta: float) -> void:
 			var u := clampf(size_banner_t / 1.45, 0.0, 1.0)
 			var pop := 1.0 + u * 0.16
 			size_badge.scale = Vector2(pop, pop)
-			size_badge.color = Color(0.11, 0.16, 0.29).lerp(Color(0.92, 0.62, 0.12), u)
-			size_badge.color.a = 0.94
+			if size_style:
+				var ink := Color(0.11, 0.16, 0.29).lerp(Color(0.92, 0.62, 0.12), u)
+				ink.a = 0.96
+				size_style.bg_color = ink
 			if kept_lbl:
 				kept_lbl.visible = kept_pulse and u > 0.04
 				kept_lbl.modulate.a = u
 		else:
 			size_banner_t = 0.0
 			size_badge.scale = Vector2.ONE
-			size_badge.color = Color(0.11, 0.16, 0.29, 0.92)
+			if size_style:
+				size_style.bg_color = Color(0.11, 0.16, 0.29, 0.96)
 			if kept_lbl:
 				kept_lbl.visible = false
 			kept_pulse = false
@@ -6125,7 +6195,7 @@ func _tag_on_edge(bounds: Rect2, dir: Vector2) -> Vector2:
 		clampf(at.y, bounds.position.y, bounds.end.y)
 	)
 
-func _place_rival_tag(tag: Label, world: Vector3, who: String) -> Vector2:
+func _place_rival_tag(tag: Label, world: Vector3, who: String) -> Dictionary:
 	var vp := get_viewport().get_visible_rect().size
 	var limits := _tag_limits(tag)
 	var behind := cam.is_position_behind(world)
@@ -6134,10 +6204,13 @@ func _place_rival_tag(tag: Label, world: Vector3, who: String) -> Vector2:
 	var off := behind or sp.x < limits.position.x - 8.0 or sp.y < limits.position.y - 8.0 or sp.x > limits.end.x + 8.0 or sp.y > limits.end.y + 8.0
 	if not off:
 		tag.text = who
-		return Vector2(
-			clampf(sp.x, limits.position.x, limits.end.x),
-			clampf(sp.y, limits.position.y, limits.end.y)
-		)
+		return {
+			"at": Vector2(
+				clampf(sp.x, limits.position.x, limits.end.x),
+				clampf(sp.y, limits.position.y, limits.end.y)
+			),
+			"edge": false,
+		}
 	var dir := raw - vp * 0.5
 	if behind:
 		dir = -dir
@@ -6150,12 +6223,13 @@ func _place_rival_tag(tag: Label, world: Vector3, who: String) -> Vector2:
 		tag.text = "^ " + who
 	else:
 		tag.text = who + " v"
-	return _tag_on_edge(limits, dir)
+	return {"at": _tag_on_edge(limits, dir), "edge": true}
 
 func _sync_rival_visuals() -> void:
 	if rival_mm == null:
 		return
 	var shown: Array = []
+	var edges: Array = []
 	for i in rivals.size():
 		var rival: Dictionary = rivals[i]
 		var s := 0.0
@@ -6174,14 +6248,17 @@ func _sync_rival_visuals() -> void:
 		if s < 0.05 or cam == null:
 			tag.visible = false
 		else:
-			var placed := _place_rival_tag(tag, above, str(rival.name))
-			if placed.x < -1000.0:
+			var placed: Dictionary = _place_rival_tag(tag, above, str(rival.name))
+			var at: Vector2 = placed.at
+			tag.position = at
+			var dist := cam.global_position.distance_squared_to(rival.pos)
+			var item := {"i": i, "d": dist, "p": at}
+			if bool(placed.edge):
 				tag.visible = false
+				edges.append(item)
 			else:
 				tag.visible = true
-				tag.position = placed
-				var dist := cam.global_position.distance_squared_to(rival.pos)
-				shown.append({"i": i, "d": dist, "p": placed})
+				shown.append(item)
 	shown.sort_custom(func(a, b): return float(a.d) < float(b.d))
 	var kept: Array = []
 	var tag_size := Vector2(220, 48)
@@ -6198,6 +6275,31 @@ func _sync_rival_visuals() -> void:
 			tag.visible = false
 		else:
 			kept.append(rect)
+	edges.sort_custom(func(a, b): return float(a.d) < float(b.d))
+	var edge_n := 0
+	var edge_used: Array = []
+	for item in edges:
+		var tag: Label = rival_labels[int(item.i)]
+		if edge_n >= EDGE_MARKERS:
+			tag.visible = false
+			continue
+		var at: Vector2 = item.p
+		var limits := _tag_limits(tag)
+		for _step in 6:
+			var rect := Rect2(at, tag.size)
+			var hit := false
+			for prev in edge_used:
+				if (prev as Rect2).grow(8.0).intersects(rect):
+					hit = true
+					break
+			if not hit:
+				break
+			at.y = minf(at.y + tag.size.y + 6.0, limits.end.y)
+			at.x = clampf(at.x, limits.position.x, limits.end.x)
+		tag.position = at
+		tag.visible = true
+		edge_used.append(Rect2(at, tag.size))
+		edge_n += 1
 
 func _push_openings() -> void:
 	if ground_mat == null or opening_centers.size() < 8:
@@ -6342,6 +6444,7 @@ func _process(delta: float) -> void:
 		_fade_blockers()
 	_tick_feedback(delta)
 	_tick_clear_bar(delta)
+	_tick_goal(delta)
 	if score != shown_score or level != shown_level:
 		_refresh_hud()
 	if debug_on:
@@ -6352,7 +6455,9 @@ func _process(delta: float) -> void:
 
 func _tick_floaters(delta: float) -> void:
 	for f in floaters:
-		if float(f.age) < 0.0:
+		if not match_hud or float(f.age) < 0.0:
+			if f.lbl and not match_hud:
+				(f.lbl as CanvasItem).visible = false
 			continue
 		f.age = float(f.age) + delta
 		var p: Vector3 = f.pos
@@ -7986,16 +8091,19 @@ func _resume_after_eaten() -> void:
 
 func _set_match_hud(on: bool) -> void:
 	match_hud = on
-	for n in [clear_track, clear_lbl, score_lbl, level_lbl, next_lbl, size_badge]:
+	for n in [score_pill, map_pill, center_pill, clear_track, clear_lbl, score_lbl, level_lbl, next_lbl, next_bg, size_badge]:
 		if n:
 			n.visible = on
-	if next_fill and next_fill.get_parent():
-		next_fill.get_parent().visible = on
+	if next_fill:
+		next_fill.visible = on
 	if size_lbl:
 		size_lbl.visible = on
 		if on and size_lbl.text == "":
 			size_lbl.text = "Size %d" % (level + 1)
-	if not on:
+	if on:
+		_wake_goal()
+	else:
+		goal_hold = 0.0
 		if combo_lbl:
 			combo_lbl.visible = false
 		if kept_lbl:
@@ -8005,6 +8113,10 @@ func _set_match_hud(on: bool) -> void:
 		for tag in rival_labels:
 			if tag is CanvasItem:
 				(tag as CanvasItem).visible = false
+		for f in floaters:
+			f.age = -1.0
+			if f.lbl:
+				(f.lbl as CanvasItem).visible = false
 
 func _set_chrome(on: bool) -> void:
 	if chrome_layer:
@@ -8200,6 +8312,21 @@ func _toggle_haptics() -> void:
 
 func _ui_click() -> void:
 	_sfx("click", 1.0, false)
+
+func _hud_pill(bg: Color, radius: int) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = bg
+	s.corner_radius_top_left = radius
+	s.corner_radius_top_right = radius
+	s.corner_radius_bottom_right = radius
+	s.corner_radius_bottom_left = radius
+	return s
+
+func _make_hud_panel(bg: Color, radius: int) -> Panel:
+	var p := Panel.new()
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_theme_stylebox_override("panel", _hud_pill(bg, radius))
+	return p
 
 func _panel_style() -> StyleBoxFlat:
 	var s := StyleBoxFlat.new()
