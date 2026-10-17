@@ -45,6 +45,9 @@ jobs:
           godot --headless --path . --export-release "Web" build/web/index.html
           test -s build/web/index.html
           test -s build/web/index.js
+          # The sha substitution must not rewrite the build-id property into invalid JS.
+          grep -q 'window.__holeBuild' build/web/index.html
+          ! grep -q 'window.__BUILD_SHA__' build/web/index.html
           test -s build/web/index.wasm
           test -s build/web/index.pck
           cp assets/music/loop.ogg build/web/music.ogg
@@ -55,6 +58,7 @@ jobs:
           sed -i "s/index.apple-touch-icon.png/index.apple-touch-icon.png?v=${GITHUB_SHA}/g" build/web/index.html
           sed -i "s/index.icon.png/index.icon.png?v=${GITHUB_SHA}/g" build/web/index.html
           grep -q "index.js?v=${GITHUB_SHA}" build/web/index.html
+          grep -q 'window.__holeBuild' build/web/index.html
           grep -q "index.wasm" build/web/index.html
           grep -q "v=${GITHUB_SHA}" build/web/index.html
           grep -q 'version.json?ts=' build/web/index.html
