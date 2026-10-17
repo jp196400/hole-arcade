@@ -13,17 +13,22 @@ const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?s
 const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
 const STOP_RATE := 34.0
-const CAM_PITCH_DEG := 54.0
-const CAM_PITCH_FAR := 54.0
-const CAM_FOV := 56.0
-# Share of the frame height that stays sky. Pitch is held against the field
-# of view so this sliver does not grow or vanish as the hole zooms out.
-const CAM_SKY_SLIVER := 0.08
+const CAM_PITCH_DEG := 62.0
+const CAM_PITCH_FAR := 62.0
+# Vertical field. A wide lens bent towers inward and opened a big sky band.
+const CAM_FOV := 40.0
+# Stick speed still uses the previous framing so a pulled-back camera does not race.
+const STICK_FOV := 56.0
+const CAM_SKY_SLIVER := 0.06
 const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
 const SPEED_SCREEN := 1.0
 const POOL := 40
 const FIT_RATIO := 0.84
+# A prop falls when its footprint sits inside the opening, not a smaller inner circle.
+const OPEN_FIT := 0.97
+# One hole must be this much larger before it can swallow the other.
+const EAT_RATIO := 1.18
 const GROW_MULTIPLE := 10.0
 const SCREEN_FRAC_START := 0.18
 const SCREEN_FRAC_END := 0.36
@@ -69,8 +74,8 @@ const CLEAR_RATIO := 0.95
 const SPAWN_CLEAR := 8.0
 const SPAWN_MID := 13.0
 const VIEW_TALL_CAP := 3
-# Rival name tags sit under this so they cannot cover the level name.
-const HUD_TAG_MIN_Y := 196.0
+# Rival name tags sit under the HUD panel so they cannot cover the level name.
+const HUD_TAG_MIN_Y := 248.0
 # Swallow-size rungs. Each band is what "just fits" at the next step from the
 # starting hole up to just under a 10x clear, so every radius has new food.
 const TIER_LO := [0.05, 0.48, 0.84, 1.20, 1.58, 1.96, 2.34, 2.72, 3.10, 3.48]
@@ -545,6 +550,19 @@ var round_cover: ColorRect
 var reveal_size := Vector2.ZERO
 var reveal_stable := 0
 var reveal_since := 0
+var boot_frames := 0
+var bot_drive := false
+var bot_clock := 0.0
+var bot_step_ready := false
+var play_age := 0.0
+var bot_food_dist := 0.0
+var bot_lock: Dictionary = {}
+var bot_avoid_uid := -1
+var bot_stall := 0.0
+var bot_best_d := 999.0
+var rival_bites := 0
+var feet_lock := false
+var aspect_lock := 0.0
 var map_max_base := 0.4
 var final_radius := 2.6
 var round_settled := false
@@ -631,7 +649,11 @@ func _ready() -> void:
 	var start_idx := mini(Save.unlocked_level, CatalogScript.maps().size() - 1)
 	var preview := _query_preview()
 	if preview == "":
-		start_round(start_idx)
+		# Let the page hide "Loading 100%" before the city build blocks the thread.
+		_ensure_cover()
+		round_cover.visible = true
+		reveal_since = Time.get_ticks_msec()
+		call_deferred("start_round", start_idx)
 	else:
 		_enter_attract(start_idx)
 	if preview == "levels":
@@ -699,6 +721,12 @@ func _ready() -> void:
 		call_deferred("_fail_graphics")
 	elif preview == "topple":
 		call_deferred("_probe_topple")
+	elif preview == "cam":
+		call_deferred("_probe_cam")
+	elif preview == "feet":
+		call_deferred("_probe_feet")
+	elif preview == "rivalbot":
+		call_deferred("_probe_rival_bot")
 	elif preview.begins_with("close"):
 		var close_rest := preview.substr(5)
 		var close_idx := start_idx
@@ -744,6 +772,195 @@ func _preview_zoom(kind: String) -> void:
 	_set_match_hud(false)
 	if hud_layer:
 		hud_layer.visible = false
+
+func _probe_cam() -> void:
+	var sizes := [["portrait", 390.0 / 844.0], ["landscape", 844.0 / 390.0]]
+	for sz in sizes:
+		aspect_lock = float(sz[1])
+		for grown in [false, true]:
+			start_round(3)
+			playing = false
+			if grown:
+				var total := maxi(clear_total, 1)
+				player_eaten = int(float(total) * 0.45)
+				clear_eaten = player_eaten
+				_sync_level()
+				shown_radius = hole_radius
+			_snap_camera()
+			var frac := _screen_frac(shown_radius, cam_distance)
+			var strip := _sky_strip(cam_pitch, cam.fov)
+			print("CAM %s aspect %.2f %s fov %.1f pitch %.1f dist %.2f frac %.3f sky %.3f speed %.2f" % [str(sz[0]), aspect_lock, "grown" if grown else "start", cam.fov, cam_pitch, cam_distance, frac, strip, _move_speed()])
+	print("CAM_OK")
+	get_tree().quit()
+
+func _quiet_spot() -> Vector3:
+	for x in range(-68, 68, 5):
+		for z in range(-68, 68, 5):
+			var p := Vector3(float(x), 0.0, float(z))
+			if _scan_buckets(p, 2.4).is_empty() and _surf_f(p.x, p.z) != SURF_WATER:
+				return p
+	return Vector3(40.0, 0.0, -40.0)
+
+func _probe_feet() -> void:
+	_ensure_models()
+	var bad := 0
+	var kinds := 0
+	for ki in prop_defs.size():
+		kinds += 1
+		var scale := maxf(float(prop_defs[ki][2]), 0.001)
+		var visual := _visual_half(ki) * scale
+		var placed := float(kind_base[ki]) * scale
+		var role := str(prop_defs[ki][5])
+		var id := kind_id_of(ki)
+		var ok := placed >= 0.04 and visual >= 0.02
+		if role in ["tree", "palm"]:
+			ok = ok and placed >= visual * 0.55 and placed <= visual * 0.98
+		elif placed > visual * 1.12:
+			ok = false
+		if not ok:
+			bad += 1
+			print("FOOT_KIND FAIL %s role=%s base=%.3f visual=%.3f" % [id, role, placed, visual])
+		else:
+			print("FOOT_KIND %s role=%s base=%.3f visual=%.3f" % [id, role, placed, visual])
+	feet_lock = true
+	for mi in CatalogScript.maps().size():
+		start_round(mi)
+		playing = false
+		bot_drive = false
+		var seen := {}
+		var loose := 0
+		for o in props:
+			if not bool(o.alive):
+				continue
+			if not o.has("bkey"):
+				loose += 1
+			var id := kind_id_of(int(o.kind))
+			seen[id] = o
+			var visual := _visual_half(int(o.kind)) * float(o.scale.x)
+			var base := float(o.base)
+			var role := str(o.role)
+			var fit_ok := base >= 0.04 and base <= visual * 1.12 + 0.02
+			if role in ["tree", "palm"]:
+				fit_ok = base >= visual * 0.55 and base <= visual * 0.98
+			if not fit_ok:
+				bad += 1
+				print("FOOT_PROP FAIL %s %s base=%.3f visual=%.3f" % [str(map.name), id, base, visual])
+		if loose > 0:
+			bad += loose
+			print("FOOT_BUCKET FAIL %s loose %d" % [str(map.name), loose])
+		var other_done := false
+		for id in seen.keys():
+			var sample: Dictionary = seen[id]
+			var role := str(sample.role)
+			var plant := role in ["tree", "palm"]
+			if not plant and not other_done:
+				plant = true
+				other_done = true
+			if not plant:
+				continue
+			var spot := _quiet_spot()
+			_plant_prop(sample, spot)
+			for rival in rivals:
+				rival.alive = false
+				rival.respawn = 999.0
+			var base := float(sample.base)
+			hole_pos = spot
+			hole_radius = base * 0.72
+			shown_radius = hole_radius
+			hole_open = hole_radius
+			playing = true
+			_activate_nearby()
+			playing = false
+			if bool(sample.in_body) or not bool(sample.alive):
+				bad += 1
+				print("FOOT_HOLD FAIL %s %s base=%.3f rad=%.3f" % [str(map.name), str(id), base, hole_radius])
+			hole_radius = base / OPEN_FIT + 0.16
+			shown_radius = hole_radius
+			hole_open = hole_radius
+			player_invuln = 99.0
+			playing = true
+			var fell := false
+			for _frame in 24:
+				await get_tree().physics_frame
+				if not bool(sample.alive) or bool(sample.in_body) or bool(sample.get("pit", false)):
+					var yy := 0.0
+					if sample.body != null:
+						yy = (sample.body as RigidBody3D).global_position.y
+					if not bool(sample.alive) or yy < -0.12 or bool(sample.get("pit", false)) or float(sample.get("tilt", 0.0)) > 0.25:
+						fell = true
+						break
+			if not fell:
+				bad += 1
+				print("FOOT_FALL FAIL %s %s base=%.3f rad=%.3f" % [str(map.name), str(id), base, hole_radius])
+			else:
+				print("FOOT_FALL %s %s ok" % [str(map.name), str(id)])
+			playing = false
+		print("FOOT_MAP %s kinds %d" % [str(map.name), seen.size()])
+	print("FOOT_SUM kinds %d bad %d" % [kinds, bad])
+	print("FOOT_OK" if bad == 0 else "FOOT_FAIL")
+	get_tree().quit()
+
+func _probe_rival_bot() -> void:
+	var maps := [0, 4, 9]
+	var trials := 3
+	var cap := 100.0
+	for mi in maps:
+		var firsts: Array = []
+		var deaths := 0
+		for trial in trials:
+			seed(4100 + mi * 19 + trial * 7)
+			bot_drive = true
+			feet_lock = false
+			start_round(mi)
+			var min_ratio := 99.0
+			for rival in rivals:
+				min_ratio = minf(min_ratio, float(rival.radius) / maxf(hole_radius, 0.01))
+			var edible := 0
+			for rival in rivals:
+				if hole_radius > float(rival.radius) * EAT_RATIO:
+					edible += 1
+			bot_clock = 0.0
+			bot_lock = {}
+			bot_avoid_uid = -1
+			bot_stall = 0.0
+			bot_best_d = 999.0
+			var first := -1.0
+			var dead := false
+			var guard := 0
+			var mark := 0.0
+			while bot_clock < cap and guard < 7000:
+				await get_tree().physics_frame
+				guard += 1
+				if first < 0.0 and rival_bites > 0:
+					first = bot_clock
+				if bot_clock >= mark:
+					mark += 20.0
+					print("BOT_TICK level %d trial %d t %.1f hole %.2f bites %d food %.1f" % [mi + 1, trial, bot_clock, hole_radius, rival_bites, bot_food_dist])
+				if round_eaten != "" or mode != "play":
+					dead = true
+					break
+			if dead:
+				deaths += 1
+			firsts.append(first)
+			var rival_r := 0.0
+			var alive_n := 0
+			for rival in rivals:
+				if bool(rival.alive):
+					alive_n += 1
+					rival_r += float(rival.radius)
+			if alive_n > 0:
+				rival_r /= float(alive_n)
+			print("BOT level %d trial %d first %.1f dead %s bites %d hole %.2f rival %.2f spawn_min %.2f edible0 %d" % [mi + 1, trial, first, str(dead), rival_bites, hole_radius, rival_r, min_ratio, edible])
+		var caught := 0
+		var sum := 0.0
+		for f in firsts:
+			if float(f) >= 0.0:
+				caught += 1
+				sum += float(f)
+		var avg := sum / float(maxi(caught, 1))
+		print("BOT_SUM level %d deaths %d/%d caught %d avg_first %.1f" % [mi + 1, deaths, trials, caught, avg])
+	print("BOT_OK")
+	get_tree().quit()
 
 func _probe_growth() -> void:
 	for i in CatalogScript.maps().size():
@@ -1580,9 +1797,9 @@ func _query_speed() -> float:
 	return clampf(value, 0.05, 3.0)
 
 func _prewarm_shaders() -> void:
-	if DisplayServer.get_name() == "headless":
-		return
-	RenderingServer.force_draw(false)
+	# A synchronous force_draw during startup can stall the web loader at 100%.
+	# The navy cover hides the first real frames while materials compile.
+	return
 
 func _ensure_cover() -> void:
 	if round_cover != null:
@@ -1598,12 +1815,11 @@ func _ensure_cover() -> void:
 	round_cover.visible = false
 
 func _warm_view() -> void:
-	# Upload the city before it is shown. WebGL compiles each material on first use.
+	# The city is drawn on the following frames. Forcing those draws here
+	# blocked the browser on the first visit and left the loader at 100%.
 	if DisplayServer.get_name() == "headless":
 		return
 	_ensure_cover()
-	for _i in 4:
-		RenderingServer.force_draw(false)
 
 func _hold_for_reveal() -> void:
 	if DisplayServer.get_name() == "headless":
@@ -1614,7 +1830,16 @@ func _hold_for_reveal() -> void:
 	reveal_stable = 0
 	reveal_since = Time.get_ticks_msec()
 
+func _hide_boot_loader() -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("if(window.__holeReveal)window.__holeReveal();", true)
+
 func _tick_reveal() -> void:
+	if boot_frames < 3:
+		boot_frames += 1
+		if boot_frames == 1:
+			_hide_boot_loader()
 	if round_cover == null or not round_cover.visible:
 		return
 	var sz := get_viewport().get_visible_rect().size
@@ -1626,9 +1851,10 @@ func _tick_reveal() -> void:
 		if sz.y > 64.0:
 			_snap_camera()
 	var waited := Time.get_ticks_msec() - reveal_since
-	# Stay covered through the first draws so materials finish compiling.
-	if (reveal_stable >= 8 and waited >= 450) or waited > 2200:
+	# Viewport size can keep changing on a phone. Never wait on that signal.
+	if (reveal_stable >= 6 and waited >= 280) or waited > 2500:
 		round_cover.visible = false
+		_hide_boot_loader()
 
 func _no_shadow(g: GeometryInstance3D) -> void:
 	g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1641,6 +1867,11 @@ func _style(l: Label, size: int) -> void:
 	l.add_theme_color_override("font_outline_color", Color(0.1, 0.18, 0.32, 0.9))
 	l.add_theme_constant_override("outline_size", maxi(4, int(size / 5.0)))
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+func _style_hud(l: Label, size: int) -> void:
+	_style(l, size)
+	l.add_theme_color_override("font_outline_color", Color(0.04, 0.06, 0.1, 0.95))
+	l.add_theme_constant_override("outline_size", maxi(8, int(size / 3.2)))
 
 func _load_textures() -> void:
 	tex_roads = load("res://assets/kenney/roads/Textures/colormap.png")
@@ -1826,6 +2057,8 @@ func _camera_offset(dist: float) -> Vector3:
 	return Vector3(0, sin(pitch) * dist, cos(pitch) * dist)
 
 func _view_aspect() -> float:
+	if aspect_lock > 0.05:
+		return aspect_lock
 	var vp := get_viewport()
 	if vp == null:
 		return 720.0 / 1280.0
@@ -1842,18 +2075,26 @@ func _wide_blend() -> float:
 func _hfov_half_tan() -> float:
 	return tan(deg_to_rad(CAM_FOV) * 0.5) * _view_aspect()
 
-func _frame_half_tan() -> float:
+func _framed_aspect() -> float:
 	# Framing a wide monitor on its full width pulls the camera into a
 	# top-down close-up. Ease landscape back toward a narrower aspect.
 	var aspect := _view_aspect()
-	var framed := lerpf(aspect, minf(aspect, 1.15), _wide_blend())
-	return tan(deg_to_rad(CAM_FOV) * 0.5) * framed
+	return lerpf(aspect, minf(aspect, 1.15), _wide_blend())
+
+func _frame_half_tan() -> float:
+	return tan(deg_to_rad(CAM_FOV) * 0.5) * _framed_aspect()
+
+func _stick_half_tan() -> float:
+	return tan(deg_to_rad(STICK_FOV) * 0.5) * _framed_aspect()
 
 func _screen_frac(radius: float, dist: float) -> float:
 	return (2.0 * radius / maxf(dist, 0.001)) / _hfov_half_tan()
 
 func _dist_for_frac(radius: float, frac: float) -> float:
 	return (2.0 * radius) / maxf(frac * _frame_half_tan(), 0.001)
+
+func _stick_dist_for_frac(radius: float, frac: float) -> float:
+	return (2.0 * radius) / maxf(frac * _stick_half_tan(), 0.001)
 
 func _cam_ref_dist() -> float:
 	return _dist_for_frac(LEVEL_RADIUS[0], SCREEN_FRAC_START)
@@ -1868,23 +2109,28 @@ func _cam_dist_for(radius: float) -> float:
 	# Front-load the on-screen size so early radius gains are not cancelled by zoom.
 	var shaped := 0.0 if grow <= 0.0 else pow(grow, 0.45)
 	var frac := lerpf(SCREEN_FRAC_START, SCREEN_FRAC_END, shaped)
-	return _dist_for_frac(r, frac) * cam_dist_mul * _cam_span_scale()
+	return _dist_for_frac(r, frac) * cam_dist_mul
+
+func _cam_frac_for(radius: float) -> float:
+	var r := maxf(radius, 0.12)
+	var start_r := maxf(_start_radius(), 0.12)
+	var end_r := maxf(final_radius, start_r + 0.2)
+	var grow := clampf((r - start_r) / (end_r - start_r), 0.0, 1.0)
+	var shaped := 0.0 if grow <= 0.0 else pow(grow, 0.45)
+	return lerpf(SCREEN_FRAC_START, SCREEN_FRAC_END, shaped)
 
 func _cam_fov_for() -> float:
-	# Steep pitch, with just enough field that the horizon stays a thin sliver.
-	var horizon := 1.0 - CAM_SKY_SLIVER * 2.0
-	var half := atan(tan(deg_to_rad(CAM_PITCH_DEG)) / horizon)
-	return rad_to_deg(half * 2.0)
+	return CAM_FOV
 
 func _cam_pitch_for(_radius: float) -> float:
-	return CAM_PITCH_DEG
+	return lerpf(CAM_PITCH_DEG, CAM_PITCH_FAR, 0.0)
 
-func _cam_span_scale() -> float:
-	# The steeper view uses a wider field. Pull the camera in by the same
-	# factor so the hole keeps its width and a drag still crosses the screen.
-	var old_half := tan(deg_to_rad(lerpf(68.0, 82.0, _wide_blend())) * 0.5)
-	var new_half := tan(deg_to_rad(_cam_fov_for()) * 0.5)
-	return old_half / maxf(new_half, 0.001)
+func _sky_strip(pitch: float, fov: float) -> float:
+	# Share of the frame above the horizon. Zero means the sky sits just off the top.
+	var top_down := pitch - fov * 0.5
+	if top_down >= 0.0:
+		return 0.0
+	return clampf((-top_down) / maxf(fov, 0.001), 0.0, 1.0)
 
 func _snap_camera() -> void:
 	if cam_dist_mul > 0.9:
@@ -2670,6 +2916,7 @@ func _ensure_models() -> void:
 		kind_multimeshes.append(null)
 		kind_by_id[str(item.id)] = prop_defs.size() - 1
 	_register_theme_models()
+	_normalize_footprints()
 	ground_meshes = [
 		_flat_ground(_load_model("res://assets/kenney/roads/road-straight.glb").mesh),
 		_flat_ground(_load_model("res://assets/kenney/roads/road-crossing.glb").mesh),
@@ -3881,6 +4128,29 @@ func _overlap_foot(ki: int, sxz: float) -> float:
 	var native: Vector3 = kind_native[ki]
 	return maxf(native.x, native.z) * sxz * 0.45
 
+func _visual_half(ki: int) -> float:
+	var native: Vector3 = kind_native[ki]
+	return maxf(native.x, native.z) * 0.5
+
+func _normalize_footprints() -> void:
+	# Swallow size tracks the mesh the player sees. A crown wider than `base`
+	# sat inside the ring without falling. A trunk-only base ate a whole tree.
+	for ki in prop_defs.size():
+		var scale := maxf(float(prop_defs[ki][2]), 0.001)
+		var visual := _visual_half(ki) * scale
+		if visual < 0.02:
+			continue
+		var placed := float(kind_base[ki]) * scale
+		var role := str(prop_defs[ki][5])
+		var want := placed
+		if role in ["tree", "palm"]:
+			want = clampf(visual * 0.78, visual * 0.62, visual * 0.92)
+		elif placed > visual * 1.12:
+			want = visual * 0.96
+		elif placed < visual * 0.22 and role in ["small", "clutter", "lamp", "umbrella"]:
+			want = placed
+		kind_base[ki] = maxf(want, 0.04) / scale
+
 func _prop_metrics(id: String, grow: float) -> Dictionary:
 	var ki: int = int(kind_by_id[id])
 	var sxz := float(prop_defs[ki][2]) * grow
@@ -4374,6 +4644,16 @@ func _build_ui() -> void:
 	goal_pip.color = Color(1.0, 0.86, 0.22)
 	goal_pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	clear_track.add_child(goal_pip)
+	var hud_back := ColorRect.new()
+	hud_back.anchor_left = 0.0
+	hud_back.anchor_right = 1.0
+	hud_back.offset_left = 10
+	hud_back.offset_right = -10
+	hud_back.offset_top = 78
+	hud_back.offset_bottom = 236
+	hud_back.color = Color(0.05, 0.07, 0.12, 0.62)
+	hud_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(hud_back)
 	clear_lbl = Label.new()
 	clear_lbl.anchor_left = 0.5
 	clear_lbl.anchor_right = 0.5
@@ -4383,7 +4663,7 @@ func _build_ui() -> void:
 	clear_lbl.offset_bottom = 128
 	clear_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	clear_lbl.text = "Clear the map  0% / 95%"
-	_style(clear_lbl, 34)
+	_style_hud(clear_lbl, 34)
 	ui.add_child(clear_lbl)
 	score_lbl = Label.new()
 	score_lbl.anchor_left = 0.5
@@ -4392,7 +4672,7 @@ func _build_ui() -> void:
 	score_lbl.offset_right = -16
 	score_lbl.offset_top = 128
 	score_lbl.offset_bottom = 176
-	_style(score_lbl, 36)
+	_style_hud(score_lbl, 36)
 	ui.add_child(score_lbl)
 	level_lbl = Label.new()
 	level_lbl.anchor_left = 0.5
@@ -4402,7 +4682,7 @@ func _build_ui() -> void:
 	level_lbl.offset_top = 128
 	level_lbl.offset_bottom = 176
 	level_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_style(level_lbl, 32)
+	_style_hud(level_lbl, 32)
 	ui.add_child(level_lbl)
 	next_lbl = Label.new()
 	next_lbl.anchor_left = 0.5
@@ -4410,10 +4690,10 @@ func _build_ui() -> void:
 	next_lbl.offset_left = -332
 	next_lbl.offset_right = 332
 	next_lbl.offset_top = 180
-	next_lbl.offset_bottom = 220
+	next_lbl.offset_bottom = 228
 	next_lbl.visible = false
 	next_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_style(next_lbl, 28)
+	_style_hud(next_lbl, 28)
 	ui.add_child(next_lbl)
 	var next_bg := ColorRect.new()
 	next_bg.anchor_left = 0.5
@@ -4913,15 +5193,120 @@ func _start_radius() -> float:
 	return Save.start_radius() + float(Save.time_rank) * 0.04
 
 func _move_speed() -> float:
-	# Follow the eased camera so a size-up does not kick the stick ahead of the zoom.
-	# Divide by the d985204 start distance, not today's wider start, so a full
-	# drag still crosses the screen at that same pace. A wide monitor also sees
-	# more ground across the same distance, so speed up with the extra width.
-	var dist := cam_distance if cam_distance > 0.5 else STICK_REF_DIST
-	dist = dist / maxf(_cam_span_scale(), 0.001)
+	# Follow the eased radius so a size-up does not kick the stick ahead of the zoom.
+	# Speed stays on the 56 degree framing distance. Pulling the camera back for
+	# the narrower lens must not make a full drag race across the map.
+	var dist := _stick_dist_for_frac(maxf(shown_radius, 0.12), _cam_frac_for(shown_radius))
 	var wide := maxf(_view_aspect() / (720.0 / 1280.0), 1.0)
 	var factor := pow(maxf(dist, 0.001) / STICK_REF_DIST, SPEED_SCREEN) * wide
 	return BASE_SPEED * speed_scale * Save.speed_mul() * factor
+
+func _bot_food_fits(o: Dictionary) -> bool:
+	if o.is_empty() or not bool(o.get("alive", false)):
+		return false
+	return _fits_r(float(o.get("base", 99.0)), hole_radius)
+
+func _bot_food_ok(o: Dictionary) -> bool:
+	# A perch already grabbed this prop. Keep the lock, but do not pick a new one.
+	return _bot_food_fits(o) and not bool(o.get("in_body", false))
+
+func _bot_food_cost(o: Dictionary) -> float:
+	var d := _xz_dist(hole_pos, o.pos)
+	if int(o.get("mover", 0)) != 0:
+		d += 14.0
+	if int(o.get("uid", -2)) == bot_avoid_uid:
+		d += 36.0
+	return d
+
+func _bot_seek_food(reach: float) -> Dictionary:
+	var pool: Array = _scan_buckets(hole_pos, reach) if reach > 0.0 else props
+	var best: Dictionary = {}
+	var best_c := INF
+	for o in pool:
+		if not _bot_food_ok(o):
+			continue
+		var c := _bot_food_cost(o)
+		if c < best_c:
+			best_c = c
+			best = o
+	return best
+
+func _bot_food_aim() -> Vector3:
+	var step := 1.0 / 60.0
+	if _bot_food_fits(bot_lock):
+		var locked := _xz_dist(hole_pos, bot_lock.pos)
+		if locked + 0.2 < bot_best_d:
+			bot_best_d = locked
+			bot_stall = 0.0
+		else:
+			bot_stall += step
+		if bot_stall > 1.6:
+			bot_avoid_uid = int(bot_lock.get("uid", -1))
+			bot_lock = {}
+			bot_stall = 0.0
+			bot_best_d = 999.0
+	if not _bot_food_fits(bot_lock):
+		var pick := _bot_seek_food(26.0)
+		if pick.is_empty():
+			pick = _bot_seek_food(0.0)
+		bot_lock = pick
+		bot_best_d = 999.0
+		bot_stall = 0.0
+	if not _bot_food_fits(bot_lock):
+		bot_food_dist = -1.0
+		return Vector3.ZERO
+	var at: Vector3 = bot_lock.pos
+	bot_food_dist = _xz_dist(hole_pos, at)
+	return at - hole_pos
+
+func _bot_heading(dir: Vector3) -> Vector3:
+	var step := maxf(_move_speed() / 60.0, 0.2)
+	var ahead := hole_pos + dir * step
+	if _surf_f(ahead.x, ahead.z) != SURF_WATER:
+		return dir
+	var best := dir
+	var best_s := -2.0
+	for i in 7:
+		var ang := float(i + 1) * PI / 8.0
+		for sign in [-1.0, 1.0]:
+			var cand := dir.rotated(Vector3.UP, ang * sign)
+			var p := hole_pos + cand * step
+			if _surf_f(p.x, p.z) == SURF_WATER:
+				continue
+			var score := cand.dot(dir)
+			if score > best_s:
+				best_s = score
+				best = cand
+	return best
+
+func _bot_velocity() -> Vector3:
+	var threat := Vector3.ZERO
+	var threat_d := 9999.0
+	var prey := Vector3.ZERO
+	var prey_d := 9999.0
+	for rival in rivals:
+		if not bool(rival.alive):
+			continue
+		var d := _xz_dist(hole_pos, rival.pos)
+		var rr := float(rival.radius)
+		if player_invuln <= 0.0 and rr > hole_radius * EAT_RATIO and d < rr + 10.0:
+			if d < threat_d:
+				threat_d = d
+				threat = rival.pos
+		elif hole_radius > rr * EAT_RATIO and d < prey_d:
+			prey_d = d
+			prey = rival.pos
+	var aim := Vector3.ZERO
+	if threat_d < 9000.0:
+		aim = hole_pos - threat
+	elif prey_d < 9000.0:
+		aim = prey - hole_pos
+	else:
+		aim = _bot_food_aim()
+	if aim.length_squared() < 0.0001:
+		aim = Vector3(cos(play_age * 0.7), 0.0, sin(play_age * 0.7))
+	aim = _bot_heading(aim.normalized())
+	return aim * _move_speed()
 
 func _stick_velocity() -> Vector3:
 	var offset := joy_finger - joy_anchor
@@ -4936,7 +5321,9 @@ func _stick_velocity() -> Vector3:
 	return dir.normalized() * _move_speed() * power
 
 func _move_hole(delta: float) -> void:
-	if joy_held:
+	if bot_drive:
+		velocity = _bot_velocity()
+	elif joy_held:
 		velocity = _stick_velocity()
 	else:
 		var alpha := 1.0 - exp(-STOP_RATE * delta)
@@ -4993,7 +5380,7 @@ func _smooth_camera(delta: float) -> void:
 	cam.look_at(cam_look, Vector3.UP)
 
 func _fits(size: float) -> bool:
-	return size < hole_radius * FIT_RATIO
+	return size < hole_radius * OPEN_FIT
 
 func _mostly_over(size: float, dist: float) -> bool:
 	return _center_in_opening(size, dist, hole_radius)
@@ -5062,6 +5449,8 @@ func _tally_clear() -> void:
 	rival_radius_bonus = 0.0
 
 func _sync_level() -> void:
+	if feet_lock:
+		return
 	var progress := _player_progress()
 	var n := _size_index(progress)
 	var grew := n > level
@@ -5244,24 +5633,35 @@ func _tick_feedback(delta: float) -> void:
 						close = true
 			so_close_lbl.visible = close and eased > 0.72
 
+func _rival_spawn_radius(i: int) -> float:
+	var start_r := maxf(_start_radius(), 0.2)
+	var span := maxf(RIVAL_RADIUS[RIVAL_RADIUS.size() - 1] - RIVAL_RADIUS[0], 0.001)
+	var u := clampf((RIVAL_RADIUS[i] - RIVAL_RADIUS[0]) / span, 0.0, 1.0)
+	var t := _rival_diff()
+	var lo := lerpf(1.10, 1.16, t)
+	var hi := lerpf(1.18, 1.22, t)
+	return start_r * lerpf(lo, hi, u)
+
 func _spawn_rivals() -> void:
 	rivals.clear()
-	for i in RIVAL_NAMES.size():
-		var ang := TAU * float(i) / float(RIVAL_NAMES.size()) + 0.35
-		var ring := 10.0 + float(i) * 3.4
+	var n := RIVAL_NAMES.size()
+	for i in n:
+		var ang := TAU * float(i) / float(n) + 0.41
+		var ring := 38.0 + float(i % 6) * 6.5
 		var spot := Vector3(cos(ang) * ring, 0.0, sin(ang) * ring)
 		var guard := 0
-		while _surf_f(spot.x, spot.z) == SURF_WATER and guard < 6:
-			ring *= 0.72
+		while _surf_f(spot.x, spot.z) == SURF_WATER and guard < 8:
+			ang += 0.55
 			spot = Vector3(cos(ang) * ring, 0.0, sin(ang) * ring)
 			guard += 1
+		var rad := _rival_spawn_radius(i)
 		rivals.append({
 			"name": RIVAL_NAMES[i],
 			"color": RIVAL_COLORS[i],
 			"pos": spot,
-			"radius": RIVAL_RADIUS[i],
-			"shown": RIVAL_RADIUS[i],
-			"base_radius": RIVAL_RADIUS[i],
+			"radius": rad,
+			"shown": rad,
+			"base_radius": rad,
 			"speed": RIVAL_SPEED[i],
 			"score": 0,
 			"eaten": 0,
@@ -5272,6 +5672,8 @@ func _spawn_rivals() -> void:
 			"think": randf() * 0.2,
 			"pulse": 0.0,
 			"grace": 2.4,
+			"fleeing": false,
+			"band_debt": 0.0,
 		})
 
 func _tick_rivals(delta: float) -> void:
@@ -5286,14 +5688,19 @@ func _tick_rivals(delta: float) -> void:
 			continue
 		rival.grace = maxf(0.0, float(rival.get("grace", 0.0)) - delta)
 		rival.think = float(rival.think) - delta
-		if float(rival.think) <= 0.0:
-			rival.think = _rival_think_time() + randf() * 0.05
+		var threatened := _rival_threatened(rival)
+		if float(rival.think) <= 0.0 or threatened:
+			if not threatened:
+				rival.think = _rival_think_time() + randf() * 0.05
+			else:
+				rival.think = 0.12
 			var nxt_aim := _rival_aim(i)
 			var prev_aim: Vector3 = rival.aim
+			var blend := 0.92 if threatened else lerpf(0.42, 0.78, _rival_diff())
 			if prev_aim.length_squared() < 0.0001:
 				rival.aim = nxt_aim
 			else:
-				var mixed := prev_aim.lerp(nxt_aim, lerpf(0.42, 0.78, _rival_diff()))
+				var mixed := prev_aim.lerp(nxt_aim, blend)
 				rival.aim = mixed.normalized() if mixed.length_squared() > 0.0001 else nxt_aim
 		var aim: Vector3 = rival.aim
 		if aim.length_squared() < 0.0001:
@@ -5321,6 +5728,7 @@ func _tick_rivals(delta: float) -> void:
 		rival.shown = lerpf(float(rival.shown), float(rival.radius), 1.0 - exp(-6.0 * delta))
 		if float(rival.pulse) > 0.0:
 			rival.pulse = maxf(0.0, float(rival.pulse) - delta)
+		_rival_catchup(rival, delta)
 	_resolve_eats()
 
 func _rival_diff() -> float:
@@ -5329,12 +5737,24 @@ func _rival_diff() -> float:
 func _rival_think_time() -> float:
 	return lerpf(0.62, 0.30, _rival_diff())
 
+func _rival_threatened(rival: Dictionary) -> bool:
+	var radius := float(rival.radius)
+	if hole_radius <= radius * 1.08:
+		return false
+	return _xz_dist(rival.pos, hole_pos) < hole_radius + lerpf(16.0, 22.0, _rival_diff())
+
 func _rival_move_speed(rival: Dictionary) -> float:
 	var pace := clampf(float(rival.get("speed", 2.2)) / 2.22, 0.88, 1.05)
+	if bool(rival.get("fleeing", false)):
+		# Full speed while fleeing, a hair under the player so a chase can still close.
+		return _move_speed() * lerpf(0.93, 0.99, _rival_diff())
 	var cap := BASE_SPEED * lerpf(0.70, 0.88, _rival_diff()) * pace
 	cap = minf(cap, BASE_SPEED * 0.90)
-	if float(rival.get("grace", 0.0)) > 0.0:
-		cap *= 0.62
+	var band := _rival_band(rival)
+	if band > 1.2:
+		cap *= lerpf(1.0, 1.28, clampf((band - 1.2) / 1.1, 0.0, 1.0))
+	elif band < 0.7:
+		cap *= 0.82
 	return cap
 
 func _rival_avoid(i: int) -> Vector3:
@@ -5347,7 +5767,7 @@ func _rival_avoid(i: int) -> Vector3:
 			continue
 		var other: Dictionary = rivals[j]
 		var other_r := float(other.radius)
-		if radius > other_r * 1.12 or other_r > radius * 1.12:
+		if radius > other_r * EAT_RATIO or other_r > radius * EAT_RATIO:
 			continue
 		var gap := _xz_dist(pos, other.pos)
 		if gap < 3.2 and gap > 0.001:
@@ -5419,11 +5839,14 @@ func _rival_aim(i: int) -> Vector3:
 	var radius := float(rival.radius)
 	var t := _rival_diff()
 	var grace := float(rival.get("grace", 0.0)) > 0.0
-	var flee_ratio := lerpf(1.18, 1.08, t)
-	var flee_extra := lerpf(5.2, 9.5, t)
-	var chase_ratio := lerpf(1.34, 1.16, t)
+	var flee_ratio := lerpf(1.08, 1.05, t)
+	var flee_extra := lerpf(16.0, 22.0, t)
+	var chase_ratio := lerpf(1.34, 1.18, t)
 	var chase_range := lerpf(4.2, 8.2, t)
 	var sense := lerpf(8.5, 16.0, t)
+	var band := _rival_band(rival)
+	if band > 1.15:
+		sense *= lerpf(1.0, 1.45, clampf((band - 1.15) / 1.0, 0.0, 1.0))
 	var avoid := _rival_avoid(i)
 	var flee_from := Vector3.ZERO
 	var fleeing := false
@@ -5445,6 +5868,7 @@ func _rival_aim(i: int) -> Vector3:
 			flee_d = od
 			flee_from = other.pos
 			fleeing = true
+	rival.fleeing = fleeing
 	if fleeing:
 		var away := pos - flee_from
 		if away.length_squared() < 0.01:
@@ -5475,6 +5899,7 @@ func _rival_aim(i: int) -> Vector3:
 			var toward := chase_at - pos
 			if toward.length_squared() > 0.0001:
 				return _steer_blend(toward, avoid, 0.25)
+	rival.fleeing = false
 	var food := _rival_cluster_aim(pos, radius, sense)
 	if food.length_squared() > 0.0001:
 		return _steer_blend(food, avoid, 0.85)
@@ -5484,8 +5909,8 @@ func _rival_aim(i: int) -> Vector3:
 
 func _separate_hole(pos: Vector3, radius: float, ignore: int) -> Vector3:
 	var out := pos
-	var can_eat_player := radius > hole_radius * 1.12
-	var player_can_eat := hole_radius > radius * 1.12
+	var can_eat_player := radius > hole_radius * EAT_RATIO
+	var player_can_eat := hole_radius > radius * EAT_RATIO
 	if not can_eat_player and not player_can_eat and _xz_dist(out, hole_pos) < radius + hole_radius + 0.35:
 		var push := out - hole_pos
 		if push.length_squared() < 0.0001:
@@ -5496,7 +5921,7 @@ func _separate_hole(pos: Vector3, radius: float, ignore: int) -> Vector3:
 			continue
 		var other: Dictionary = rivals[j]
 		var other_r := float(other.radius)
-		var bigger := radius > other_r * 1.12 or other_r > radius * 1.12
+		var bigger := radius > other_r * EAT_RATIO or other_r > radius * EAT_RATIO
 		var need := radius + other_r + 0.35
 		if not bigger and _xz_dist(out, other.pos) < need:
 			var push2: Vector3 = out - other.pos
@@ -5513,9 +5938,9 @@ func _resolve_eats() -> void:
 		var rival: Dictionary = rivals[i]
 		if bool(rival.alive):
 			var dist := _xz_dist(hole_pos, rival.pos)
-			if hole_radius > float(rival.radius) * 1.12 and dist < hole_radius * 0.72:
+			if hole_radius > float(rival.radius) * EAT_RATIO and dist < hole_radius * 0.72:
 				_player_eats_rival(rival)
-			elif player_invuln <= 0.0 and float(rival.radius) > hole_radius * 1.12 and dist < float(rival.radius) * 0.72:
+			elif player_invuln <= 0.0 and float(rival.radius) > hole_radius * EAT_RATIO and dist < float(rival.radius) * 0.72:
 				_rival_eats_player(rival)
 		i += 1
 	for a in rivals.size():
@@ -5529,11 +5954,11 @@ func _resolve_eats() -> void:
 			if not bool(right.alive):
 				continue
 			var gap := _xz_dist(left.pos, right.pos)
-			if float(left.radius) > float(right.radius) * 1.12 and gap < float(left.radius) * 0.72:
+			if float(left.radius) > float(right.radius) * EAT_RATIO and gap < float(left.radius) * 0.72:
 				_credit_rival(left, 6 + int(float(right.radius) * 4.0))
 				left.pulse = 0.18
 				_kill_rival(right)
-			elif float(right.radius) > float(left.radius) * 1.12 and gap < float(right.radius) * 0.72:
+			elif float(right.radius) > float(left.radius) * EAT_RATIO and gap < float(right.radius) * 0.72:
 				_credit_rival(right, 6 + int(float(left.radius) * 4.0))
 				right.pulse = 0.18
 				_kill_rival(left)
@@ -5556,6 +5981,7 @@ func _player_eats_rival(rival: Dictionary) -> void:
 	rivals_bitten[str(rival.name)] = true
 	_announce_skins(Save.note_rival_eat())
 	_refresh_hud()
+	rival_bites += 1
 	_kill_rival(rival)
 
 func _rival_eats_player(rival: Dictionary) -> void:
@@ -5577,20 +6003,64 @@ func _respawn_rival(rival: Dictionary) -> void:
 		pos = Vector3(cos(ang) * ring, 0.0, sin(ang) * ring)
 		guard += 1
 	rival.pos = pos
-	var restart := float(rival.get("base_radius", 0.34))
+	var live := maxf(hole_radius, 0.2)
+	var restart := live * randf_range(1.04, 1.14)
+	restart = minf(restart, live * (EAT_RATIO - 0.03))
 	rival.radius = restart
 	rival.shown = restart
+	rival.base_radius = restart
 	rival.score = 0
 	rival.eaten = 0
+	rival.band_debt = 0.0
+	rival.fleeing = false
 	rival.alive = true
 	rival.wander = ang
 	rival.aim = Vector3(cos(ang), 0.0, sin(ang))
 	rival.grace = 1.6
 	rival.think = _rival_think_time()
 
+func _rival_band(rival: Dictionary) -> float:
+	var rr := maxf(float(rival.get("radius", 0.2)), 0.05)
+	var ratio := hole_radius / rr
+	if ratio >= 1.18:
+		return lerpf(1.8, 7.5, clampf((ratio - 1.18) / 0.7, 0.0, 1.0))
+	if ratio <= 0.82:
+		return lerpf(0.65, 0.28, clampf((0.82 - ratio) / 0.28, 0.0, 1.0))
+	return 1.0
+
+func _rival_catchup(rival: Dictionary, delta: float) -> void:
+	# Pull a rival toward just under the eat line when the player pulls ahead.
+	# The rate lags, so a good run can still open an 18 percent lead.
+	var rr := maxf(float(rival.get("radius", 0.2)), 0.05)
+	# Early on, hold rivals just under the eat line. The hold relaxes so a
+	# steady player can open a lead in the first minute, sooner on later levels.
+	var guard_t := lerpf(32.0, 48.0, _rival_diff())
+	var lead := 1.10
+	if play_age > guard_t:
+		lead = lerpf(1.10, 1.24, clampf((play_age - guard_t) / 36.0, 0.0, 1.0))
+	var goal := hole_radius / lead
+	if rr >= goal:
+		return
+	var gap := (goal - rr) / goal
+	var rate := lerpf(10.0, 48.0, clampf(gap / 0.35, 0.0, 1.0))
+	var debt := float(rival.get("catch_debt", 0.0)) + rate * delta
+	var whole := int(floor(debt))
+	rival.catch_debt = debt - float(whole)
+	if whole <= 0:
+		return
+	rival.eaten = int(rival.get("eaten", 0)) + whole
+	rival.score = int(rival.score) + whole
+	_apply_rival_radius(rival)
+
 func _credit_rival(rival: Dictionary, bites: int) -> void:
-	rival.eaten = int(rival.get("eaten", 0)) + maxi(bites, 1)
-	rival.score = int(rival.score) + bites
+	var gained := float(maxi(bites, 1)) * _rival_band(rival)
+	var debt := float(rival.get("band_debt", 0.0)) + gained
+	var whole := int(floor(debt))
+	rival.band_debt = debt - float(whole)
+	if whole <= 0:
+		return
+	rival.eaten = int(rival.get("eaten", 0)) + whole
+	rival.score = int(rival.score) + whole
 	_apply_rival_radius(rival)
 
 func _apply_rival_radius(rival: Dictionary) -> void:
@@ -5630,6 +6100,58 @@ func _grant_rival_growth() -> void:
 		return
 	rival_radius_bonus += minf(bite, room)
 
+func _tag_limits(tag: Label) -> Rect2:
+	var vp := get_viewport().get_visible_rect().size
+	var left := SAFE_SIDE
+	var top := HUD_TAG_MIN_Y
+	var right := maxf(left + 4.0, vp.x - SAFE_SIDE - tag.size.x)
+	var bottom := maxf(top + 4.0, vp.y - SAFE_BOTTOM - 96.0 - tag.size.y)
+	return Rect2(left, top, right - left, bottom - top)
+
+func _tag_on_edge(bounds: Rect2, dir: Vector2) -> Vector2:
+	var center := bounds.position + bounds.size * 0.5
+	var t := 100000.0
+	if absf(dir.x) > 0.0001:
+		var tx := ((bounds.position.x - center.x) / dir.x) if dir.x < 0.0 else ((bounds.end.x - center.x) / dir.x)
+		if tx > 0.0:
+			t = minf(t, tx)
+	if absf(dir.y) > 0.0001:
+		var ty := ((bounds.position.y - center.y) / dir.y) if dir.y < 0.0 else ((bounds.end.y - center.y) / dir.y)
+		if ty > 0.0:
+			t = minf(t, ty)
+	var at := center + dir * t
+	return Vector2(
+		clampf(at.x, bounds.position.x, bounds.end.x),
+		clampf(at.y, bounds.position.y, bounds.end.y)
+	)
+
+func _place_rival_tag(tag: Label, world: Vector3, who: String) -> Vector2:
+	var vp := get_viewport().get_visible_rect().size
+	var limits := _tag_limits(tag)
+	var behind := cam.is_position_behind(world)
+	var raw := cam.unproject_position(world)
+	var sp := raw - Vector2(tag.size.x * 0.5, 46.0)
+	var off := behind or sp.x < limits.position.x - 8.0 or sp.y < limits.position.y - 8.0 or sp.x > limits.end.x + 8.0 or sp.y > limits.end.y + 8.0
+	if not off:
+		tag.text = who
+		return Vector2(
+			clampf(sp.x, limits.position.x, limits.end.x),
+			clampf(sp.y, limits.position.y, limits.end.y)
+		)
+	var dir := raw - vp * 0.5
+	if behind:
+		dir = -dir
+	if dir.length_squared() < 1.0:
+		dir = Vector2(1.0, 0.0)
+	dir = dir.normalized()
+	if absf(dir.x) >= absf(dir.y):
+		tag.text = ("< " + who) if dir.x < 0.0 else (who + " >")
+	elif dir.y < 0.0:
+		tag.text = "^ " + who
+	else:
+		tag.text = who + " v"
+	return _tag_on_edge(limits, dir)
+
 func _sync_rival_visuals() -> void:
 	if rival_mm == null:
 		return
@@ -5649,19 +6171,17 @@ func _sync_rival_visuals() -> void:
 			continue
 		var tag: Label = rival_labels[i]
 		var above: Vector3 = rival.pos + Vector3(0.0, 0.95, 0.0)
-		if s < 0.05 or cam == null or cam.is_position_behind(above):
+		if s < 0.05 or cam == null:
 			tag.visible = false
 		else:
-			var sp := cam.unproject_position(above) - Vector2(90, 46)
-			# The level name lives in the top band. Hide a tag that would cover it.
-			if sp.y < HUD_TAG_MIN_Y:
+			var placed := _place_rival_tag(tag, above, str(rival.name))
+			if placed.x < -1000.0:
 				tag.visible = false
 			else:
 				tag.visible = true
-				tag.text = str(rival.name)
-				tag.position = sp
+				tag.position = placed
 				var dist := cam.global_position.distance_squared_to(rival.pos)
-				shown.append({"i": i, "d": dist, "p": sp})
+				shown.append({"i": i, "d": dist, "p": placed})
 	shown.sort_custom(func(a, b): return float(a.d) < float(b.d))
 	var kept: Array = []
 	var tag_size := Vector2(220, 48)
@@ -5763,10 +6283,16 @@ func _process(delta: float) -> void:
 	_watch_render()
 	_sync_pause_button()
 	var frame_delta := delta
+	if bot_drive:
+		if not bot_step_ready:
+			return
+		bot_step_ready = false
+		frame_delta = 1.0 / 60.0
+		bot_clock += frame_delta
 	_tick_quality(frame_delta)
 	# Hole steering uses the real frame time. A 20fps cap made a slow machine crawl.
-	var steer_delta := minf(frame_delta, 0.5)
-	delta = minf(delta, 1.0 / 20.0)
+	var steer_delta := frame_delta if bot_drive else minf(frame_delta, 0.5)
+	delta = frame_delta if bot_drive else minf(delta, 1.0 / 20.0)
 	if mode == "play" or mode == "attract":
 		_poll_pointer_steer()
 	_tick_drag_hint(frame_delta)
@@ -5775,11 +6301,13 @@ func _process(delta: float) -> void:
 			_update_debug(frame_delta)
 		return
 	if playing:
-		Save.add_play_time(delta)
-		play_save_wait += delta
-		if play_save_wait >= 5.0:
-			play_save_wait = 0.0
-			Save.save_game()
+		if not bot_drive:
+			Save.add_play_time(delta)
+			play_save_wait += delta
+			if play_save_wait >= 5.0:
+				play_save_wait = 0.0
+				Save.save_game()
+		play_age += delta
 		if _maybe_first_ad():
 			pass
 		elif clear_total > 0 and _clear_ratio() >= CLEAR_RATIO:
@@ -5995,6 +6523,8 @@ func _save_shot() -> void:
 	get_tree().quit()
 
 func _physics_process(_delta: float) -> void:
+	if bot_drive:
+		bot_step_ready = true
 	_sync_rim()
 	if playing:
 		_activate_nearby()
@@ -6013,7 +6543,7 @@ func _flat_dist(p: Vector3) -> float:
 	return sqrt(dx * dx + dz * dz)
 
 func _fits_r(size: float, radius: float) -> bool:
-	return size < radius * FIT_RATIO
+	return size < radius * OPEN_FIT
 
 func _xz_dist(a: Vector3, b: Vector3) -> float:
 	var dx := a.x - b.x
@@ -6197,6 +6727,10 @@ func _take_body(o: Dictionary) -> bool:
 	var covered := _center_in_opening(float(o.base), _xz_dist(Vector3(p.x, 0.0, p.z), sink_at), sink_r)
 	if covered and _drops_instant(o):
 		_commit_fall(o, b)
+	elif covered:
+		# The footprint is inside the opening. Tip in immediately instead of sitting upright.
+		_begin_perch(o, b, Vector3(p.x, 0.0, p.z))
+		_handoff_tumble(o, b, sink_at, 1.35)
 	elif not _drops_instant(o):
 		_begin_perch(o, b, Vector3(p.x, 0.0, p.z))
 	else:
@@ -6695,6 +7229,8 @@ func start_round(index: int) -> void:
 	continue_used = false
 	rivals_bitten = {}
 	round_eaten = ""
+	rival_bites = 0
+	play_age = 0.0
 	_arm_trial()
 	_close_continue_layer()
 	hole_mesh.visible = true
@@ -6977,6 +7513,8 @@ func _arm_trial() -> void:
 	_apply_skin()
 
 func _maybe_first_ad() -> bool:
+	if bot_drive:
+		return false
 	if ad_hold or IapService.no_ads or Save.first_ad_shown:
 		return false
 	if Save.play_time < FIRST_AD_SECONDS:

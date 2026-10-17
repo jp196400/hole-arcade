@@ -455,6 +455,8 @@ window.__holeSyncFS = function () {
 	}
 
 	let initializing = true;
+	let progressFullAt = 0;
+	const bootStarted = Date.now();
 
 	function setProgress(current, total) {
 		if (!bootFill || !bootPct) return;
@@ -463,6 +465,7 @@ window.__holeSyncFS = function () {
 			bootFill.classList.remove('indeterminate');
 			bootFill.style.width = pct + '%';
 			bootPct.textContent = pct + '%';
+			if (pct >= 100 && !progressFullAt) progressFullAt = Date.now();
 		} else {
 			bootFill.classList.add('indeterminate');
 			bootFill.style.width = '';
@@ -477,6 +480,15 @@ window.__holeSyncFS = function () {
 		statusOverlay.style.pointerEvents = 'none';
 		focusCanvas();
 	}
+
+	// The engine promise can stall after the files hit 100%. Reveal anyway.
+	window.__holeReveal = function () { hideLoader(); };
+	setInterval(function () {
+		if (!initializing) return;
+		var now = Date.now();
+		if (progressFullAt && now - progressFullAt > 6000) hideLoader();
+		else if (now - bootStarted > 14000) hideLoader();
+	}, 400);
 
 	function showFailure(message) {
 		console.error(message);
