@@ -48,6 +48,7 @@ static func defs() -> Array:
 		_def("teacups", "ride", 22, 1.35, _teacups(), 4),
 		_def("carousel", "ride", 40, 1.75, _carousel(), 4),
 		_def("ferris", "ride", 60, 2.20, _ferris()),
+		_def("roundtree", "tree", 8, 0.72, _round_tree()),
 		_def("blossom", "clutter", 1, 0.2, _blossom()),
 		_def("pebbles", "clutter", 1, 0.22, _pebbles()),
 		_def("puddle", "clutter", 1, 0.32, _puddle()),
@@ -199,10 +200,20 @@ static func _chicken() -> ArrayMesh:
 	_eye(st, Vector3(0.06, 0.48, 0.34), 0.035)
 	return _commit(st)
 
+static func _round_tree() -> ArrayMesh:
+	var st := _begin()
+	var trunk := Color(0.55, 0.34, 0.16)
+	var leaf := Color(0.14, 0.7, 0.22)
+	var lite := Color(0.46, 0.88, 0.32)
+	_cyl(st, Vector3(0, 0, 0), 0.16, 1.15, trunk, 8)
+	_ellip(st, Vector3(0, 1.75, 0), Vector3(0.98, 0.74, 0.98), leaf)
+	_ellip(st, Vector3(0.18, 2.1, 0.08), Vector3(0.52, 0.4, 0.52), lite)
+	return _commit(st)
+
 static func _pig() -> ArrayMesh:
 	var st := _begin()
-	var pink := Color(0.95, 0.62, 0.68)
-	var dark := Color(0.84, 0.4, 0.5)
+	var pink := Color(0.98, 0.45, 0.58)
+	var dark := Color(0.9, 0.28, 0.42)
 	_ellip(st, Vector3(0, 0.38, 0), Vector3(0.32, 0.22, 0.42), pink)
 	_ellip(st, Vector3(0, 0.46, 0.38), Vector3(0.18, 0.16, 0.16), pink)
 	_cyl(st, Vector3(0, 0.42, 0.5), 0.07, 0.08, dark, 8)
@@ -240,7 +251,7 @@ static func _cow() -> ArrayMesh:
 
 static func _sheep() -> ArrayMesh:
 	var st := _begin()
-	var wool := Color(0.94, 0.93, 0.9)
+	var wool := Color(0.98, 0.98, 0.97)
 	var face := Color(0.28, 0.24, 0.22)
 	_ellip(st, Vector3(0, 0.46, 0), Vector3(0.38, 0.3, 0.48), wool)
 	_ellip(st, Vector3(0, 0.52, 0.4), Vector3(0.14, 0.12, 0.16), face)

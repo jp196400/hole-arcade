@@ -36,6 +36,8 @@ var music_on := true
 var sfx_on := true
 var haptics_on := true
 var play_time := 0.0
+# Runtime only. A tester round past the real unlock must not write progress.
+var practice := false
 var first_ad_shown := false
 var last_ad_play := 0.0
 var next_interstitial_round := 2
@@ -327,7 +329,7 @@ func wipe() -> void:
 	save_game()
 
 func add_play_time(dt: float) -> void:
-	if dt <= 0.0:
+	if practice or dt <= 0.0:
 		return
 	play_time += dt
 
@@ -407,6 +409,8 @@ func next_cost(rank: int) -> int:
 	return int(UPGRADE_COST[rank])
 
 func add_coins(n: int) -> void:
+	if practice:
+		return
 	coins += n
 	save_game()
 
@@ -414,6 +418,8 @@ func has_skin(id: String) -> bool:
 	return unlocked_skins.has(id)
 
 func grant_skin(id: String) -> void:
+	if practice:
+		return
 	if not has_skin(id):
 		unlocked_skins.append(id)
 		save_game()
@@ -555,6 +561,8 @@ func _skin_earned(unlock: String) -> bool:
 	return int(p.cur) >= int(p.need)
 
 func grant_play_skins() -> Array:
+	if practice:
+		return []
 	var fresh: Array = []
 	for s in CatalogSafe.skins():
 		var id := str(s.id)
@@ -570,6 +578,8 @@ func grant_play_skins() -> Array:
 	return fresh
 
 func note_swallow(bucket: String) -> Array:
+	if practice:
+		return []
 	eaten += 1
 	if tallies.has(bucket):
 		tallies[bucket] = int(tallies[bucket]) + 1
@@ -578,12 +588,16 @@ func note_swallow(bucket: String) -> Array:
 	return fresh
 
 func note_eaten(n: int) -> Array:
+	if practice:
+		return []
 	eaten += n
 	var fresh := grant_play_skins()
 	save_game()
 	return fresh
 
 func note_size(size_n: int) -> Array:
+	if practice:
+		return []
 	if size_n <= max_size:
 		return []
 	max_size = size_n
@@ -592,12 +606,16 @@ func note_size(size_n: int) -> Array:
 	return fresh
 
 func note_round() -> Array:
+	if practice:
+		return []
 	rounds += 1
 	var fresh := grant_play_skins()
 	save_game()
 	return fresh
 
 func note_stars(index: int, count: int) -> Array:
+	if practice:
+		return []
 	if index < 0 or index >= stars.size():
 		return []
 	var n := clampi(count, 0, 3)
@@ -610,18 +628,22 @@ func note_stars(index: int, count: int) -> Array:
 	return fresh
 
 func note_rival_eat() -> Array:
+	if practice:
+		return []
 	rival_eats += 1
 	var fresh := grant_play_skins()
 	save_game()
 	return fresh
 
 func note_fail() -> void:
-	if streak == 0:
+	if practice or streak == 0:
 		return
 	streak = 0
 	save_game()
 
 func note_clear(index: int, clean: bool, sweep: bool) -> Array:
+	if practice:
+		return []
 	clears += 1
 	streak += 1
 	if clean:
@@ -674,6 +696,8 @@ func unlock_all() -> void:
 	save_game()
 
 func mark_cleared(index: int, score: int) -> Array:
+	if practice:
+		return []
 	if index >= 0 and index < best.size() and score > int(best[index]):
 		best[index] = score
 	var fresh := grant_play_skins()
