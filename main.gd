@@ -39,6 +39,8 @@ const SAFE_TOP := 58.0
 const SAFE_BOTTOM := 40.0
 const SAFE_SIDE := 22.0
 const MENU_W := 720.0
+# Title and Back sit inside the sheet, below the notch and the panel edge.
+const MENU_HEADER_Y := SAFE_TOP + 36.0
 const BRAND_INK := Color(0.11, 0.16, 0.29)
 const BRAND_CREAM := Color(0.99, 0.97, 0.93)
 const BRAND_CYAN := Color(0.05, 0.74, 0.84)
@@ -482,6 +484,14 @@ var menu_sha: Label
 var ui_font: Font
 var progress_ring: Control
 var name_lbl: Label
+var pause_btn: Button
+var pause_layer: CanvasLayer
+var paused := false
+var match_hud := false
+var render_warm := 0
+var render_blank := 0
+var render_ok := false
+var render_failed := false
 var unlock_layer: CanvasLayer
 var unlock_title: Label
 var unlock_body: Label
@@ -588,12 +598,15 @@ func _ready() -> void:
 		call_deferred("_probe_kinds")
 	elif preview == "tiers":
 		call_deferred("_probe_tiers")
+	elif preview == "glfail":
+		call_deferred("_fail_graphics")
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
 		if rest.is_valid_int():
 			idx = int(rest)
 		call_deferred("start_round", idx)
+	_build_pause()
 
 func _preview_results() -> void:
 	start_round(2)
@@ -3356,6 +3369,8 @@ func _build_ui() -> void:
 	next_lbl.offset_right = 332
 	next_lbl.offset_top = 180
 	next_lbl.offset_bottom = 220
+	next_lbl.visible = false
+	next_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_style(next_lbl, 28)
 	ui.add_child(next_lbl)
 	var next_bg := ColorRect.new()
@@ -3394,6 +3409,8 @@ func _build_ui() -> void:
 	name_lbl = Label.new()
 	name_lbl.text = PLAYER_NAME
 	name_lbl.size = Vector2(180, 48)
+	name_lbl.visible = false
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_style(name_lbl, 36)
 	ui.add_child(name_lbl)
@@ -3651,7 +3668,10 @@ func _dismiss_unlock() -> void:
 		unlock_layer.visible = false
 
 func _place_name_tag() -> void:
-	if name_lbl == null or cam == null or not hole_mesh.visible:
+	if name_lbl == null:
+		return
+	if cam == null or hole_mesh == null or not hole_mesh.visible or mode != "play" or not playing or paused:
+		name_lbl.visible = false
 		return
 	var p := hole_pos + Vector3(0.0, 1.05, 0.0)
 	if cam.is_position_behind(p):
@@ -3661,6 +3681,36 @@ func _place_name_tag() -> void:
 	name_lbl.visible = true
 	name_lbl.position = sp - Vector2(90, 52)
 
+func _event_pos(event: InputEvent) -> Vector2:
+	if event is InputEventMouseButton:
+		return (event as InputEventMouseButton).position
+	if event is InputEventMouseMotion:
+		return (event as InputEventMouseMotion).position
+	if event is InputEventScreenTouch:
+		return (event as InputEventScreenTouch).position
+	if event is InputEventScreenDrag:
+		return (event as InputEventScreenDrag).position
+	return Vector2(-1.0, -1.0)
+
+func _blocks_world(pos: Vector2) -> bool:
+	if paused or render_failed or (pause_layer != null and pause_layer.visible):
+		return true
+	if pause_btn != null and pause_btn.visible and pos.x >= 0.0 and pause_btn.get_global_rect().has_point(pos):
+		return true
+	if mode != "attract":
+		return false
+	var hovered := get_viewport().gui_get_hovered_control()
+	if hovered == null or not hovered.is_visible_in_tree():
+		return false
+	if hovered.mouse_filter == Control.MOUSE_FILTER_IGNORE:
+		return false
+	var node: Node = hovered
+	while node != null:
+		if node is BaseButton or node == chrome_layer or node == menu_layer:
+			return true
+		node = node.get_parent()
+	return false
+
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch or event is InputEventMouseButton:
 		if event.pressed:
@@ -3669,9 +3719,15 @@ func _input(event: InputEvent) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if ad_hold:
 		return
+	if _blocks_world(_event_pos(event)):
+		return
 	if mode != "play" and mode != "attract":
 		return
 	if mode == "play" and not playing:
+		return
+	# Menu buttons consume the emulated mouse event. The raw touch arrives
+	# first and would start a round from the same tap.
+	if mode == "attract" and (event is InputEventScreenTouch or event is InputEventScreenDrag):
 		return
 	if event is InputEventScreenTouch:
 		if event.pressed:
@@ -3960,6 +4016,14 @@ func _refresh_hud() -> void:
 
 func _refresh_next_skin() -> void:
 	if next_lbl == null:
+		return
+	if not match_hud:
+		next_lbl.visible = false
+		if next_fill:
+			next_fill.visible = false
+			var bar := next_fill.get_parent() as CanvasItem
+			if bar:
+				bar.visible = false
 		return
 	var nxt: Dictionary = Save.next_skin()
 	if nxt.is_empty():
@@ -4393,6 +4457,8 @@ func _process(delta: float) -> void:
 		shot_wait -= 1
 		if shot_wait == 0 and shot_path != "":
 			call_deferred("_save_shot")
+	_watch_render()
+	_sync_pause_button()
 	var frame_delta := delta
 	_tick_quality(frame_delta)
 	delta = minf(delta, 1.0 / 20.0)
@@ -5051,6 +5117,9 @@ func start_round(index: int) -> void:
 	over_panel.visible = false
 	hud_layer.visible = true
 	menu_layer.visible = false
+	paused = false
+	if pause_layer:
+		pause_layer.visible = false
 	mode = "play"
 	playing = true
 	ad_hold = false
@@ -5101,6 +5170,9 @@ func _enter_attract(index: int) -> void:
 	hud_layer.visible = true
 	if menu_layer:
 		menu_layer.visible = false
+	paused = false
+	if pause_layer:
+		pause_layer.visible = false
 	mode = "attract"
 	playing = false
 	_apply_skin()
@@ -5110,7 +5182,11 @@ func _enter_attract(index: int) -> void:
 	_refresh_hud()
 
 func _begin_play() -> void:
-	if mode != "attract" or playing or ad_hold:
+	if mode != "attract" or playing or ad_hold or paused or render_failed:
+		return
+	if menu_layer != null and menu_layer.visible:
+		return
+	if _blocks_world(get_viewport().get_mouse_position()):
 		return
 	mode = "play"
 	playing = true
@@ -5135,6 +5211,170 @@ func _begin_play() -> void:
 	_sync_level()
 	_refresh_hud()
 	_sync_audio()
+	_sync_pause_button()
+
+func _build_pause() -> void:
+	if pause_btn != null or hud_layer == null:
+		return
+	pause_btn = _make_button("Pause", Vector2.ZERO, Vector2(168, 72), BRAND_INK, 30)
+	pause_btn.anchor_left = 1.0
+	pause_btn.anchor_right = 1.0
+	pause_btn.anchor_top = 1.0
+	pause_btn.anchor_bottom = 1.0
+	pause_btn.offset_left = -(SAFE_SIDE + 168.0)
+	pause_btn.offset_right = -SAFE_SIDE
+	pause_btn.offset_top = -(SAFE_BOTTOM + 88.0)
+	pause_btn.offset_bottom = -SAFE_BOTTOM
+	pause_btn.visible = false
+	pause_btn.mouse_filter = Control.MOUSE_FILTER_STOP
+	pause_btn.pressed.connect(_open_pause)
+	hud_layer.add_child(pause_btn)
+	pause_layer = CanvasLayer.new()
+	pause_layer.layer = 30
+	pause_layer.visible = false
+	add_child(pause_layer)
+	var dim := ColorRect.new()
+	dim.color = Color(0.11, 0.16, 0.29, 0.62)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.gui_input.connect(_eat_menu_pointer)
+	pause_layer.add_child(dim)
+	var card := Panel.new()
+	card.anchor_left = 0.5
+	card.anchor_right = 0.5
+	card.anchor_top = 0.5
+	card.anchor_bottom = 0.5
+	card.offset_left = -310.0
+	card.offset_right = 310.0
+	card.offset_top = -300.0
+	card.offset_bottom = 300.0
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	card.add_theme_stylebox_override("panel", _panel_style())
+	pause_layer.add_child(card)
+	var title := Label.new()
+	title.text = "Paused"
+	title.position = Vector2(40, 36)
+	title.size = Vector2(540, 80)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_style(title, 52)
+	title.add_theme_color_override("font_color", BRAND_INK)
+	title.add_theme_constant_override("outline_size", 0)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(title)
+	var resume := _make_button("Resume", Vector2(40, 148), Vector2(540, 92), Color(0.16, 0.66, 0.42))
+	resume.pressed.connect(_resume_pause)
+	card.add_child(resume)
+	var restart := _make_button("Restart", Vector2(40, 260), Vector2(540, 92), BRAND_CYAN)
+	restart.pressed.connect(_restart_pause)
+	card.add_child(restart)
+	var exit_b := _make_button("Exit to menu", Vector2(40, 372), Vector2(540, 92), BRAND_INK)
+	exit_b.pressed.connect(_exit_pause)
+	card.add_child(exit_b)
+
+func _sync_pause_button() -> void:
+	if pause_btn == null:
+		return
+	pause_btn.visible = mode == "play" and playing and not paused and not ad_hold and not render_failed
+
+func _open_pause() -> void:
+	if mode != "play" or not playing or paused or ad_hold:
+		return
+	paused = true
+	playing = false
+	joy_held = false
+	_refresh_joystick()
+	if name_lbl:
+		name_lbl.visible = false
+	_sync_pause_button()
+	if pause_layer:
+		pause_layer.visible = true
+
+func _resume_pause() -> void:
+	if not paused or mode != "play":
+		return
+	paused = false
+	playing = true
+	joy_held = false
+	if pause_layer:
+		pause_layer.visible = false
+	_sync_pause_button()
+
+func _restart_pause() -> void:
+	paused = false
+	if pause_layer:
+		pause_layer.visible = false
+	start_round(map_index)
+
+func _exit_pause() -> void:
+	paused = false
+	if pause_layer:
+		pause_layer.visible = false
+	_enter_attract(map_index)
+
+func _watch_render() -> void:
+	if render_failed or render_ok or not OS.has_feature("web"):
+		return
+	if props.is_empty() and _query_preview() != "renderblank":
+		return
+	render_warm += 1
+	var objects := 0
+	var draws := 0
+	if _query_preview() != "renderblank":
+		var vp := get_viewport()
+		objects = vp.get_render_info(Viewport.RENDER_INFO_TYPE_VISIBLE, Viewport.RENDER_INFO_OBJECTS_IN_FRAME)
+		draws = vp.get_render_info(Viewport.RENDER_INFO_TYPE_VISIBLE, Viewport.RENDER_INFO_DRAW_CALLS_IN_FRAME)
+	if render_warm >= 8 and (objects > 0 or draws > 0):
+		render_ok = true
+		return
+	if render_warm < 8:
+		return
+	render_blank += 1
+	if render_blank < 12:
+		return
+	if _query_preview() != "renderblank" and not _framebuffer_blank():
+		render_ok = true
+		return
+	_fail_graphics()
+
+func _framebuffer_blank() -> bool:
+	var tex := get_viewport().get_texture()
+	if tex == null:
+		return true
+	var img := tex.get_image()
+	if img == null or img.is_empty():
+		return true
+	var w := img.get_width()
+	var h := img.get_height()
+	if w < 2 or h < 2:
+		return true
+	# The HUD sits on the edges. Sample the middle, where a blank world is one color.
+	var x0 := int(float(w) * 0.28)
+	var x1 := int(float(w) * 0.72)
+	var y0 := int(float(h) * 0.32)
+	var y1 := int(float(h) * 0.68)
+	var first := img.get_pixel((x0 + x1) / 2, (y0 + y1) / 2)
+	var acc := 0.0
+	for y in 6:
+		for x in 6:
+			var px := x0 + int(float(x1 - x0) * (float(x) + 0.5) / 6.0)
+			var py := y0 + int(float(y1 - y0) * (float(y) + 0.5) / 6.0)
+			var sample := img.get_pixel(clampi(px, 0, w - 1), clampi(py, 0, h - 1))
+			acc += absf(sample.r - first.r) + absf(sample.g - first.g) + absf(sample.b - first.b)
+	return acc < 0.45
+
+func _fail_graphics() -> void:
+	if render_failed:
+		return
+	render_failed = true
+	render_ok = false
+	playing = false
+	paused = true
+	joy_held = false
+	_sync_pause_button()
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("if(window.__holeGraphicsFailed)window.__holeGraphicsFailed();", true)
 
 func _arm_trial() -> void:
 	round_trial = Save.trial_skin
@@ -5471,13 +5711,22 @@ func _resume_after_eaten() -> void:
 	_refresh_hud()
 
 func _set_match_hud(on: bool) -> void:
+	match_hud = on
 	for n in [clear_track, clear_lbl, score_lbl, level_lbl, next_lbl]:
 		if n:
 			n.visible = on
 	if next_fill and next_fill.get_parent():
 		next_fill.get_parent().visible = on
-	if combo_lbl and not on:
-		combo_lbl.visible = false
+	if not on:
+		if combo_lbl:
+			combo_lbl.visible = false
+		if size_lbl:
+			size_lbl.visible = false
+		if name_lbl:
+			name_lbl.visible = false
+		for tag in rival_labels:
+			if tag is CanvasItem:
+				(tag as CanvasItem).visible = false
 
 func _set_chrome(on: bool) -> void:
 	if chrome_layer:
@@ -5742,6 +5991,7 @@ func _mount_menu_column() -> Control:
 	dim.color = Color(0.11, 0.16, 0.29, 0.45)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.gui_input.connect(_eat_menu_pointer)
 	menu_layer.add_child(dim)
 	var root := Control.new()
 	root.anchor_left = 0.5
@@ -5760,7 +6010,8 @@ func _mount_menu_column() -> Control:
 	sheet.offset_right = -8
 	sheet.offset_bottom = -SAFE_BOTTOM
 	sheet.add_theme_stylebox_override("panel", _panel_style())
-	sheet.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sheet.mouse_filter = Control.MOUSE_FILTER_STOP
+	sheet.gui_input.connect(_eat_menu_pointer)
 	root.add_child(sheet)
 	if shot_path == "":
 		sheet.modulate.a = 0.0
@@ -5776,13 +6027,18 @@ func _menu_add(node: Node) -> Node:
 	host.add_child(node)
 	return node
 
+func _eat_menu_pointer(event: InputEvent) -> void:
+	# Mouse only. Eating the raw touch can cancel the emulated click buttons need.
+	if event is InputEventMouseButton:
+		get_viewport().set_input_as_handled()
+
 func _screen_header(title: String) -> void:
-	var label := _menu_label(title, Vector2(28, 18), 48)
-	label.size = Vector2(420, 68)
+	var label := _menu_label(title, Vector2(40, MENU_HEADER_Y), 48)
+	label.size = Vector2(390, 76)
 	label.clip_text = true
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_menu_add(label)
-	var back := _make_button("Back", Vector2(468, 16), Vector2(220, 72), BRAND_INK, 32)
+	var back := _make_button("Back", Vector2(448, MENU_HEADER_Y), Vector2(232, 76), BRAND_INK, 32)
 	back.pressed.connect(_show_screen.bind("attract"))
 	_menu_add(back)
 
@@ -5790,6 +6046,9 @@ func _show_screen(which: String) -> void:
 	if which == "menu" or which == "attract":
 		mode = "attract"
 		playing = false
+		paused = false
+		if pause_layer:
+			pause_layer.visible = false
 		if menu_layer:
 			menu_layer.visible = false
 			_clear_menu()
@@ -5797,11 +6056,17 @@ func _show_screen(which: String) -> void:
 			hud_layer.visible = true
 		_set_match_hud(false)
 		_set_chrome(true)
+		_sync_pause_button()
 		return
 	mode = which
 	playing = false
+	joy_held = false
 	_set_chrome(false)
+	_set_match_hud(false)
+	if name_lbl:
+		name_lbl.visible = false
 	hud_layer.visible = true
+	_sync_pause_button()
 	_mount_menu_column()
 	if which == "levels":
 		_screen_levels()
@@ -5820,12 +6085,12 @@ func _on_play() -> void:
 
 func _screen_levels() -> void:
 	_screen_header("Levels")
-	_add_currency_pills(104)
+	_add_currency_pills(MENU_HEADER_Y + 92.0)
 	var scroll := ScrollContainer.new()
 	scroll.anchor_right = 1.0
 	scroll.anchor_bottom = 1.0
 	scroll.offset_left = 20
-	scroll.offset_top = 184
+	scroll.offset_top = MENU_HEADER_Y + 176.0
 	scroll.offset_right = -20
 	scroll.offset_bottom = -(SAFE_BOTTOM + 12)
 	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -5841,12 +6106,12 @@ func _screen_levels() -> void:
 
 func _screen_skins() -> void:
 	_screen_header("Skins")
-	_add_currency_pills(104)
+	_add_currency_pills(MENU_HEADER_Y + 92.0)
 	var scroll := ScrollContainer.new()
 	scroll.anchor_right = 1.0
 	scroll.anchor_bottom = 1.0
 	scroll.offset_left = 24
-	scroll.offset_top = 184
+	scroll.offset_top = MENU_HEADER_Y + 176.0
 	scroll.offset_right = -24
 	scroll.offset_bottom = -(SAFE_BOTTOM + 12)
 	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -5956,21 +6221,22 @@ func _on_skin(id: String) -> void:
 
 func _screen_shop() -> void:
 	_screen_header("Shop")
-	var coins := _menu_label("%s coins" % _grouped(Save.coins), Vector2(28, 100), 32)
-	coins.size = Vector2(660, 40)
+	var body := MENU_HEADER_Y + 96.0
+	var coins := _menu_label("%s coins" % _grouped(Save.coins), Vector2(40, body), 32)
+	coins.size = Vector2(640, 40)
 	_menu_add(coins)
-	_shop_row("Starting size", Save.size_rank, "size", 156)
-	_shop_row("Speed", Save.speed_rank, "speed", 292)
-	_shop_row("Head start", Save.time_rank, "time", 428)
-	var note := _menu_label("Head start keeps older round-time upgrades.", Vector2(32, 560), 26)
+	_shop_row("Starting size", Save.size_rank, "size", body + 56.0)
+	_shop_row("Speed", Save.speed_rank, "speed", body + 192.0)
+	_shop_row("Head start", Save.time_rank, "time", body + 328.0)
+	var note := _menu_label("Head start keeps older round-time upgrades.", Vector2(40, body + 460.0), 26)
 	note.size = Vector2(640, 36)
 	_menu_add(note)
 	var ads := "Ads removed" if IapService.no_ads else "Remove Ads  %s" % IapService.price_text()
-	var ads_btn := _make_button(ads, Vector2(32, 608), Vector2(656, 88), Color(0.45, 0.18, 0.22), 32)
+	var ads_btn := _make_button(ads, Vector2(32, body + 508.0), Vector2(656, 88), Color(0.45, 0.18, 0.22), 32)
 	ads_btn.disabled = IapService.no_ads
 	ads_btn.pressed.connect(_confirm_remove_ads)
 	_menu_add(ads_btn)
-	var test := _menu_label("Test purchase. Removes interstitials only.", Vector2(32, 708), 26)
+	var test := _menu_label("Test purchase. Removes interstitials only.", Vector2(40, body + 608.0), 26)
 	test.size = Vector2(640, 36)
 	_menu_add(test)
 
@@ -6020,16 +6286,17 @@ func _confirm_remove_ads() -> void:
 
 func _screen_settings() -> void:
 	_screen_header("Settings")
-	var music := _make_button("Music: %s" % ("On" if Save.music_on else "Off"), Vector2(48, 200), Vector2(624, 92), BRAND_CYAN if Save.music_on else BRAND_INK)
+	var body := MENU_HEADER_Y + 112.0
+	var music := _make_button("Music: %s" % ("On" if Save.music_on else "Off"), Vector2(48, body), Vector2(624, 92), BRAND_CYAN if Save.music_on else BRAND_INK)
 	music.pressed.connect(_toggle_music)
 	_menu_add(music)
-	var sfx_btn := _make_button("SFX: %s" % ("On" if Save.sfx_on else "Off"), Vector2(48, 312), Vector2(624, 92), BRAND_CYAN if Save.sfx_on else BRAND_INK)
+	var sfx_btn := _make_button("SFX: %s" % ("On" if Save.sfx_on else "Off"), Vector2(48, body + 112.0), Vector2(624, 92), BRAND_CYAN if Save.sfx_on else BRAND_INK)
 	sfx_btn.pressed.connect(_toggle_sfx)
 	_menu_add(sfx_btn)
-	var hap_btn := _make_button("Haptics: %s" % ("On" if Save.haptics_on else "Off"), Vector2(48, 424), Vector2(624, 92), BRAND_CYAN if Save.haptics_on else BRAND_INK)
+	var hap_btn := _make_button("Haptics: %s" % ("On" if Save.haptics_on else "Off"), Vector2(48, body + 224.0), Vector2(624, 92), BRAND_CYAN if Save.haptics_on else BRAND_INK)
 	hap_btn.pressed.connect(_toggle_haptics)
 	_menu_add(hap_btn)
-	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(48, 540), 30)
+	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(48, body + 340.0), 30)
 	note.size = Vector2(624, 80)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_menu_add(note)
@@ -6037,28 +6304,29 @@ func _screen_settings() -> void:
 func _screen_daily() -> void:
 	_screen_header("Daily reward")
 	var amount := Save.DAILY_COINS
+	var body := MENU_HEADER_Y + 140.0
 	if not Save.daily_claimed():
-		var today := _menu_label("Today: %d coins" % amount, Vector2(48, 240), 40)
+		var today := _menu_label("Today: %d coins" % amount, Vector2(48, body), 40)
 		today.size = Vector2(624, 56)
 		today.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_menu_add(today)
-		var claim := _make_button("Claim", Vector2(48, 340), Vector2(624, 92), Color(0.16, 0.66, 0.42))
+		var claim := _make_button("Claim", Vector2(48, body + 100.0), Vector2(624, 92), Color(0.16, 0.66, 0.42))
 		claim.pressed.connect(_on_claim_daily)
 		_menu_add(claim)
 	else:
 		var got := amount * (2 if Save.daily_doubled else 1)
-		var claimed := _menu_label("Claimed today: %d coins" % got, Vector2(48, 240), 36)
+		var claimed := _menu_label("Claimed today: %d coins" % got, Vector2(48, body), 36)
 		claimed.size = Vector2(624, 64)
 		claimed.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		claimed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_menu_add(claimed)
 		if Save.daily_doubled:
-			var done := _menu_label("Doubled. Come back tomorrow.", Vector2(48, 330), 32)
+			var done := _menu_label("Doubled. Come back tomorrow.", Vector2(48, body + 90.0), 32)
 			done.size = Vector2(624, 48)
 			done.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			_menu_add(done)
 		else:
-			var dbl := _make_button("Double today's reward", Vector2(48, 340), Vector2(624, 92), Color(0.90, 0.62, 0.18))
+			var dbl := _make_button("Double today's reward", Vector2(48, body + 100.0), Vector2(624, 92), Color(0.90, 0.62, 0.18))
 			dbl.pressed.connect(_on_double_daily)
 			_menu_add(dbl)
 

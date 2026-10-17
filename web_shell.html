@@ -469,6 +469,10 @@ window.__holeSyncFS = function () {
 		statusNotice.textContent = message;
 	}
 
+	window.__holeGraphicsFailed = function () {
+		showFailure('Hole Arcade could not draw the 3D world. Graphics started, but the picture stayed blank. Try the latest Chrome, Edge, Firefox, or Safari, and allow graphics for this site.');
+	};
+
 	function displayFailureNotice(err) {
 		var detail = 'Something went wrong while starting the game.';
 		if (err instanceof Error && err.message) detail = err.message;
