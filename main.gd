@@ -117,6 +117,98 @@ float vnoise(vec2 p) {
 	float d = thash(i + vec2(1.0, 1.0));
 	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
+float road_dist(vec2 xz) {
+	float best = 90.0;
+	float line = -54.0;
+	float z_hi = 58.0;
+	float x_hi = 58.0;
+	line = -54.0; z_hi = 58.0; x_hi = 58.0;
+	if (xz.y >= -58.0 && xz.y <= z_hi) best = min(best, abs(xz.x - line));
+	if (xz.x >= -58.0 && xz.x <= x_hi) best = min(best, abs(xz.y - line));
+	line = -36.0;
+	if (xz.y >= -58.0 && xz.y <= z_hi) best = min(best, abs(xz.x - line));
+	if (xz.x >= -58.0 && xz.x <= x_hi) best = min(best, abs(xz.y - line));
+	line = -18.0; x_hi = -6.0;
+	if (xz.y >= -58.0 && xz.y <= z_hi) best = min(best, abs(xz.x - line));
+	if (xz.x >= -58.0 && xz.x <= x_hi) best = min(best, abs(xz.y - line));
+	line = 18.0; x_hi = 58.0;
+	if (xz.y >= -58.0 && xz.y <= z_hi) best = min(best, abs(xz.x - line));
+	if (xz.x >= -58.0 && xz.x <= x_hi) best = min(best, abs(xz.y - line));
+	line = 36.0; z_hi = 12.0;
+	if (xz.y >= -58.0 && xz.y <= z_hi) best = min(best, abs(xz.x - line));
+	if (xz.x >= -58.0 && xz.x <= x_hi) best = min(best, abs(xz.y - line));
+	line = 54.0; z_hi = 58.0;
+	if (xz.y >= -58.0 && xz.y <= z_hi) best = min(best, abs(xz.x - line));
+	if (xz.x >= -58.0 && xz.x <= x_hi) best = min(best, abs(xz.y - line));
+	if (abs(xz.y) <= 1.15 && xz.x <= -17.0 && xz.x >= -43.0) {
+		best = min(best, abs(xz.y));
+	}
+	if (abs(xz.x) > 40.0 && abs(xz.y) > 40.0) {
+		float sx = xz.x > 0.0 ? 1.0 : -1.0;
+		float sz = xz.y > 0.0 ? 1.0 : -1.0;
+		float curve = abs(length(xz - vec2(sx * 44.0, sz * 44.0)) - 10.0);
+		if (abs(xz.x) > 50.0 && abs(xz.y) > 50.0) {
+			best = curve;
+		} else {
+			best = min(best, curve);
+		}
+	}
+	float bowl = length(xz - vec2(18.0, -36.0));
+	if (bowl < 4.7) {
+		best = 90.0;
+	} else if (bowl <= 7.6) {
+		best = 0.0;
+	}
+	if (abs(xz.x) < 7.0 && abs(xz.y) < 7.0) {
+		best = 90.0;
+	}
+	return best;
+}
+vec3 themed_road(vec2 xz, vec2 uv, float which) {
+	float lane = smoothstep(0.08, 0.0, abs(uv.y - 0.5));
+	float edge = smoothstep(0.18, 0.02, min(uv.y, 1.0 - uv.y));
+	vec3 col = vec3(0.34, 0.36, 0.4);
+	vec3 stripe = vec3(0.85, 0.78, 0.42);
+	if (which < 0.5) {
+		col = mix(vec3(0.40, 0.28, 0.16), vec3(0.58, 0.42, 0.24), uv.y);
+		stripe = vec3(0.32, 0.22, 0.12);
+	} else if (which < 1.5) {
+		float bar = step(0.5, fract(xz.x * 0.35 + xz.y * 0.35));
+		col = mix(vec3(0.16, 0.07, 0.10), vec3(0.86, 0.40, 0.52), bar);
+		stripe = vec3(0.96, 0.94, 0.9);
+	} else if (which < 2.5) {
+		col = mix(vec3(0.30, 0.22, 0.12), vec3(0.46, 0.34, 0.18), uv.y);
+		stripe = vec3(0.22, 0.16, 0.08);
+	} else if (which < 3.5) {
+		float board = step(0.5, fract(xz.x * 0.55));
+		col = mix(vec3(0.38, 0.24, 0.12), vec3(0.55, 0.36, 0.18), board);
+		stripe = vec3(0.28, 0.18, 0.1);
+	} else if (which < 4.5) {
+		col = mix(vec3(0.55, 0.62, 0.7), vec3(0.82, 0.88, 0.94), edge);
+		stripe = vec3(0.95, 0.84, 0.35);
+	} else if (which < 5.5) {
+		col = mix(vec3(0.72, 0.54, 0.26), vec3(0.90, 0.72, 0.38), uv.y);
+		stripe = vec3(0.55, 0.36, 0.16);
+	} else if (which < 6.5) {
+		col = vec3(0.18, 0.2, 0.24);
+		stripe = mix(vec3(0.75, 0.22, 0.2), vec3(0.2, 0.42, 0.78), step(0.5, fract(xz.x * 0.2)));
+	} else if (which < 7.5) {
+		col = vec3(0.1, 0.12, 0.18);
+		stripe = mix(vec3(0.25, 0.78, 0.86), vec3(0.92, 0.55, 0.18), step(0.5, fract(xz.y * 0.15)));
+	} else if (which < 8.5) {
+		vec2 cell = abs(fract(xz * 1.1) - 0.5);
+		float seam = step(0.42, max(cell.x, cell.y));
+		col = mix(vec3(0.34, 0.32, 0.38), vec3(0.2, 0.18, 0.24), seam);
+		stripe = vec3(0.55, 0.5, 0.4);
+	} else {
+		float bar = step(0.5, fract(xz.x * 0.4));
+		col = mix(vec3(0.62, 0.32, 0.22), vec3(0.78, 0.48, 0.28), bar);
+		stripe = vec3(0.95, 0.9, 0.7);
+	}
+	col = mix(col, stripe, lane * 0.75);
+	col = mix(col, col * 0.72, edge * 0.35);
+	return clamp(col, vec3(0.0), vec3(1.0));
+}
 vec3 theme_ground(vec3 base, vec2 xz, float which) {
 	vec3 col = base;
 	float h = thash(floor(xz * 1.4));
@@ -237,19 +329,14 @@ void fragment() {
 	vec2 xz = world_pos.xz;
 	if (paint_mode < 0.5) {
 		vec2 uv = fract(UV);
-		float curb = clamp(smoothstep(0.14, 0.03, uv.y) + smoothstep(0.14, 0.03, 1.0 - uv.y), 0.0, 1.0);
-		outc = mix(outc, vec3(0.72, 0.7, 0.66), curb * 0.72);
-		float edge_line = smoothstep(0.18, 0.145, uv.y) * smoothstep(0.11, 0.145, uv.y);
-		edge_line += smoothstep(0.18, 0.145, 1.0 - uv.y) * smoothstep(0.11, 0.145, 1.0 - uv.y);
-		outc = mix(outc, vec3(0.93, 0.94, 0.96), clamp(edge_line, 0.0, 1.0) * 0.85);
-		float lane = smoothstep(0.055, 0.012, abs(uv.y - 0.5));
-		float dash = step(0.46, fract(uv.x * 3.0));
-		outc = mix(outc, vec3(0.96, 0.8, 0.22), lane * dash * 0.92);
-		vec2 crack_cell = floor(xz * 5.0);
-		float crack_h = thash(crack_cell);
-		vec2 crack_f = abs(fract(xz * 5.0) - 0.5);
-		float crack = step(0.975, crack_h) * step(0.42, crack_f.x) * step(crack_f.y, 0.08);
-		outc = mix(outc, outc * 0.62, crack);
+		outc = themed_road(xz, uv, motif);
+		if (motif > 6.5 && motif < 7.5) {
+			float glow = smoothstep(0.08, 0.0, abs(uv.y - 0.5));
+			vec3 lamp = fract(xz.x * 0.17) > 0.5 ? vec3(0.3, 0.85, 0.92) : vec3(0.95, 0.58, 0.2);
+			outc = mix(outc, lamp, glow * 0.85);
+			float win = step(0.82, thash(floor(xz * 1.7)));
+			outc = mix(outc, vec3(0.95, 0.78, 0.35), win * 0.35);
+		}
 	}
 	if (paint_mode > 6.5 && paint_mode < 7.5 && motif > 5.5 && motif < 6.5) {
 		float wx = step(0.5, fract(xz.x * 2.2));
@@ -341,11 +428,11 @@ void fragment() {
 		}
 	} else if (paint_mode > 3.5 && paint_mode < 4.5) {
 		vec2 drift = xz * 0.9 + vec2(TIME * 0.24, -TIME * 0.17);
-		float n1 = thash(floor(drift));
-		float n2 = thash(floor(drift * 2.2 + vec2(4.0, 1.5)));
-		outc = mix(outc, outc * vec3(0.74, 0.95, 1.1), n1 * 0.34);
-		float glint = step(0.84, n2) * smoothstep(0.25, 0.8, n1);
-		outc = mix(outc, vec3(0.84, 0.95, 1.0), glint * 0.4);
+		float n1 = vnoise(drift * 1.7);
+		float n2 = vnoise(drift * 3.2 + vec2(4.0, 1.5));
+		outc = mix(outc, outc * vec3(0.74, 0.95, 1.08), n1 * 0.38);
+		float glint = smoothstep(0.62, 0.9, n2) * smoothstep(0.2, 0.75, n1);
+		outc = mix(outc, vec3(0.84, 0.95, 1.0), glint * 0.35);
 	} else if (paint_mode > 4.5 && paint_mode < 5.5) {
 		if (motif > 5.5 && motif < 6.5) {
 			float wx = step(0.5, fract(xz.x * 1.8));
@@ -374,6 +461,63 @@ void fragment() {
 		outc *= mix(0.72, 1.12, board);
 		outc = mix(outc, vec3(0.28, 0.16, 0.08), seam * 0.85);
 	}
+	float rd = road_dist(xz);
+	float wet = 0.0;
+	if (paint_mode > 3.5 && paint_mode < 4.5) {
+		wet = 1.0;
+	}
+	if (wet < 0.5 && paint_mode > 0.5 && rd > 1.15 && rd < 2.65) {
+		float band = 1.0 - smoothstep(1.7, 2.6, rd);
+		vec3 walk = vec3(0.62, 0.58, 0.5);
+		if (motif < 0.5) walk = vec3(0.55, 0.48, 0.36);
+		else if (motif < 1.5) walk = vec3(0.9, 0.72, 0.78);
+		else if (motif < 2.5) walk = vec3(0.28, 0.36, 0.18);
+		else if (motif < 3.5) walk = vec3(0.48, 0.34, 0.2);
+		else if (motif < 4.5) walk = vec3(0.86, 0.9, 0.96);
+		else if (motif < 5.5) walk = vec3(0.78, 0.62, 0.34);
+		else if (motif < 6.5) walk = vec3(0.45, 0.32, 0.22);
+		else if (motif < 7.5) walk = vec3(0.28, 0.32, 0.4);
+		else if (motif < 8.5) walk = vec3(0.3, 0.28, 0.34);
+		else walk = vec3(0.7, 0.5, 0.38);
+		outc = mix(outc, walk, band * 0.82);
+	}
+	if (motif > 1.5 && motif < 2.5) {
+		vec2 pond = (xz - vec2(2.2, 5.4)) / vec2(3.2, 2.35);
+		float pd = length(pond);
+		float water_m = 1.0 - smoothstep(0.78, 1.05, pd);
+		float shore = smoothstep(0.92, 1.12, pd) * (1.0 - smoothstep(1.12, 1.45, pd));
+		if (water_m > 0.001) {
+			vec3 water = mix(vec3(0.05, 0.24, 0.4), vec3(0.14, 0.42, 0.58), shade);
+			vec2 drift = xz * 0.85 + vec2(TIME * 0.24, -TIME * 0.17);
+			float n1 = vnoise(drift * 1.6);
+			float n2 = vnoise(drift * 3.1 + vec2(2.0, 6.0));
+			water = mix(water, water * vec3(0.78, 0.96, 1.08), n1 * 0.45);
+			float glint = smoothstep(0.68, 0.92, n2) * smoothstep(0.2, 0.8, n1);
+			water = mix(water, vec3(0.78, 0.92, 0.98), glint * 0.4);
+			outc = mix(outc, water, water_m);
+		}
+		outc = mix(outc, vec3(0.36, 0.28, 0.16), shore * 0.75);
+		if (paint_mode > 0.5 && paint_mode < 1.5) {
+			float moss = vnoise(xz * 0.22);
+			outc = mix(outc, outc * vec3(0.72, 1.05, 0.7), smoothstep(0.45, 0.8, moss) * 0.45);
+			float litter = step(0.78, thash(floor(xz * 2.4)));
+			vec3 leaf = thash(floor(xz * 1.3)) > 0.5 ? vec3(0.42, 0.28, 0.12) : vec3(0.16, 0.4, 0.14);
+			outc = mix(outc, leaf, litter * 0.4);
+		}
+	}
+	if (motif > 6.5 && motif < 7.5 && paint_mode > 0.5) {
+		float speck = step(0.9, thash(floor(xz * 2.2)));
+		vec3 lamp = thash(floor(xz * 3.1)) > 0.55 ? vec3(0.3, 0.82, 0.9) : vec3(0.95, 0.58, 0.22);
+		outc = mix(outc, lamp, speck * 0.75);
+		float lane = 1.0 - smoothstep(0.12, 0.48, abs(abs(xz.x) - 3.35));
+		lane *= 1.0 - smoothstep(9.0, 13.5, abs(xz.y));
+		vec3 glow = xz.x > 0.0 ? vec3(0.22, 0.86, 0.95) : vec3(0.98, 0.55, 0.18);
+		outc = mix(outc, glow, lane * 0.9);
+		if (paint_mode > 4.5 && paint_mode < 5.5) {
+			float win = step(0.72, thash(floor(xz * 1.4)));
+			outc = mix(outc, vec3(0.95, 0.82, 0.45), win * 0.55);
+		}
+	}
 	float edge = max(abs(xz.x), abs(xz.y));
 	float rim = smoothstep(70.5, 77.0, edge);
 	vec3 border = outc * vec3(0.45, 0.55, 0.42);
@@ -393,9 +537,8 @@ void fragment() {
 	outc = mix(outc, border, rim);
 	outc = mix(outc, vec3(0.004, 0.005, 0.008), cover);
 	ALBEDO = clamp(outc * grade_tint, vec3(0.0), vec3(1.0));
-	ROUGHNESS = mix(1.0, 0.55, step(3.5, paint_mode) * (1.0 - step(4.5, paint_mode)));
+	ROUGHNESS = mix(1.0, 0.55, wet);
 	METALLIC = 0.0;
-	float wet = step(3.5, paint_mode) * (1.0 - step(4.5, paint_mode));
 	SPECULAR = wet * 0.35;
 }
 """
@@ -617,6 +760,13 @@ var lat_hold := 0
 var lat_radius := 0.55
 var props: Array = []
 var movers: Array = []
+var road_routes: Array = []
+var treats: Array = []
+var mile_lbl: Label
+var mile_t := 0.0
+var mile_pill: Panel
+var clear_mark := 0
+var tier_use: Dictionary = {}
 var active: Array = []
 var kind_lists: Array = []
 var kind_meshes: Array = []
@@ -702,7 +852,9 @@ var play_save_wait := 0.0
 var chrome_layer: CanvasLayer
 var chrome_buttons: Array = []
 var hint_lbl: Label
+var hint_pill: Panel
 var drag_hint: Label
+var drag_pill: Panel
 var drag_hint_t := -1.0
 var web_audio_unlocked := false
 var hand_icon: Control
@@ -854,6 +1006,7 @@ const RIVAL_COLORS := [
 const RIVAL_RADIUS := [0.34, 0.42, 0.30, 0.48, 0.36, 0.44, 0.32, 0.40, 0.28, 0.46, 0.33, 0.38]
 const RIVAL_SPEED := [2.15, 2.25, 2.40, 2.05, 2.20, 2.10, 2.30, 2.18, 2.45, 2.08, 2.35, 2.12]
 const CatalogScript = preload("res://catalog.gd")
+const RoadScript = preload("res://roads.gd")
 const PropKitScript = preload("res://props_kit.gd")
 const ThemeMeshScript = preload("res://theme_meshes.gd")
 
@@ -959,6 +1112,16 @@ func _ready() -> void:
 		call_deferred("_probe_cam")
 	elif preview == "feet":
 		call_deferred("_probe_feet")
+	elif preview == "facing":
+		call_deferred("_probe_facing")
+	elif preview == "snowmenu":
+		call_deferred("_enter_attract", 4)
+	elif preview.begins_with("road"):
+		var road_rest := preview.substr(4)
+		var road_idx := 0
+		if road_rest.is_valid_int():
+			road_idx = int(road_rest)
+		call_deferred("_preview_road", road_idx)
 	elif preview == "rivalbot":
 		call_deferred("_probe_rival_bot")
 	elif preview.begins_with("close"):
@@ -987,6 +1150,66 @@ func _preview_results() -> void:
 	playing = true
 	_finish_round(true)
 	_dismiss_unlock()
+
+func _preview_road(idx: int) -> void:
+	quality_locked = true
+	_apply_quality(1.5, Viewport.MSAA_4X, false)
+	start_round(idx)
+	playing = false
+	var total := maxi(clear_total, 1)
+	player_eaten = int(float(total) * 0.48)
+	clear_eaten = player_eaten
+	_sync_level()
+	shown_radius = hole_radius
+	hole_open = hole_radius
+	hole_mesh.scale = Vector3(shown_radius, 1.0, shown_radius)
+	_snap_camera()
+	_set_chrome(false)
+	_set_match_hud(false)
+	if hud_layer:
+		hud_layer.visible = false
+
+func _probe_facing() -> void:
+	var bad := 0
+	var checked := 0
+	for mi in CatalogScript.maps().size():
+		start_round(mi)
+		playing = false
+		for _step in 20:
+			_tick_movers(1.0 / 60.0)
+		var seen := {}
+		var small := {}
+		for o in props:
+			if float(o.base) <= 0.9:
+				var sid := kind_id_of(int(o.kind))
+				small[sid] = int(small.get(sid, 0)) + 1
+		print("VARIETY map %d types %d" % [mi, small.size()])
+		for o in movers:
+			if not bool(o.alive):
+				continue
+			var dir: Vector3 = o.dir
+			if dir.length_squared() < 0.0001 or float(o.speed) < 0.05:
+				continue
+			var face := float(o.get("face", 0.0))
+			for _settle in 45:
+				var target := atan2(dir.x, dir.z) + face
+				o.yaw = _turn_toward(float(o.yaw), target, 1.0 / 60.0)
+			var nose := _nose_of(float(o.yaw), face)
+			var dot := nose.dot(dir.normalized())
+			var id := kind_id_of(int(o.kind))
+			checked += 1
+			if not seen.has(id) or float(seen[id]) > dot:
+				seen[id] = dot
+			if dot < 0.9:
+				bad += 1
+				print("FACE FAIL %s map %d dot %.3f" % [id, mi, dot])
+		for id in seen.keys():
+			print("FACE %s map %d dot %.3f" % [str(id), mi, float(seen[id])])
+	if bad == 0 and checked > 0:
+		print("FACE_OK %d" % checked)
+	else:
+		print("FACE_BAD %d checked %d" % [bad, checked])
+	get_tree().quit()
 
 func _preview_zoom(kind: String) -> void:
 	quality_locked = true
@@ -3075,8 +3298,8 @@ func _register_theme_models() -> void:
 		["twagon", "train/train-carriage-box.glb", 1.35, "ride", 12],
 		["moonlet", "space/meteor_detailed.glb", 0.28, "small", 2],
 		["spacecrate", "space/barrel.glb", 0.48, "small", 4],
-		["astro", "space/astronautA.glb", 0.82, "ride", 6],
-		["spacerover", "space/rover.glb", 1.15, "ride", 12],
+		["astro", "space/astronautA.glb", 0.54, "ride", 6],
+		["spacerover", "space/rover.glb", 0.76, "ride", 12],
 		["satdish", "space/satelliteDish_detailed.glb", 1.50, "ride", 14],
 		["habitat", "space/hangar_roundA.glb", 2.00, "barn", 36],
 		["hcandle", "grave/candle.glb", 0.30, "small", 2],
@@ -3170,6 +3393,8 @@ func _ensure_models() -> void:
 		kind_multimeshes.append(null)
 		kind_by_id[str(item.id)] = prop_defs.size() - 1
 	_register_theme_models()
+	_clone_kind("raptord", "miniraptor", "small", 4, 0.46)
+	_clone_small_variants()
 	_normalize_footprints()
 	ground_meshes = [
 		_flat_ground(_load_model("res://assets/kenney/roads/road-straight.glb").mesh),
@@ -3296,7 +3521,13 @@ func _build_surfaces() -> void:
 		for i in n:
 			var x := GRID_MIN + i
 			var z := GRID_MIN + j
-			surfaces[j * n + i] = _surface_at(layout, x, z)
+			var surf := _surface_at(layout, x, z)
+			if RoadScript.cell(x, z) == 1 and surf != SURF_WATER:
+				surf = SURF_ROAD
+			elif RoadScript.cell(x, z) == 1 and layout == "pirate":
+				surf = SURF_ROAD
+			surfaces[j * n + i] = surf
+	road_routes = RoadScript.routes()
 
 func _district(x: int, z: int) -> int:
 	var cell := (CITY_HALF * 2.0) / 3.0
@@ -3368,15 +3599,22 @@ func _surf_candy(x: int, z: int) -> int:
 func _surf_jungle(x: int, z: int) -> int:
 	var fx := float(x)
 	var fz := float(z)
-	# River sits to the right of the opening so the hole stands on leaf litter.
+	var pond_dx := (fx - 2.2) / 2.6
+	var pond_dz := (fz - 5.4) / 1.9
+	if pond_dx * pond_dx + pond_dz * pond_dz < 1.0:
+		return SURF_WATER
+	var shore_dx := (fx - 2.2) / 3.5
+	var shore_dz := (fz - 5.4) / 2.7
+	if shore_dx * shore_dx + shore_dz * shore_dz < 1.0:
+		return SURF_SAND
 	if absf(fx - 24.0 - sin(fz * 0.045) * 5.0) < 3.2 and fz > -52.0 and fz < 28.0:
 		return SURF_WATER
-	if absf(fz + 8.0 - cos(fx * 0.04) * 3.0) < 1.3 and fx > -28.0 and fx < 16.0:
+	if absf(fx + 1.1 - sin(fz * 0.18) * 2.2) < 1.15 and fz > -40.0 and fz < 24.0:
 		return SURF_DIRT
-	if absf(fx) < 2.4 and fz > 3.4 and fz < 9.0:
-		return SURF_WATER
-	if fx * fx + fz * fz < 36.0 * 36.0:
+	if absf(fz + 22.0 - cos(fx * 0.05) * 3.0) < 1.2 and fx > -36.0 and fx < 20.0:
 		return SURF_DIRT
+	if fx * fx + fz * fz < 50.0 * 50.0:
+		return SURF_GRASS
 	if _pond(x, z, -28.0, -30.0, 12.0, 10.0) or _pond(x, z, 8.0, -40.0, 10.0, 9.0) or _pond(x, z, -40.0, 16.0, 14.0, 12.0):
 		return SURF_GRASS
 	return SURF_FIELD
@@ -3384,43 +3622,31 @@ func _surf_jungle(x: int, z: int) -> int:
 func _surf_pirate(x: int, z: int) -> int:
 	var fx := float(x)
 	var fz := float(z)
-	# The opening camera only sees about x ±6 and z -14 to +10.
-	# Water sits in that window, with plank docks, and the hole stays on grass.
-	if absf(fx) < 8.0 and fz > 3.2 and fz < 18.0:
-		if absf(fz - 6.2) < 1.35 or (absf(absf(fx) - 3.6) < 0.9 and fz < 12.0):
-			return SURF_WOOD
+	# A dock cross sits in the play area. Water fills the basin around it.
+	if absi(x) <= 6 and absi(z) <= 4:
+		return SURF_WOOD
+	if absi(z) <= 2 and absi(x) < 56:
+		return SURF_WOOD
+	if absi(x) <= 2 and absi(z) < 42:
+		return SURF_WOOD
+	if absf(absf(fz) - 12.2) < 1.15 and absf(fx) < 58.0:
+		return SURF_WOOD
+	var canal := false
+	if absf(fz) < 11.0 and absf(fx) < 58.0:
+		canal = true
+	if absf(fz - 24.0) < 2.4 or absf(fz + 26.0) < 2.4:
+		canal = true
+	if absf(fx - 16.0) < 2.4 or absf(fx + 22.0) < 2.4:
+		canal = true
+	if canal and absi(x) < 62 and absi(z) < 62:
 		return SURF_WATER
-	if absf(fx) < 7.0 and fz < -3.6 and fz > -18.0:
-		if absf(fz + 8.0) < 1.15:
-			return SURF_WOOD
-		return SURF_WATER
-	if absf(fx) < 8.0 and fz > 2.2 and fz < 3.4:
-		return SURF_SAND
-	if absf(fx) < 7.0 and fz < -2.6 and fz > -3.8:
-		return SURF_SAND
-	if absf(fx) < 8.0 and fz > -2.4 and fz < 2.4:
-		return SURF_GRASS
-	# Harbor in the opening view, with docks along both banks.
-	if fz < -7.0 and fz > -34.0:
-		if absf(absf(fx) - 17.5) < 2.4:
-			return SURF_WOOD
-		if absf(fx) < 14.0:
-			return SURF_WATER
 	var coast := 6.0 + sin(fx * 0.06) * 18.0
-	if fx >= -46.0 and fx <= -34.0 and fz > coast - 16.0 and fz < coast + 14.0:
-		return SURF_WOOD
-	if fx >= -6.0 and fx <= 6.0 and fz > coast - 16.0 and fz < coast + 14.0:
-		return SURF_WOOD
-	if fx >= 30.0 and fx <= 42.0 and fz > coast - 16.0 and fz < coast + 14.0:
-		return SURF_WOOD
-	if fz > coast + 5.0:
+	if fz > coast + 8.0 and fz > 40.0:
 		return SURF_WATER
-	if fz > coast - 6.0:
+	if fz > coast - 4.0 and fz > 34.0:
 		return SURF_SAND
 	if _pond(x, z, -28.0, -40.0, 10.0, 8.0):
 		return SURF_CONCRETE
-	if absf(fx + 22.0) < 1.4 and fz < -34.0:
-		return SURF_DIRT
 	return SURF_GRASS
 
 func _surf_snow(x: int, z: int) -> int:
@@ -3720,14 +3946,33 @@ func _try_tier_place(pool: Array, tier: int, p: Vector3) -> bool:
 		return false
 	var lo := float(TIER_LO[tier])
 	var hi := float(TIER_HI[tier]) - 0.008
-	var pick := str(pool[randi() % pool.size()])
+	var cap := maxi(int(ceil(float(TIER_MIN[tier]) * 0.12)), 1)
+	var pick := ""
+	var least := 999999
+	var start := randi() % pool.size()
+	for n in pool.size():
+		var cand := str(pool[(start + n) % pool.size()])
+		var have := int(tier_use.get("%d:%s" % [tier, cand], 0))
+		if have >= cap:
+			continue
+		if have < least:
+			least = have
+			pick = cand
+			if have == 0 and n > 2:
+				break
+	if pick == "":
+		return false
 	var mid := (lo + hi) * 0.5
 	var half := (hi - lo) * 0.28
 	var target := _target_base(pick, maxf(lo, mid - half), minf(hi, mid + half))
 	if target < 0.0:
 		return false
 	var grow := target / _natural_base(pick)
-	return _place_id(pick, p, Vector3.ZERO, randf() * TAU, grow)
+	if not _place_id(pick, p, Vector3.ZERO, randf() * TAU, grow):
+		return false
+	var key := "%d:%s" % [tier, pick]
+	tier_use[key] = int(tier_use.get(key, 0)) + 1
+	return true
 
 func _district_point(d: int) -> Vector3:
 	var center := _district_center(d)
@@ -3800,28 +4045,30 @@ func _seed_ladder() -> void:
 func _theme_ids(layout: String) -> Array:
 	match layout:
 		"candy":
-			return ["lollypop", "donut", "canecandy", "gbread", "sweetcup", "coneic", "partycake", "candybench", "ghouse", "ccastle"]
+			return ["lollypop", "lollyblue", "lollygold", "donut", "donutchoc", "canecandy", "canegreen", "gbread", "breadpink", "sweetcup", "coneic", "blossom", "pebbles", "fflower", "partycake", "candybench", "ghouse", "ccastle"]
 		"jungle":
-			return ["spottedegg", "dinonest", "dinobone", "fernleaf", "jvine", "redshroom", "raptord", "jpalm", "trike", "jpalmtall", "jhut", "tyrant", "brachio", "lavacone"]
+			return ["spottedegg", "eggblue", "egggold", "dinonest", "dinobone", "fernleaf", "fernwide", "jvine", "redshroom", "shroomgold", "miniraptor", "fflower", "floweryel", "blossom", "pebbles", "raptord", "jpalm", "trike", "jpalmtall", "jhut", "tyrant", "brachio", "lavacone"]
 		"pirate":
-			return ["pbarrel", "pcrate", "pchest", "pcannon", "panchor", "ppalm", "prowboat", "pdock", "tavern", "pship", "plight"]
+			return ["pbarrel", "pcrate", "pchest", "chestgold", "pflag", "panchor", "pebbles", "blossom", "fflower", "fapple", "applegreen", "donut", "pcannon", "ppalm", "prowboat", "pdock", "tavern", "pship", "plight"]
 		"snow":
-			return ["hpresent", "hsled", "iceblock", "hsnowman", "skier", "hpine", "hcabin", "skilift", "icecastle"]
+			return ["hpresent", "giftgold", "hsled", "iceblock", "iceblue", "hsnowman", "snowtiny", "pebbles", "fflower", "flowerwht", "fapple", "tblock", "blockred", "skier", "hpine", "hcabin", "skilift", "icecastle"]
 		"desert":
-			return ["drock", "dcactus", "dpot", "dtallcac", "dcamel", "dtent", "dpalm", "dstall", "dadobe", "dpyramid", "dsphinx"]
+			return ["drock", "rockred", "rockgold", "dcactus", "cactusflower", "dpot", "pebbles", "blossom", "fflower", "fapple", "tball", "ballblue", "dtallcac", "dcamel", "dtent", "dpalm", "dstall", "dadobe", "dpyramid", "dsphinx"]
 		"toy":
-			return ["tblock", "tball", "tracer", "teddybear", "ttruck", "bot", "toybench", "toytrain", "twagon", "toyhouse", "blockfort"]
+			return ["tblock", "blockred", "blockgold", "tball", "ballblue", "teddybear", "bearblue", "fballoon", "balloonyel", "donut", "lollypop", "lollyblue", "canecandy", "toybench", "tracer", "ttruck", "bot", "toytrain", "twagon", "toyhouse", "blockfort"]
 		"space":
-			return ["satprobe", "astro", "antenna", "solarpanel", "spacerover", "satdish", "habitat", "stackrocket", "gantry"]
+			return ["satprobe", "probeamber", "moonlet", "meteorhot", "pebbles", "tblock", "blockred", "iceblock", "fapple", "drock", "rockred", "astro", "antenna", "solarpanel", "spacerover", "satdish", "habitat", "stackrocket", "gantry"]
 		"haunt":
-			return ["hcandle", "hbat", "hcrow", "hpumpkin", "htomb", "hghost", "htree", "hcart", "hhouse", "hcrypt", "hmansion"]
+			return ["hcandle", "hbat", "hcrow", "hpumpkin", "pumpkingold", "pebbles", "blossom", "fflower", "hpresent", "giftgold", "drock", "tblock", "htomb", "hghost", "htree", "hcart", "hhouse", "hcrypt", "hmansion"]
 		"fair":
-			return ["fballoon", "fteacup", "fbench", "fbumper", "fpop", "teacups", "coastertrain", "coasterhill", "coasterloop", "carousel", "ferris"]
+			return ["fballoon", "balloonyel", "fteacup", "cupgold", "fbench", "lollypop", "lollyblue", "donut", "donutchoc", "canecandy", "tball", "ballblue", "fapple", "blossom", "fbumper", "fpop", "teacups", "coastertrain", "coasterhill", "coasterloop", "carousel", "ferris"]
 		_:
-			return ["fapple", "chicken", "fwheat", "piglet", "haybale", "cow", "railfence", "scare", "farmtractor", "pickup", "grainsilo", "redbarn", "farmmill"]
+			return ["fapple", "applegreen", "applegold", "chicken", "fwheat", "wheatgold", "fflower", "floweryel", "flowerwht", "blossom", "pebbles", "piglet", "haybale", "tblock", "blockred", "cow", "railfence", "scare", "farmtractor", "pickup", "grainsilo", "redbarn", "farmmill"]
 
 func _populate() -> void:
 	forward_tall = 0
+	tier_use = {}
+	treats = []
 	var layout := str(map.get("layout", "farm"))
 	_dress_opening(layout)
 	_place_signatures(layout)
@@ -3833,7 +4080,238 @@ func _populate() -> void:
 	_dress_border()
 	_dress_vista(layout)
 	_balance_tiers()
+	_dress_streets(layout)
+	_place_treats(layout)
 	_tint_animals()
+	_audit_opening()
+
+func _is_rare_treat(id: String) -> bool:
+	return id.find("gold") >= 0 or id == "meteorhot" or id == "cupgold"
+
+func _treat_id(layout: String) -> String:
+	match layout:
+		"candy":
+			return "lollygold"
+		"jungle":
+			return "egggold"
+		"pirate":
+			return "chestgold"
+		"snow":
+			return "giftgold"
+		"desert":
+			return "rockgold"
+		"toy":
+			return "blockgold"
+		"space":
+			return "meteorhot"
+		"haunt":
+			return "pumpkingold"
+		"fair":
+			return "cupgold"
+		_:
+			return "applegold"
+
+func _place_treats(layout: String) -> void:
+	var id := _treat_id(layout)
+	var spots: Array = [Vector3(5.4, 0, -6.2), Vector3(-7.5, 0, 8.4), Vector3(16.0, 0, 14.0), Vector3(-20.0, 0, -24.0), Vector3(28.0, 0, -18.0)]
+	var made := 0
+	var tries := 0
+	while made < 4 and tries < spots.size() + 24 and props.size() < PROP_CAP:
+		tries += 1
+		var p := Vector3(randf_range(-36.0, 36.0), 0.0, randf_range(-36.0, 36.0))
+		if tries <= spots.size():
+			p = spots[tries - 1]
+		if p.length() < 4.2:
+			continue
+		if _surf_f(p.x, p.z) == SURF_WATER:
+			continue
+		if _place_id(id, p, Vector3.ZERO, randf() * TAU, 1.0):
+			var o: Dictionary = props[props.size() - 1]
+			o["treat"] = true
+			treats.append(o)
+			made += 1
+
+func _block_house(layout: String) -> String:
+	match layout:
+		"candy":
+			return "ghouse"
+		"jungle":
+			return "jhut"
+		"pirate":
+			return "tavern"
+		"snow":
+			return "hcabin"
+		"desert":
+			return "dadobe"
+		"toy":
+			return "toyhouse"
+		"space":
+			return "habitat"
+		"haunt":
+			return "hhouse"
+		"fair":
+			return "fpop"
+		_:
+			return "house_a"
+
+func _block_fence(layout: String) -> String:
+	match layout:
+		"candy":
+			return "canecandy"
+		"jungle":
+			return "fernleaf"
+		"pirate":
+			return "pbarrel"
+		"snow":
+			return "iceblock"
+		"desert":
+			return "dcactus"
+		"toy":
+			return "tblock"
+		"space":
+			return "solarpanel"
+		"haunt":
+			return "htomb"
+		"fair":
+			return "fbench"
+		_:
+			return "railfence"
+
+func _parked_id(layout: String) -> String:
+	match layout:
+		"candy":
+			return "van"
+		"jungle":
+			return "raptord"
+		"snow":
+			return "snowmobile"
+		"desert":
+			return "dcamel"
+		"toy":
+			return "tracer"
+		"space":
+			return "spacerover"
+		"haunt":
+			return "hcart"
+		"fair":
+			return "fbumper"
+		"pirate":
+			return "skiff"
+		_:
+			return "farmtractor"
+
+func _along_road(p: Vector3) -> Vector3:
+	var best_x := 18.0
+	var best_dx := 999.0
+	var best_z := 18.0
+	var best_dz := 999.0
+	for line in [-54.0, -36.0, -18.0, 18.0, 36.0, 54.0]:
+		var dx := absf(p.x - line)
+		var dz := absf(p.z - line)
+		if dx < best_dx:
+			best_dx = dx
+			best_x = line
+		if dz < best_dz:
+			best_dz = dz
+			best_z = line
+	if best_dx <= best_dz:
+		return Vector3(0.0, 0.0, 1.0 if p.z >= 0.0 else -1.0)
+	return Vector3(1.0 if p.x >= 0.0 else -1.0, 0.0, 0.0)
+
+func _toward_road(p: Vector3) -> Vector3:
+	var best := Vector3(18.0, 0.0, p.z)
+	var best_d := 999.0
+	for line in [-54.0, -36.0, -18.0, 18.0, 36.0, 54.0]:
+		var dx := absf(p.x - line)
+		var dz := absf(p.z - line)
+		if dx < best_d:
+			best_d = dx
+			best = Vector3(line, 0.0, p.z)
+		if dz < best_d:
+			best_d = dz
+			best = Vector3(p.x, 0.0, line)
+	var dir := best - Vector3(p.x, 0.0, p.z)
+	if dir.length_squared() < 0.01:
+		return Vector3(0.0, 0.0, 1.0)
+	return dir.normalized()
+
+func _dress_streets(layout: String) -> void:
+	var house := _block_house(layout)
+	var fence := _block_fence(layout)
+	var parked := _parked_id(layout)
+	var lamps := 0
+	var houses := 0
+	var fences := 0
+	var parks := 0
+	var signs := 0
+	var x := -56
+	while x <= 56:
+		var z := -56
+		while z <= 56:
+			if RoadScript.cell(x, z) == 2:
+				var p := Vector3(float(x), 0.0, float(z))
+				var surf := _surf_f(p.x, p.z)
+				var open := absf(p.x) < 14.0 and absf(p.z) < 14.0
+				if not open and surf != SURF_WATER and surf != SURF_ROAD and surf != SURF_TRACK:
+					var slot := posmod(x + z * 3, 48)
+					if lamps < 70 and posmod(x + z, 16) == 0:
+						if _place_id("lamp", p, Vector3.ZERO, 0.0):
+							lamps += 1
+					elif signs < 6 and slot == 4:
+						if _place_id("sign", p, _toward_road(p), -1.0):
+							signs += 1
+					elif parks < 6 and slot == 10 and parked != "skiff":
+						if _place_id(parked, p, _along_road(p), -1.0):
+							parks += 1
+					elif houses < 7 and slot == 18:
+						if _place_id(house, p, _toward_road(p), -1.0):
+							houses += 1
+					elif fences < 36 and (slot == 26 or slot == 30):
+						var yaw := 0.0 if posmod(z, 18) < 9 else PI * 0.5
+						if _place_id(fence, p, Vector3.ZERO, yaw):
+							fences += 1
+			z += 4
+		x += 4
+	if layout == "pirate":
+		for i in 4:
+			var bp := Vector3(12.0, 0.0, -8.0 + float(i) * 7.0)
+			_place_id("skiff", bp, Vector3(1.0, 0.0, 0.0), -1.0, 1.0, Color.WHITE, -1, 0, [SURF_WATER])
+
+func _audit_opening() -> void:
+	var layout := str(map.get("layout", ""))
+	var want: Array = []
+	if layout == "jungle":
+		want = ["tyrant", "lavacone", "miniraptor", "trike", "raptord"]
+	elif layout == "space":
+		want = ["stackrocket", "habitat", "astro", "spacerover"]
+	elif layout == "pirate":
+		want = ["pier", "skiff"]
+	elif layout == "farm":
+		want = ["chicken"]
+	else:
+		return
+	for id in want:
+		var hit := false
+		for o in props:
+			if kind_id_of(int(o.kind)) != str(id):
+				continue
+			var p: Vector3 = o.pos
+			if absf(p.x) < 6.5 and p.z > -15.5 and p.z < 12.0:
+				hit = true
+				print("OPEN %s %s at %.1f %.1f base %.2f h %.2f" % [layout, id, p.x, p.z, float(o.base), float(o.height)])
+				break
+		if not hit:
+			var any := 0
+			for o2 in props:
+				if kind_id_of(int(o2.kind)) != str(id):
+					continue
+				var q: Vector3 = o2.pos
+				print("OPEN FAR %s %s at %.1f %.1f base %.2f h %.2f" % [layout, id, q.x, q.z, float(o2.base), float(o2.height)])
+				any += 1
+				if any >= 3:
+					break
+			if any == 0:
+				print("OPEN MISS %s %s" % [layout, id])
 
 func _path_dir(p: Vector3, surfs: Array) -> Vector3:
 	for ang in [0.0, PI * 0.5, PI, -PI * 0.5]:
@@ -3873,6 +4351,11 @@ func _path_spots(surfs: Array) -> Array:
 func _spawn_movers(ids: Array, count: int, surfs: Array, near: bool, mover: int) -> void:
 	if ids.is_empty() or count <= 0:
 		return
+	if mover == 2 and not road_routes.is_empty():
+		_spawn_on_roads(ids, count)
+		return
+	if mover == 1:
+		surfs = _sidewalk_surfs(surfs)
 	var spots: Array = _path_spots(surfs)
 	var made := 0
 	var spot_i := 0
@@ -3945,45 +4428,44 @@ func _spawn_life() -> void:
 func _scatter_theme(layout: String) -> void:
 	match layout:
 		"candy":
-			_scatter_on(["lollypop", "donut", "canecandy", "gbread"], 10, [SURF_GRASS, SURF_FIELD, SURF_CONCRETE], 1.0)
-			_scatter_on(["sweetcup", "coneic"], 4, [SURF_GRASS, SURF_CONCRETE], 1.0)
+			_scatter_on(["lollypop", "lollyblue", "lollygold", "donut", "donutchoc", "canecandy", "canegreen", "gbread", "breadpink", "sweetcup", "coneic", "blossom", "pebbles", "fflower"], 10, [SURF_GRASS, SURF_FIELD, SURF_CONCRETE], 1.0)
 			_scatter_on(["ghouse"], 2, [SURF_GRASS], 1.0)
 		"jungle":
-			_scatter_on(["spottedegg", "dinonest", "fernleaf", "jvine", "redshroom"], 12, [SURF_DIRT, SURF_FIELD, SURF_GRASS], 1.0)
-			_scatter_on(["jpalm", "raptord", "dinobone"], 5, [SURF_DIRT, SURF_GRASS], 1.0)
+			_scatter_on(["spottedegg", "eggblue", "egggold", "dinonest", "fernleaf", "fernwide", "jvine", "redshroom", "shroomgold", "miniraptor", "fflower", "floweryel", "blossom", "dinobone", "pebbles"], 12, [SURF_DIRT, SURF_FIELD, SURF_GRASS], 1.0)
+			_scatter_on(["jpalm", "raptord"], 4, [SURF_DIRT, SURF_GRASS], 1.0)
 			_scatter_on(["jhut"], 2, [SURF_DIRT, SURF_GRASS], 1.0)
 		"pirate":
-			_scatter_on(["pbarrel", "pcrate", "pchest", "pflag"], 10, [SURF_SAND, SURF_WOOD, SURF_GRASS], 1.0)
-			_scatter_on(["pcannon", "prowboat", "ppalm"], 4, [SURF_SAND, SURF_WOOD], 1.0)
+			_scatter_on(["pbarrel", "pcrate", "pchest", "chestgold", "pflag", "panchor", "pebbles", "blossom", "fflower", "floweryel", "canecandy", "fapple", "applegreen", "donut"], 10, [SURF_SAND, SURF_WOOD, SURF_GRASS], 1.0)
+			_scatter_on(["pcannon", "ppalm"], 3, [SURF_SAND, SURF_WOOD], 1.0)
 			_scatter_on(["tavern"], 2, [SURF_GRASS, SURF_DIRT], 1.0)
 		"snow":
-			_scatter_on(["hpresent", "hsled", "hsnowman"], 10, [SURF_SAND, SURF_GRASS], 1.0)
-			_scatter_on(["hpine", "iceblock"], 5, [SURF_SAND, SURF_GRASS], 1.0)
+			_scatter_on(["hpresent", "giftgold", "hsled", "hsnowman", "snowtiny", "iceblock", "iceblue", "pebbles", "fflower", "flowerwht", "fapple", "applegold", "canecandy", "tblock", "blockred"], 10, [SURF_SAND, SURF_GRASS], 1.0)
+			_scatter_on(["hpine"], 3, [SURF_SAND, SURF_GRASS], 1.0)
 			_scatter_on(["hcabin"], 2, [SURF_SAND, SURF_CONCRETE], 1.0)
 		"desert":
-			_scatter_on(["drock", "dcactus", "dpot"], 10, [SURF_SAND, SURF_DIRT], 1.0)
-			_scatter_on(["dtallcac", "dtent", "dpalm"], 4, [SURF_SAND], 1.0)
+			_scatter_on(["drock", "rockred", "rockgold", "dcactus", "cactusflower", "dpot", "pebbles", "blossom", "fflower", "floweryel", "fapple", "applegold", "tball", "ballblue"], 10, [SURF_SAND, SURF_DIRT], 1.0)
+			_scatter_on(["dtallcac", "dpalm"], 3, [SURF_SAND], 1.0)
 			_scatter_on(["dstall"], 2, [SURF_SAND, SURF_DIRT], 1.0)
 		"toy":
-			_scatter_on(["tblock", "tball", "tracer"], 10, [SURF_WOOD, SURF_FIELD, SURF_CONCRETE], 1.0)
-			_scatter_on(["teddybear", "bot", "twagon", "toybench"], 4, [SURF_WOOD, SURF_CONCRETE, SURF_FIELD], 1.0)
+			_scatter_on(["tblock", "blockred", "blockgold", "tball", "ballblue", "teddybear", "bearblue", "toybench", "fballoon", "balloonyel", "donut", "donutchoc", "lollypop", "lollyblue", "canecandy"], 10, [SURF_WOOD, SURF_FIELD, SURF_CONCRETE], 1.0)
+			_scatter_on(["bot", "twagon"], 3, [SURF_WOOD, SURF_CONCRETE, SURF_FIELD], 1.0)
 			_scatter_on(["toyhouse"], 2, [SURF_WOOD, SURF_FIELD], 1.0)
 		"space":
-			_scatter_on(["satprobe", "astro", "solarpanel"], 8, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0)
-			_scatter_on(["spacerover", "satdish", "antenna"], 4, [SURF_SAND, SURF_CONCRETE], 1.0)
+			_scatter_on(["satprobe", "probeamber", "moonlet", "meteorhot", "solarpanel", "pebbles", "tblock", "blockred", "iceblock", "iceblue", "fapple", "applegold", "antenna", "drock", "rockred"], 8, [SURF_SAND, SURF_DIRT, SURF_CONCRETE], 1.0)
+			_scatter_on(["spacerover", "satdish"], 3, [SURF_SAND, SURF_CONCRETE], 1.0)
 			_scatter_on(["habitat"], 2, [SURF_CONCRETE, SURF_SAND], 1.0)
 		"haunt":
-			_scatter_on(["hcandle", "hbat", "hcrow", "hpumpkin"], 10, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
-			_scatter_on(["htomb", "hghost", "htree"], 4, [SURF_GRASS, SURF_DIRT], 1.0)
-			_scatter_on(["hcart", "hhouse"], 2, [SURF_GRASS], 1.0)
+			_scatter_on(["hcandle", "hbat", "hcrow", "hpumpkin", "pumpkingold", "pebbles", "blossom", "fflower", "floweryel", "hpresent", "giftgold", "drock", "rockred", "tblock", "iceblock"], 10, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
+			_scatter_on(["htomb", "hghost"], 3, [SURF_GRASS, SURF_DIRT], 1.0)
+			_scatter_on(["hcart"], 2, [SURF_GRASS], 1.0)
 		"fair":
-			_scatter_on(["fballoon", "fteacup", "fbench"], 10, [SURF_GRASS, SURF_DIRT, SURF_CONCRETE], 1.0)
-			_scatter_on(["fbumper", "fpop", "coastertrain"], 4, [SURF_GRASS, SURF_CONCRETE], 1.0)
-			_scatter_on(["teacups", "carousel"], 2, [SURF_GRASS], 1.0)
+			_scatter_on(["fballoon", "balloonyel", "fteacup", "cupgold", "fbench", "lollypop", "lollyblue", "donut", "donutchoc", "canecandy", "tball", "ballblue", "fapple", "applegold", "blossom"], 10, [SURF_GRASS, SURF_DIRT, SURF_CONCRETE], 1.0)
+			_scatter_on(["fbumper", "fpop"], 3, [SURF_GRASS, SURF_CONCRETE], 1.0)
+			_scatter_on(["teacups"], 2, [SURF_GRASS], 1.0)
 		_:
-			_scatter_on(["fapple", "chicken", "piglet", "fflower"], 12, [SURF_FIELD, SURF_GRASS], 1.0)
-			_scatter_on(["haybale", "railfence", "fwheat"], 6, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
-			_scatter_on(["cow", "scare", "farmtractor"], 3, [SURF_GRASS, SURF_FIELD], 1.0)
+			_scatter_on(["fapple", "applegreen", "applegold", "chicken", "piglet", "fflower", "floweryel", "flowerwht", "fwheat", "wheatgold", "blossom", "pebbles", "tblock", "blockred", "haybale"], 12, [SURF_FIELD, SURF_GRASS], 1.0)
+			_scatter_on(["railfence"], 4, [SURF_GRASS, SURF_DIRT, SURF_FIELD], 1.0)
+			_scatter_on(["cow", "scare"], 2, [SURF_GRASS, SURF_FIELD], 1.0)
 			_scatter_on(["redbarn"], 2, [SURF_DIRT, SURF_GRASS], 1.0)
 	_scatter_detail(layout)
 
@@ -4144,6 +4626,13 @@ func _scatter_on(ids: Array, count: int, surfs: Array, grow: float, tint: Color 
 	var made := 0
 	var tries := 0
 	var limit := count * 28
+	var used := {}
+	var last := ""
+	var run := 0
+	var cap := maxi(int(ceil(float(count) * 0.12)), 1)
+	var order: Array = ids.duplicate()
+	order.shuffle()
+	var cursor := 0
 	while made < count and tries < limit and props.size() < PROP_CAP:
 		tries += 1
 		var span := CITY_HALF - 1.2
@@ -4152,9 +4641,27 @@ func _scatter_on(ids: Array, count: int, surfs: Array, grow: float, tint: Color 
 			continue
 		if _layout_blocked(p):
 			continue
-		var id := str(ids[randi() % ids.size()])
+		var id := ""
+		var guard := 0
+		while guard < order.size():
+			var pick := str(order[cursor % order.size()])
+			cursor += 1
+			guard += 1
+			if _is_rare_treat(pick):
+				continue
+			if int(used.get(pick, 0)) >= cap:
+				continue
+			if pick == last and run >= 2 and order.size() > 1:
+				continue
+			id = pick
+			break
+		if id == "":
+			break
 		var yaw := randf() * TAU
-		if _place_id(id, p, Vector3.ZERO, yaw, grow, tint, points):
+		if _place_id(id, p, Vector3.ZERO, yaw, grow * randf_range(0.92, 1.08), tint, points):
+			used[id] = int(used.get(id, 0)) + 1
+			run = run + 1 if id == last else 1
+			last = id
 			made += 1
 
 func _grid_ids(ids: Array, step: int, surfs: Array, cap: int, grow: float, with_mail: bool) -> void:
@@ -4355,38 +4862,43 @@ func _dress_opening(layout: String) -> void:
 	var land := [SURF_DIRT, SURF_GRASS, SURF_FIELD]
 	match layout:
 		"jungle":
-			_vista_mover("tyrant", Vector3(-4.0, 0, -12.5), land, 1.35)
-			_vista_mover("brachio", Vector3(2.4, 0, -12.8), land, 0.85)
-			_vista_spot("lavacone", Vector3(4.6, 0, -12.2), 0.4)
-			_vista_mover("trike", Vector3(-2.6, 0, -8.6), land, 0.35)
-			_vista_mover("raptord", Vector3(2.4, 0, -7.4), land, 1.55)
-			_vista_mover("raptord", Vector3(-3.2, 0, -6.6), land, 0.5)
-			_vista_spot("dinonest", Vector3(-1.8, 0, -4.2), 0.4)
-			_vista_spot("spottedegg", Vector3(1.6, 0, -3.2))
-			_vista_spot("spottedegg", Vector3(2.3, 0, -3.8))
-			_vista_spot("dinobone", Vector3(3.0, 0, -5.4), 0.7)
-			_vista_spot("dinobone", Vector3(-0.8, 0, -6.2), 1.1)
-			_vista_spot("fernleaf", Vector3(-3.6, 0, -7.6))
-			_vista_spot("fernleaf", Vector3(0.8, 0, -8.2))
-			_vista_spot("fernleaf", Vector3(3.4, 0, -4.6))
-			_vista_spot("jvine", Vector3(-4.2, 0, -5.2))
-			_vista_spot("jvine", Vector3(4.0, 0, -6.4))
+			_vista_mover("tyrant", Vector3(-4.4, 0, -12.6), land, 1.2)
+			_vista_spot("lavacone", Vector3(4.7, 0, -12.5), 0.35)
+			_vista_mover("brachio", Vector3(2.6, 0, -14.4), land, 0.7)
+			_vista_mover("trike", Vector3(1.4, 0, -8.8), land, 0.4)
+			_vista_mover("raptord", Vector3(3.3, 0, -8.5), land, 1.4)
+			_vista_mover("raptord", Vector3(-3.5, 0, -8.3), land, 0.5)
+			_vista_spot("miniraptor", Vector3(1.7, 0, -2.8), 0.8)
+			_vista_spot("miniraptor", Vector3(-2.0, 0, -3.1), 1.4)
+			_vista_spot("miniraptor", Vector3(2.4, 0, 2.2), 0.3)
+			_vista_spot("dinonest", Vector3(-2.3, 0, -4.0), 0.4)
+			_vista_spot("spottedegg", Vector3(1.5, 0, -2.5))
+			_vista_spot("spottedegg", Vector3(-1.4, 0, 2.6))
+			_vista_spot("dinobone", Vector3(3.2, 0, -5.2), 0.6)
+			_vista_spot("fernleaf", Vector3(-3.8, 0, -5.4))
+			_vista_spot("fernleaf", Vector3(0.6, 0, -6.4))
+			_vista_spot("fernleaf", Vector3(3.6, 0, -3.6))
+			_vista_spot("fernleaf", Vector3(-1.2, 0, -7.2))
+			_vista_spot("fflower", Vector3(2.8, 0, -2.4))
+			_vista_spot("fflower", Vector3(-3.0, 0, -2.6))
+			_vista_spot("blossom", Vector3(0.9, 0, 3.2))
+			_vista_spot("jvine", Vector3(-4.4, 0, -6.6))
+			_vista_spot("jpalm", Vector3(4.8, 0, -9.6))
 		"space":
-			var pad := [SURF_SAND, SURF_CONCRETE, SURF_DIRT]
-			_vista_spot("stackrocket", Vector3(4.0, 0, -12.4), 0.15)
-			_vista_spot("habitat", Vector3(-4.2, 0, -12.4), 0.4)
-			_vista_spot("antenna", Vector3(2.2, 0, -12.8), 0.2)
-			_vista_mover("astro", Vector3(-2.6, 0, -7.6), pad, 2.6)
-			_vista_spot("solarpanel", Vector3(3.2, 0, -7.8), 0.5)
-			_vista_spot("solarpanel", Vector3(-3.4, 0, -8.2), 1.1)
-			_vista_spot("satdish", Vector3(-2.2, 0, -12.6), 0.7)
-			_vista_spot("satprobe", Vector3(1.6, 0, -3.6), 0.5)
-			_vista_spot("satprobe", Vector3(-1.6, 0, -4.2), 1.2)
-			_vista_mover("spacerover", Vector3(4.4, 0, -12.2), pad, 0.6)
+			var pad := [SURF_SAND, SURF_CONCRETE, SURF_DIRT, SURF_ROAD]
+			_vista_spot("stackrocket", Vector3(-4.7, 0, -12.5), 0.2)
+			_vista_spot("habitat", Vector3(4.6, 0, -12.6), 0.5)
+			_vista_mover("astro", Vector3(2.6, 0, -8.4), pad, 2.4)
+			_vista_mover("spacerover", Vector3(-3.2, 0, -8.8), pad, 0.8)
+			_vista_spot("solarpanel", Vector3(3.6, 0, -5.2), 0.4)
+			_vista_spot("solarpanel", Vector3(-3.8, 0, -4.6), 1.0)
+			_vista_spot("satdish", Vector3(2.8, 0, -13.5), 0.6)
+			_vista_spot("antenna", Vector3(-2.6, 0, -13.6), 0.3)
+			_vista_spot("satprobe", Vector3(1.6, 0, -2.6), 0.4)
 		"pirate":
 			_vista_spot("pier", Vector3(0.2, 0, 6.2), 0.0)
-			_vista_spot("pier", Vector3(-3.5, 0, 7.0), 1.57)
-			_vista_spot("pier", Vector3(3.5, 0, 7.0), 1.57)
+			_vista_spot("pier", Vector3(-4.6, 0, 1.2), 1.57)
+			_vista_spot("pier", Vector3(4.4, 0, -1.5), 1.57)
 			_vista_spot("pier", Vector3(-1.2, 0, -8.0), 0.2)
 			_place_id("skiff", Vector3(2.2, 0, 8.6), Vector3.ZERO, 0.3, 1.0, Color.WHITE, -1, 0, [SURF_WATER])
 			_vista_spot("pflag", Vector3(3.6, 0, -1.4))
@@ -4501,6 +5013,8 @@ func _dress_vista(layout: String) -> void:
 			_dress_farm_vista()
 
 func _coat_for(id: String) -> Color:
+	if id.find("gold") >= 0:
+		return Color(1.08, 0.9, 0.42)
 	match id:
 		"piglet":
 			return Color(1.02, 0.96, 0.98)
@@ -4509,7 +5023,7 @@ func _coat_for(id: String) -> Color:
 		"cow":
 			return Color(1.02, 1.0, 0.98)
 		"chicken":
-			return Color(1.06, 1.04, 0.98)
+			return Color(1.05, 0.94, 0.72)
 		"farmtractor":
 			return Color(0.9, 1.06, 0.88)
 		"redbarn":
@@ -4522,6 +5036,44 @@ func _coat_for(id: String) -> Color:
 			return Color(1.04, 1.03, 1.0)
 		"roundtree":
 			return Color(0.92, 1.04, 0.9)
+		"applegreen":
+			return Color(0.62, 1.02, 0.48)
+		"floweryel":
+			return Color(1.05, 0.92, 0.35)
+		"flowerwht":
+			return Color(0.98, 0.98, 0.94)
+		"lollyblue":
+			return Color(0.45, 0.7, 1.05)
+		"donutchoc":
+			return Color(0.62, 0.42, 0.28)
+		"eggblue":
+			return Color(0.7, 0.86, 1.02)
+		"rockred":
+			return Color(0.85, 0.4, 0.32)
+		"blockred":
+			return Color(0.9, 0.28, 0.26)
+		"ballblue":
+			return Color(0.32, 0.5, 1.0)
+		"balloonyel":
+			return Color(1.05, 0.88, 0.28)
+		"iceblue":
+			return Color(0.7, 0.86, 1.02)
+		"canegreen":
+			return Color(0.4, 0.85, 0.42)
+		"breadpink":
+			return Color(1.02, 0.62, 0.72)
+		"bearblue":
+			return Color(0.4, 0.55, 0.95)
+		"meteorhot":
+			return Color(1.02, 0.5, 0.22)
+		"probeamber":
+			return Color(1.02, 0.68, 0.28)
+		"cactusflower":
+			return Color(0.35, 0.8, 0.38)
+		"fernwide":
+			return Color(0.55, 1.0, 0.5)
+		"snowtiny":
+			return Color(0.9, 0.95, 1.0)
 		"animal":
 			return Color(1.02, 0.96, 0.98)
 		_:
@@ -4735,7 +5287,8 @@ func _cluster(ids: Array, count: int, center: Vector3, radius: float, surfs: Arr
 		var p := center + Vector3(cos(ang) * rad, 0.0, sin(ang) * rad)
 		if not _surf_ok(p, surfs) or _layout_blocked(p):
 			continue
-		if _place_id(str(ids[randi() % ids.size()]), p, Vector3.ZERO, randf() * TAU):
+		var pick := str(ids[made % ids.size()])
+		if _place_id(pick, p, Vector3.ZERO, randf() * TAU, randf_range(0.92, 1.08)):
 			made += 1
 
 func _overlap_foot(ki: int, sxz: float) -> float:
@@ -4748,6 +5301,60 @@ func _overlap_foot(ki: int, sxz: float) -> float:
 func _visual_half(ki: int) -> float:
 	var native: Vector3 = kind_native[ki]
 	return maxf(native.x, native.z) * 0.5
+
+func _clone_kind(src: String, id: String, role: String, points: int, scale: float) -> void:
+	if not kind_by_id.has(src) or kind_by_id.has(id):
+		return
+	var ki := int(kind_by_id[src])
+	var spec: Array = (prop_defs[ki] as Array).duplicate()
+	spec[2] = scale
+	spec[3] = scale
+	spec[4] = points
+	spec[5] = role
+	prop_defs.append(spec)
+	kind_lists.append(_empty_slots())
+	kind_meshes.append(kind_meshes[ki])
+	kind_native.append(kind_native[ki])
+	kind_base.append(kind_base[ki])
+	kind_mats.append(kind_mats[ki])
+	kind_multimeshes.append(null)
+	kind_by_id[id] = prop_defs.size() - 1
+
+func _clone_small_variants() -> void:
+	var rows := [
+		["fapple", "applegold", "small", 28, 1.0],
+		["fapple", "applegreen", "small", 3, 0.9],
+		["fflower", "floweryel", "small", 2, 0.85],
+		["fflower", "flowerwht", "small", 2, 1.05],
+		["fwheat", "wheatgold", "small", 3, 1.1],
+		["lollypop", "lollyblue", "small", 4, 0.9],
+		["lollypop", "lollygold", "small", 30, 1.15],
+		["donut", "donutchoc", "small", 4, 0.95],
+		["spottedegg", "eggblue", "small", 3, 0.9],
+		["spottedegg", "egggold", "small", 32, 1.2],
+		["fernleaf", "fernwide", "palm", 3, 1.25],
+		["redshroom", "shroomgold", "small", 26, 1.15],
+		["drock", "rockred", "small", 2, 1.1],
+		["drock", "rockgold", "small", 28, 1.3],
+		["tblock", "blockred", "small", 3, 1.05],
+		["tblock", "blockgold", "small", 30, 1.2],
+		["tball", "ballblue", "small", 2, 0.85],
+		["fballoon", "balloonyel", "small", 3, 1.1],
+		["hpresent", "giftgold", "small", 34, 1.25],
+		["hpumpkin", "pumpkingold", "small", 36, 1.2],
+		["pchest", "chestgold", "small", 40, 1.15],
+		["moonlet", "meteorhot", "small", 8, 1.2],
+		["satprobe", "probeamber", "small", 6, 0.9],
+		["canecandy", "canegreen", "small", 4, 0.85],
+		["gbread", "breadpink", "small", 5, 0.9],
+		["iceblock", "iceblue", "small", 4, 0.8],
+		["hsnowman", "snowtiny", "small", 6, 0.55],
+		["dcactus", "cactusflower", "palm", 4, 0.8],
+		["teddybear", "bearblue", "small", 8, 0.7],
+		["fteacup", "cupgold", "small", 24, 1.15],
+	]
+	for row in rows:
+		_clone_kind(str(row[0]), str(row[1]), str(row[2]), int(row[3]), float(row[4]))
 
 func _normalize_footprints() -> void:
 	# Swallow size tracks the mesh the player sees. A crown wider than `base`
@@ -4909,9 +5516,10 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 		sy *= cut
 		base = BASE_CAP
 	var yaw_off := float(spec[7])
+	var face := _face_offset(kind_id_of(ki))
 	var yaw := yaw_in
 	if dir.length_squared() > 0.001:
-		yaw = atan2(dir.x, dir.z) + yaw_off
+		yaw = atan2(dir.x, dir.z) + face + yaw_off
 	var scale := Vector3(sxz, sy, sxz)
 	var basis := Basis(Vector3.UP, yaw).scaled(scale)
 	var xform := Transform3D(basis, p)
@@ -4958,6 +5566,12 @@ func _add_prop(ki: int, p: Vector3, dir: Vector3, yaw_in: float, spec: Array) ->
 		"dir": dir,
 		"speed": spd,
 		"vel": dir * spd,
+		"face": face,
+		"route": -1,
+		"prog": 0.0,
+		"lane": 0.7,
+		"wait": 0.0,
+		"waited": false,
 		"xform": xform,
 		"in_mesh": true,
 		"in_body": false,
@@ -5379,6 +5993,23 @@ func _build_ui() -> void:
 	_style(combo_lbl, 44)
 	combo_lbl.modulate = Color(1, 0.86, 0.2)
 	ui.add_child(combo_lbl)
+	mile_pill = Panel.new()
+	mile_pill.position = Vector2(170, 186)
+	mile_pill.size = Vector2(380, 52)
+	mile_pill.visible = false
+	mile_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mile_pill.add_theme_stylebox_override("panel", _ink_pill())
+	ui.add_child(mile_pill)
+	mile_lbl = Label.new()
+	mile_lbl.position = Vector2(170, 186)
+	mile_lbl.size = Vector2(380, 52)
+	mile_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mile_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	mile_lbl.visible = false
+	mile_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_style_hud(mile_lbl, 32)
+	mile_lbl.modulate = Color(1.0, 0.95, 0.72)
+	ui.add_child(mile_lbl)
 	kept_lbl = Label.new()
 	kept_lbl.anchor_left = 0.5
 	kept_lbl.anchor_right = 0.5
@@ -5526,6 +6157,19 @@ func _build_ui() -> void:
 	guide_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	guide_ui.draw.connect(_draw_guide)
 	ui.add_child(guide_ui)
+	drag_pill = Panel.new()
+	drag_pill.anchor_left = 0.5
+	drag_pill.anchor_right = 0.5
+	drag_pill.anchor_top = 0.5
+	drag_pill.anchor_bottom = 0.5
+	drag_pill.offset_left = -280
+	drag_pill.offset_right = 280
+	drag_pill.offset_top = 168
+	drag_pill.offset_bottom = 262
+	drag_pill.visible = false
+	drag_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	drag_pill.add_theme_stylebox_override("panel", _ink_pill())
+	ui.add_child(drag_pill)
 	drag_hint = Label.new()
 	drag_hint.text = "Drag to move"
 	drag_hint.anchor_left = 0.5
@@ -5539,7 +6183,7 @@ func _build_ui() -> void:
 	drag_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	drag_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	drag_hint.visible = false
-	_style(drag_hint, 72)
+	_style_hud(drag_hint, 72)
 	ui.add_child(drag_hint)
 	_refresh_hud()
 	_build_unlock_popup()
@@ -6120,6 +6764,8 @@ func _sync_level() -> void:
 		level = n
 		size_banner_t = 1.15
 		kept_pulse = false
+		if playing:
+			_toast("Size %d!" % (level + 1))
 		_sfx("fanfare", 1.0, false)
 		if size_lbl:
 			size_lbl.text = "Size %d" % (level + 1)
@@ -6215,7 +6861,7 @@ func _refresh_hud() -> void:
 	_refresh_next_skin()
 	if combo_lbl:
 		combo_lbl.visible = combo >= 2 and combo_left > 0.0
-		combo_lbl.text = "Combo x%d" % combo
+		combo_lbl.text = "Combo x%.1f" % _combo_mult()
 	shown_score = score
 	shown_level = level
 
@@ -6297,6 +6943,15 @@ func _tick_feedback(delta: float) -> void:
 		combo_left = maxf(0.0, combo_left - delta)
 		if combo_left <= 0.0 and combo_lbl:
 			combo_lbl.visible = false
+	if mile_t > 0.0:
+		mile_t = maxf(0.0, mile_t - delta)
+		var mile_a := 1.0 if mile_t > 0.4 else clampf(mile_t / 0.4, 0.0, 1.0)
+		if mile_lbl:
+			mile_lbl.modulate.a = mile_a
+			mile_lbl.visible = mile_t > 0.02 and match_hud
+		if mile_pill:
+			mile_pill.modulate.a = mile_a
+			mile_pill.visible = mile_t > 0.02 and match_hud
 	if size_badge:
 		if size_banner_t > 0.0 and match_hud:
 			size_banner_t = maxf(0.0, size_banner_t - delta)
@@ -7190,8 +7845,114 @@ func _mover_blocked(p: Vector3, self_uid: int) -> bool:
 			return true
 	return false
 
+func _face_offset(id: String) -> float:
+	# Toy cars are modeled with the nose on -Z. Everything else we drive faces +Z.
+	if id in ["tracer", "ttruck"]:
+		return PI
+	return 0.0
+
+func _nose_of(yaw: float, face: float) -> Vector3:
+	var local := Vector3(0.0, 0.0, -1.0 if absf(face) > 0.5 else 1.0)
+	return Basis(Vector3.UP, yaw) * local
+
+func _turn_toward(yaw: float, target: float, delta: float) -> float:
+	var diff := wrapf(target - yaw, -PI, PI)
+	var step := 3.4 * delta
+	if absf(diff) <= step:
+		return target
+	return yaw + signf(diff) * step
+
+func _sidewalk_surfs(surfs: Array) -> Array:
+	var out: Array = surfs.duplicate()
+	for s in [SURF_GRASS, SURF_SAND, SURF_DIRT, SURF_CONCRETE, SURF_WOOD, SURF_FIELD, SURF_DOCK]:
+		if not out.has(s):
+			out.append(s)
+	return out
+
+func _spawn_on_roads(ids: Array, count: int) -> void:
+	var made := 0
+	var guard := 0
+	while made < count and guard < count * 8 and props.size() < PROP_CAP:
+		guard += 1
+		var ri := made % road_routes.size()
+		var route: Dictionary = road_routes[ri]
+		var length := float(route.len)
+		var dist := randf() * length
+		var sample := _sample_route(route, dist)
+		var pos: Vector3 = sample.pos
+		var dir: Vector3 = sample.dir
+		if made % 2 == 1:
+			dir = -dir
+			dist = length - dist
+		var lane := 0.62 if made % 2 == 0 else -0.62
+		var side := Vector3(-dir.z, 0.0, dir.x)
+		pos += side * lane
+		var id := str(ids[made % ids.size()])
+		if _place_id(id, pos, dir, -1.0, 1.0, Color.WHITE, -1, 2, [SURF_ROAD, SURF_WOOD, SURF_CONCRETE, SURF_DIRT, SURF_GRASS, SURF_SAND, SURF_FIELD]):
+			var o: Dictionary = props[props.size() - 1]
+			o["route"] = ri
+			o["prog"] = dist
+			o["lane"] = lane
+			o["walk"] = [SURF_ROAD]
+			made += 1
+
+func _sample_route(route: Dictionary, dist: float) -> Dictionary:
+	var pts: PackedVector3Array = route.pts
+	var cum: PackedFloat32Array = route.cum
+	var length := float(route.len)
+	var closed := bool(route.closed)
+	if pts.size() < 2:
+		return {"pos": Vector3.ZERO, "dir": Vector3(0, 0, 1)}
+	var d := dist
+	if closed:
+		d = fposmod(dist, length)
+	else:
+		d = clampf(dist, 0.0, length)
+	var i := 1
+	while i < cum.size() - 1 and cum[i] < d:
+		i += 1
+	var a: Vector3 = pts[i - 1]
+	var b: Vector3 = pts[i]
+	var span := maxf(cum[i] - cum[i - 1], 0.001)
+	var t := clampf((d - cum[i - 1]) / span, 0.0, 1.0)
+	var pos := a.lerp(b, t)
+	var dir := b - a
+	if dir.length_squared() < 0.0001:
+		dir = Vector3(0, 0, 1)
+	return {"pos": pos, "dir": dir.normalized()}
+
+func _route_slow(route: Dictionary, dist: float) -> float:
+	var stops: PackedFloat32Array = route.stops
+	var length := float(route.len)
+	var best := 99.0
+	for s in stops:
+		var gap := absf(float(s) - dist)
+		if bool(route.closed):
+			gap = minf(gap, length - gap)
+		best = minf(best, gap)
+	if best < 1.1:
+		return 0.15
+	if best < 3.2:
+		return 0.4
+	return 1.0
+
+func _car_ahead(o: Dictionary, dir: Vector3) -> bool:
+	var pos: Vector3 = o.pos
+	for other in movers:
+		if other == o or int(other.mover) != 2 or not bool(other.alive):
+			continue
+		var delta: Vector3 = other.pos - pos
+		delta.y = 0.0
+		var dist := delta.length()
+		if dist < 2.5 and dist > 0.05 and delta.dot(dir) > 0.35:
+			return true
+	return false
+
 func _advance_mover(o: Dictionary, delta: float) -> void:
 	var mover := int(o.mover)
+	if mover == 2 and int(o.get("route", -1)) >= 0:
+		_advance_car(o, delta)
+		return
 	var dir: Vector3 = o.dir
 	if dir.length_squared() < 0.0001:
 		dir = Vector3(0.0, 0.0, 1.0)
@@ -7199,23 +7960,25 @@ func _advance_mover(o: Dictionary, delta: float) -> void:
 	dir = dir.normalized()
 	var walk: Array = o.get("walk", [])
 	var spd := float(o.speed)
-	if mover == 1 and randf() < delta * 0.4:
-		dir = dir.rotated(Vector3.UP, randf_range(-1.1, 1.1))
+	if mover == 1 and randf() < delta * 0.35:
+		dir = dir.rotated(Vector3.UP, randf_range(-0.7, 0.7))
+	if mover == 1 and _surf_f(o.pos.x, o.pos.z) == SURF_ROAD:
+		dir = dir.rotated(Vector3.UP, 1.2)
 	var step := maxf(spd * delta, 0.04)
 	var ahead: Vector3 = (o.pos as Vector3) + dir * (step + 0.35)
-	if not _walk_ok(ahead, walk) or _mover_blocked(ahead, int(o.uid)):
+	if not _walk_ok(ahead, walk) or _mover_blocked(ahead, int(o.uid)) or _surf_f(ahead.x, ahead.z) == SURF_ROAD:
 		var turned := false
-		for ang in [1.15, -1.15, 2.15, -2.15, PI]:
+		for ang in [0.8, -0.8, 1.6, -1.6, PI]:
 			var nd := dir.rotated(Vector3.UP, ang)
 			var np: Vector3 = (o.pos as Vector3) + nd * 0.55
-			if _walk_ok(np, walk) and not _mover_blocked(np, int(o.uid)):
+			if _walk_ok(np, walk) and not _mover_blocked(np, int(o.uid)) and _surf_f(np.x, np.z) != SURF_ROAD:
 				dir = nd
 				turned = true
 				break
 		if not turned:
 			dir = -dir
 			o.dir = dir
-			o.yaw = atan2(dir.x, dir.z)
+			o.vel = dir * spd
 			return
 	var p: Vector3 = (o.pos as Vector3) + dir * spd * delta
 	if mover == 1 and int(o.chunk) < STATIC_CHUNKS:
@@ -7228,8 +7991,46 @@ func _advance_mover(o: Dictionary, delta: float) -> void:
 		p = o.pos
 	o.dir = dir
 	o.pos = p
-	o.yaw = atan2(dir.x, dir.z)
 	o.vel = dir * spd
+
+func _advance_car(o: Dictionary, delta: float) -> void:
+	var ri := int(o.route)
+	if ri < 0 or ri >= road_routes.size():
+		return
+	var route: Dictionary = road_routes[ri]
+	var length := float(route.len)
+	var closed := bool(route.closed)
+	var spd := float(o.speed) * _route_slow(route, float(o.prog))
+	var dir: Vector3 = o.dir
+	if _car_ahead(o, dir):
+		spd = 0.0
+		o.wait = maxf(float(o.wait), 0.15)
+	if float(o.wait) > 0.0:
+		o.wait = maxf(0.0, float(o.wait) - delta)
+		spd = 0.0
+	elif _route_slow(route, float(o.prog)) < 0.2 and not bool(o.waited):
+		o.wait = 0.35
+		o.waited = true
+		spd = 0.0
+	if _route_slow(route, float(o.prog)) > 0.5:
+		o.waited = false
+	var signed := spd * delta
+	if float(o.lane) < 0.0 and not closed:
+		signed = -signed
+	var prog := float(o.prog) + signed
+	if not closed and (prog >= length - 0.2 or prog <= 0.2):
+		o.lane = -float(o.lane)
+		prog = clampf(prog, 0.25, length - 0.25)
+	var sample := _sample_route(route, prog)
+	dir = sample.dir
+	if float(o.lane) < 0.0 and not closed:
+		dir = -dir
+	var side := Vector3(-dir.z, 0.0, dir.x)
+	var pos: Vector3 = sample.pos + side * absf(float(o.lane))
+	o.prog = fposmod(prog, length) if closed else clampf(prog, 0.0, length)
+	o.dir = dir
+	o.pos = pos
+	o.vel = dir * maxf(spd, 0.0)
 
 func _tick_movers(delta: float) -> void:
 	if latency_probe:
@@ -7254,6 +8055,12 @@ func _tick_movers(delta: float) -> void:
 					spin_mm.set_instance_transform(int(o.index), spin_xf)
 			continue
 		_advance_mover(o, delta)
+		var face := float(o.get("face", 0.0))
+		var travel: Vector3 = o.dir
+		if travel.length_squared() < 0.0001:
+			travel = Vector3(0.0, 0.0, 1.0)
+		var target := atan2(travel.x, travel.z) + face
+		o.yaw = _turn_toward(float(o.yaw), target, delta)
 		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
 		var xform := Transform3D(basis, o.pos)
 		o.xform = xform
@@ -7263,6 +8070,51 @@ func _tick_movers(delta: float) -> void:
 				mm.set_instance_transform(int(o.index), xform)
 			_set_shadow(o)
 		_bucket_move(o)
+	_tick_treats()
+
+func _combo_mult() -> float:
+	return 1.0 + 0.2 * float(mini(maxi(combo - 1, 0), 6))
+
+func _toast(text: String) -> void:
+	if mile_lbl == null or not match_hud:
+		return
+	mile_lbl.text = text
+	mile_lbl.visible = true
+	mile_t = 1.8
+	if mile_pill:
+		mile_pill.visible = true
+		mile_pill.modulate.a = 1.0
+	mile_lbl.modulate.a = 1.0
+
+func _note_clear_mark() -> void:
+	if not playing:
+		return
+	var ratio := _clear_ratio()
+	var mark := 0
+	if ratio >= 0.75:
+		mark = 75
+	elif ratio >= 0.5:
+		mark = 50
+	elif ratio >= 0.25:
+		mark = 25
+	if mark > clear_mark:
+		clear_mark = mark
+		_toast("%d%% cleared!" % mark)
+
+func _tick_treats() -> void:
+	if treats.is_empty():
+		return
+	var t := float(Time.get_ticks_msec()) / 1000.0
+	for o in treats:
+		if not bool(o.get("alive", false)) or not bool(o.get("in_mesh", false)):
+			continue
+		var mm := _mm_of(o)
+		if mm == null:
+			continue
+		var pulse := 0.5 + 0.5 * sin(t * 5.2 + float(o.get("phase", 0.0)))
+		var base: Color = o.color
+		var hot := base.lerp(Color(1.0, 0.96, 0.55), 0.25 + pulse * 0.55)
+		mm.set_instance_color(int(o.index), hot)
 
 func _update_debug(delta: float) -> void:
 	var frame_ms := delta * 1000.0
@@ -7779,6 +8631,7 @@ func _swallow_done(o: Dictionary) -> void:
 		at = b.global_position
 	if playing and bool(o.alive):
 		clear_eaten += 1
+		_note_clear_mark()
 		var sink := int(o.get("sink", -1))
 		if sink >= 0 and sink < rivals.size() and bool(rivals[sink].alive):
 			_credit_rival(rivals[sink], 1)
@@ -7789,7 +8642,7 @@ func _swallow_done(o: Dictionary) -> void:
 			else:
 				combo = 1
 			combo_left = COMBO_WINDOW
-			var gained := int(o.points) + maxi(combo - 1, 0)
+			var gained := int(round(float(int(o.points)) * _combo_mult()))
 			score += gained
 			player_eaten += 1
 			_sync_level()
@@ -8010,6 +8863,8 @@ func start_round(index: int) -> void:
 	level = 0
 	combo = 0
 	combo_left = 0.0
+	clear_mark = 0
+	mile_t = 0.0
 	size_banner_t = 0.0
 	hole_radius = _start_radius()
 	shown_radius = hole_radius
@@ -8402,6 +9257,9 @@ func _arm_drag_hint() -> void:
 		drag_hint.visible = true
 		drag_hint.modulate.a = 1.0
 		drag_hint_t = 0.0
+		if drag_pill:
+			drag_pill.visible = true
+			drag_pill.modulate.a = 1.0
 	else:
 		_hide_drag_hint()
 
@@ -8409,6 +9267,8 @@ func _hide_drag_hint() -> void:
 	drag_hint_t = -1.0
 	if drag_hint:
 		drag_hint.visible = false
+	if drag_pill:
+		drag_pill.visible = false
 
 func _tick_drag_hint(delta: float) -> void:
 	if drag_hint == null or drag_hint_t < 0.0:
@@ -8424,6 +9284,9 @@ func _tick_drag_hint(delta: float) -> void:
 		drag_hint.modulate.a = clampf(1.0 - (drag_hint_t - 3.0) / 1.1, 0.0, 1.0)
 	else:
 		_hide_drag_hint()
+		return
+	if drag_pill:
+		drag_pill.modulate.a = drag_hint.modulate.a
 
 func _configure_result_actions() -> void:
 	var nxt := map_index + 1
@@ -8816,6 +9679,10 @@ func _set_match_hud(on: bool) -> void:
 		goal_until_ms = 0
 		if combo_lbl:
 			combo_lbl.visible = false
+		if mile_lbl:
+			mile_lbl.visible = false
+		if mile_pill:
+			mile_pill.visible = false
 		if kept_lbl:
 			kept_lbl.visible = false
 		if name_lbl:
@@ -8834,6 +9701,8 @@ func _set_chrome(on: bool) -> void:
 		chrome_layer.visible = on
 	if hint_lbl:
 		hint_lbl.visible = on and Save.rounds == 0
+	if hint_pill:
+		hint_pill.visible = on and Save.rounds == 0
 	if on:
 		_refresh_level_pill()
 		_refresh_currency()
@@ -8871,6 +9740,17 @@ func _build_chrome() -> void:
 	star_pill.offset_right = -SAFE_SIDE
 	star_pill.offset_bottom = SAFE_TOP + 64
 	chrome_layer.add_child(star_pill)
+	var logo_pill := Panel.new()
+	logo_pill.anchor_left = 0.5
+	logo_pill.anchor_right = 0.5
+	logo_pill.anchor_top = 0.0
+	logo_pill.offset_left = -250
+	logo_pill.offset_right = 250
+	logo_pill.offset_top = SAFE_TOP + 84
+	logo_pill.offset_bottom = SAFE_TOP + 172
+	logo_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	logo_pill.add_theme_stylebox_override("panel", _ink_pill())
+	chrome_layer.add_child(logo_pill)
 	logo_lbl = Label.new()
 	logo_lbl.text = "Hole Arcade"
 	logo_lbl.anchor_left = 0.5
@@ -8926,6 +9806,19 @@ func _build_chrome() -> void:
 	daily_btn.offset_bottom = SAFE_TOP + 460
 	daily_btn.pressed.connect(_show_screen.bind("daily"))
 	chrome_layer.add_child(daily_btn)
+	hint_pill = Panel.new()
+	hint_pill.anchor_left = 0.5
+	hint_pill.anchor_right = 0.5
+	hint_pill.anchor_top = 1.0
+	hint_pill.anchor_bottom = 1.0
+	hint_pill.offset_left = -310
+	hint_pill.offset_right = 310
+	hint_pill.offset_top = -(SAFE_BOTTOM + 276)
+	hint_pill.offset_bottom = -(SAFE_BOTTOM + 164)
+	hint_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hint_pill.visible = Save.rounds == 0
+	hint_pill.add_theme_stylebox_override("panel", _ink_pill())
+	chrome_layer.add_child(hint_pill)
 	hint_lbl = Label.new()
 	hint_lbl.text = "Drag to move. Eat small things first, then grow."
 	hint_lbl.anchor_left = 0.5
@@ -8937,9 +9830,10 @@ func _build_chrome() -> void:
 	hint_lbl.offset_top = -(SAFE_BOTTOM + 268)
 	hint_lbl.offset_bottom = -(SAFE_BOTTOM + 168)
 	hint_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint_lbl.visible = Save.rounds == 0
-	_style(hint_lbl, 32)
+	_style_hud(hint_lbl, 32)
 	chrome_layer.add_child(hint_lbl)
 	hand_icon = UiGlyph.new()
 	hand_icon.glyph = "hand"
@@ -9093,6 +9987,18 @@ func _panel_style() -> StyleBoxFlat:
 	s.content_margin_right = 18
 	s.content_margin_top = 16
 	s.content_margin_bottom = 16
+	return s
+
+func _ink_pill() -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.08, 0.1, 0.16, 0.82)
+	s.corner_radius_top_left = 22
+	s.corner_radius_top_right = 22
+	s.corner_radius_bottom_right = 22
+	s.corner_radius_bottom_left = 22
+	s.shadow_color = Color(0, 0, 0, 0.28)
+	s.shadow_size = 6
+	s.shadow_offset = Vector2(0, 2)
 	return s
 
 func _pill_style() -> StyleBoxFlat:
@@ -9755,9 +10661,17 @@ func _level_card(index: int, m: Dictionary) -> Control:
 	color.v = clampf(color.v, 0.72, 0.92)
 	if not open:
 		color = Color(0.45, 0.5, 0.58)
+	var luma := color.r * 0.299 + color.g * 0.587 + color.b * 0.114
+	var ink := BRAND_INK if luma >= 0.62 else Color.WHITE
+	var edge := Color(1, 1, 1, 0.72) if luma >= 0.62 else Color(0.05, 0.08, 0.14, 0.92)
 	var card := _make_button("%d    %s" % [index + 1, str(m.name)], Vector2.ZERO, Vector2(640, 92), color, 32)
 	card.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	card.add_theme_color_override("font_color", ink)
+	card.add_theme_color_override("font_hover_color", ink)
+	card.add_theme_color_override("font_pressed_color", ink)
+	card.add_theme_color_override("font_outline_color", edge)
+	card.add_theme_constant_override("outline_size", 5)
 	var lock: UiGlyph = null
 	if not open:
 		lock = UiGlyph.new()
@@ -9773,8 +10687,9 @@ func _level_card(index: int, m: Dictionary) -> Control:
 	sub.size = Vector2(260 if open else 220, 40)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_style(sub, 24)
-	sub.add_theme_color_override("font_color", Color.WHITE)
-	sub.add_theme_constant_override("outline_size", 0)
+	sub.add_theme_color_override("font_color", ink)
+	sub.add_theme_color_override("font_outline_color", edge)
+	sub.add_theme_constant_override("outline_size", 4)
 	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(sub)
 	return card
