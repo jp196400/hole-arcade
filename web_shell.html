@@ -242,8 +242,8 @@ html, body, #canvas {
 }
 
 body {
-	color: white;
-	background-color: black;
+	color: #1c2740;
+	background-color: #1c2740;
 	overflow: hidden;
 	position: fixed;
 	width: 100%;
@@ -253,6 +253,7 @@ body {
 #canvas {
 	display: block;
 	touch-action: none;
+	background-color: #1c2740;
 }
 
 #canvas:focus {
@@ -270,55 +271,76 @@ body {
 	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
 }
 
-#status, #status-splash, #status-progress {
+#status {
 	position: absolute;
 	left: 0;
 	right: 0;
-}
-
-#status, #status-splash {
 	top: 0;
 	bottom: 0;
-}
-
-#status {
-	background-color: #242424;
 	display: flex;
 	flex-direction: column;
 	justify-content: center;
 	align-items: center;
-	visibility: hidden;
-	z-index: 2;
+	background: #f6f1e8;
+	color: #1c2740;
+	z-index: 20;
+	visibility: visible;
 }
 
-#status-splash {
-	max-height: 100%;
-	max-width: 100%;
-	margin: auto;
+#boot {
+	width: min(440px, 86vw);
+	text-align: center;
 }
 
-#status-progress, #status-notice {
-	display: none;
+#boot-kicker {
+	margin: 0 0 8px;
+	font: 700 40px/1.1 "Trebuchet MS", "Segoe UI", sans-serif;
+	letter-spacing: -0.03em;
 }
 
-#status-progress {
-	bottom: 10%;
-	width: 50%;
-	margin: 0 auto;
+#boot-title {
+	margin: 0 0 22px;
+	font: 600 18px/1.3 "Segoe UI", sans-serif;
+	color: #3c4a63;
+}
+
+#boot-track {
+	height: 16px;
+	border-radius: 999px;
+	background: #e3d9cc;
+	overflow: hidden;
+}
+
+#boot-fill {
+	height: 100%;
+	width: 0%;
+	border-radius: inherit;
+	background: #0dbdce;
+}
+
+#boot-fill.indeterminate {
+	width: 36%;
+	animation: boot-slide 1.15s ease-in-out infinite;
+}
+
+@keyframes boot-slide {
+	0% { transform: translateX(-130%); }
+	100% { transform: translateX(320%); }
+}
+
+#boot-pct {
+	margin: 12px 0 0;
+	font: 700 16px/1 "Segoe UI", sans-serif;
+	color: #1c2740;
 }
 
 #status-notice {
-	background-color: #5b3943;
-	border-radius: 0.5rem;
-	border: 1px solid #9b3943;
-	color: #e0e0e0;
-	font-family: 'Noto Sans', 'Droid Sans', Arial, sans-serif;
-	line-height: 1.3;
-	margin: 0 2rem;
-	overflow: hidden;
-	padding: 1rem;
+	display: none;
+	max-width: min(460px, 86vw);
+	margin: 18px 24px 0;
+	font: 500 16px/1.45 "Segoe UI", sans-serif;
+	color: #1c2740;
 	text-align: center;
-	z-index: 1;
 }
 		</style>
 		$GODOT_HEAD_INCLUDE
@@ -334,8 +356,12 @@ body {
 		</noscript>
 
 		<div id="status">
-			<img id="status-splash" src="$GODOT_SPLASH?v=__BUILD_SHA__" alt="">
-			<progress id="status-progress"></progress>
+			<div id="boot">
+				<p id="boot-kicker">Hole Arcade</p>
+				<p id="boot-title">Loading</p>
+				<div id="boot-track"><div id="boot-fill" class="indeterminate"></div></div>
+				<p id="boot-pct">0%</p>
+			</div>
 			<div id="status-notice"></div>
 		</div>
 
@@ -372,49 +398,87 @@ window.__holeSyncFS = function () {
 
 (function () {
 	const statusOverlay = document.getElementById('status');
-	const statusProgress = document.getElementById('status-progress');
+	const bootTitle = document.getElementById('boot-title');
+	const bootTrack = document.getElementById('boot-track');
+	const bootFill = document.getElementById('boot-fill');
+	const bootPct = document.getElementById('boot-pct');
 	const statusNotice = document.getElementById('status-notice');
+	const canvas = document.getElementById('canvas');
 
-	let initializing = true;
-	let statusMode = '';
+	function focusCanvas() {
+		if (!canvas) return;
+		canvas.setAttribute('tabindex', '0');
+		var focus = function () {
+			try { canvas.focus({ preventScroll: true }); } catch (e) { canvas.focus(); }
+		};
+		if (!canvas.__holeFocus) {
+			canvas.__holeFocus = true;
+			canvas.addEventListener('pointerdown', focus, true);
+			canvas.addEventListener('touchstart', focus, true);
+		}
+		focus();
+	}
+	focusCanvas();
 
-	function setStatusMode(mode) {
-		if (statusMode === mode || !initializing) {
-			return;
+	function hasWebGL2() {
+		try {
+			var test = document.createElement('canvas');
+			var gl = test.getContext('webgl2');
+			if (!gl) return false;
+			var lose = gl.getExtension('WEBGL_lose_context');
+			if (lose) lose.loseContext();
+			return true;
+		} catch (err) {
+			return false;
 		}
-		if (mode === 'hidden') {
-			statusOverlay.remove();
-			initializing = false;
-			return;
-		}
-		statusOverlay.style.visibility = 'visible';
-		statusProgress.style.display = mode === 'progress' ? 'block' : 'none';
-		statusNotice.style.display = mode === 'notice' ? 'block' : 'none';
-		statusMode = mode;
 	}
 
-	function setStatusNotice(text) {
-		while (statusNotice.lastChild) {
-			statusNotice.removeChild(statusNotice.lastChild);
+	let initializing = true;
+
+	function setProgress(current, total) {
+		if (!bootFill || !bootPct) return;
+		if (current > 0 && total > 0) {
+			var pct = Math.max(0, Math.min(100, Math.round(100 * current / total)));
+			bootFill.classList.remove('indeterminate');
+			bootFill.style.width = pct + '%';
+			bootPct.textContent = pct + '%';
+		} else {
+			bootFill.classList.add('indeterminate');
+			bootFill.style.width = '';
+			bootPct.textContent = '0%';
 		}
-		const lines = text.split('\n');
-		lines.forEach((line) => {
-			statusNotice.appendChild(document.createTextNode(line));
-			statusNotice.appendChild(document.createElement('br'));
-		});
+	}
+
+	function hideLoader() {
+		if (!initializing) return;
+		initializing = false;
+		statusOverlay.style.visibility = 'hidden';
+		statusOverlay.style.pointerEvents = 'none';
+		focusCanvas();
+	}
+
+	function showFailure(message) {
+		console.error(message);
+		initializing = false;
+		statusOverlay.style.visibility = 'visible';
+		statusOverlay.style.pointerEvents = 'auto';
+		if (bootTitle) bootTitle.textContent = '3D graphics did not start';
+		if (bootTrack) bootTrack.style.display = 'none';
+		if (bootPct) bootPct.textContent = '';
+		statusNotice.style.display = 'block';
+		statusNotice.textContent = message;
 	}
 
 	function displayFailureNotice(err) {
-		console.error(err);
-		if (err instanceof Error) {
-			setStatusNotice(err.message);
-		} else if (typeof err === 'string') {
-			setStatusNotice(err);
-		} else {
-			setStatusNotice('An unknown error occured');
-		}
-		setStatusMode('notice');
-		initializing = false;
+		var detail = 'Something went wrong while starting the game.';
+		if (err instanceof Error && err.message) detail = err.message;
+		else if (typeof err === 'string' && err) detail = err;
+		showFailure('Hole Arcade could not start 3D graphics. ' + detail);
+	}
+
+	if (!hasWebGL2()) {
+		showFailure('Hole Arcade needs WebGL 2 for its lightweight graphics mode. This browser could not start it. Try the latest Chrome, Edge, Firefox, or Safari, and allow graphics for this site.');
+		return;
 	}
 
 	const missing = Engine.getMissingFeatures({
@@ -423,7 +487,6 @@ window.__holeSyncFS = function () {
 
 	if (missing.length !== 0) {
 		if (GODOT_CONFIG['serviceWorker'] && GODOT_CONFIG['ensureCrossOriginIsolationHeaders'] && 'serviceWorker' in navigator) {
-			// There's a chance that installing the service worker would fix the issue
 			Promise.race([
 				navigator.serviceWorker.getRegistration().then((registration) => {
 					if (registration != null) {
@@ -431,7 +494,6 @@ window.__holeSyncFS = function () {
 					}
 					return registration;
 				}).then(() => engine.installServiceWorker()),
-				// For some reason, `getRegistration()` can stall
 				new Promise((resolve) => {
 					setTimeout(() => resolve(), 2000);
 				}),
@@ -441,24 +503,24 @@ window.__holeSyncFS = function () {
 				window.location.reload();
 			});
 		} else {
-			// Display the message as usual
-			const missingMsg = 'Error\nThe following features required to run Godot projects on the Web are missing:\n';
+			const missingMsg = 'This browser is missing features Hole Arcade needs to run:\n';
 			displayFailureNotice(missingMsg + missing.join('\n'));
 		}
 	} else {
-		setStatusMode('progress');
+		setProgress(0, 0);
 		engine.startGame({
 			'onProgress': function (current, total) {
-				if (current > 0 && total > 0) {
-					statusProgress.value = current;
-					statusProgress.max = total;
-				} else {
-					statusProgress.removeAttribute('value');
-					statusProgress.removeAttribute('max');
-				}
+				if (statusOverlay.style.visibility === 'hidden') return;
+				setProgress(current, total);
 			},
 		}).then(() => {
-			setStatusMode('hidden');
+			hideLoader();
+			if (canvas) {
+				canvas.addEventListener('webglcontextlost', function (ev) {
+					ev.preventDefault();
+					showFailure('Hole Arcade lost the graphics device. Reload the page to try again.');
+				}, true);
+			}
 		}, displayFailureNotice);
 	}
 }());

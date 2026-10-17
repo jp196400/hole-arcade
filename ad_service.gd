@@ -53,57 +53,82 @@ func _open(mode: String) -> void:
 	_layer = CanvasLayer.new()
 	_layer.layer = 60
 	var dim := ColorRect.new()
-	dim.color = Color(0.04, 0.05, 0.09, 0.94)
+	dim.color = Color(0.06, 0.08, 0.12, 0.82)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	_layer.add_child(dim)
+	var card := Panel.new()
+	card.anchor_left = 0.5
+	card.anchor_right = 0.5
+	card.anchor_top = 0.5
+	card.anchor_bottom = 0.5
+	card.offset_left = -330
+	card.offset_right = 330
+	card.offset_top = -360
+	card.offset_bottom = 360
+	card.add_theme_stylebox_override("panel", _card_style())
+	_layer.add_child(card)
 	var title := Label.new()
 	title.text = "Advertisement" if mode == "interstitial" else "Rewarded ad"
-	title.position = Vector2(70, 340)
-	title.size = Vector2(580, 60)
+	title.position = Vector2(28, 96)
+	title.size = Vector2(604, 64)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 56)
-	title.add_theme_color_override("font_color", Color.WHITE)
-	_layer.add_child(title)
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 40)
+	title.add_theme_color_override("font_color", Color(0.11, 0.16, 0.29))
+	card.add_child(title)
 	var body := Label.new()
 	if mode == "interstitial":
-		body.text = "Placeholder. This build has no ad SDK.\nWith AdMob, the network controls when Skip appears."
+		body.text = "Test ad. This build has no ad SDK.\nWith AdMob, the network controls when Skip appears."
 	else:
-		body.text = "Placeholder. Watch to the end to earn the reward.\nClosing early forfeits it."
-	body.position = Vector2(70, 430)
-	body.size = Vector2(580, 120)
+		body.text = "Test ad. Watch to the end to earn the reward.\nClosing early forfeits it."
+	body.position = Vector2(36, 180)
+	body.size = Vector2(588, 120)
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body.add_theme_font_size_override("font_size", 36)
-	body.add_theme_color_override("font_color", Color(0.82, 0.86, 0.95))
-	_layer.add_child(body)
+	body.add_theme_font_size_override("font_size", 28)
+	body.add_theme_color_override("font_color", Color(0.11, 0.16, 0.29))
+	card.add_child(body)
 	if mode == "interstitial":
 		var btn := Button.new()
 		btn.text = "Skip in %d" % int(ceili(_left))
 		btn.disabled = true
-		btn.position = Vector2(80, 640)
-		btn.size = Vector2(560, 96)
-		btn.add_theme_font_size_override("font_size", 40)
+		btn.position = Vector2(40, 520)
+		btn.size = Vector2(580, 88)
+		btn.add_theme_font_size_override("font_size", 32)
 		btn.pressed.connect(_on_skip)
-		_layer.add_child(btn)
+		card.add_child(btn)
 		_skip = btn
 	else:
 		_status = Label.new()
 		_status.text = "Playing… %d" % int(ceili(_left))
-		_status.position = Vector2(70, 580)
-		_status.size = Vector2(580, 50)
+		_status.position = Vector2(36, 320)
+		_status.size = Vector2(588, 48)
 		_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_status.add_theme_font_size_override("font_size", 40)
-		_status.add_theme_color_override("font_color", Color.WHITE)
-		_layer.add_child(_status)
+		_status.add_theme_font_size_override("font_size", 32)
+		_status.add_theme_color_override("font_color", Color(0.11, 0.16, 0.29))
+		card.add_child(_status)
 		var close_x := Button.new()
 		close_x.text = "X"
-		close_x.position = Vector2(600, 48)
-		close_x.size = Vector2(88, 88)
-		close_x.add_theme_font_size_override("font_size", 44)
+		close_x.position = Vector2(560, 16)
+		close_x.size = Vector2(72, 72)
+		close_x.add_theme_font_size_override("font_size", 32)
 		close_x.pressed.connect(_on_forfeit)
-		_layer.add_child(close_x)
+		card.add_child(close_x)
 	add_child(_layer)
+
+func _card_style() -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.99, 0.97, 0.94, 0.98)
+	s.corner_radius_top_left = 28
+	s.corner_radius_top_right = 28
+	s.corner_radius_bottom_right = 28
+	s.corner_radius_bottom_left = 28
+	s.content_margin_left = 16
+	s.content_margin_right = 16
+	s.content_margin_top = 16
+	s.content_margin_bottom = 16
+	return s
 
 func _tick_skip() -> void:
 	if _skip == null:

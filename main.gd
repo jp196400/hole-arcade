@@ -1,6 +1,5 @@
 extends Node3D
 
-const ROUND_TIME := 120.0
 const CITY_HALF := 77.8
 const GRID_MIN := -77
 const GRID_MAX := 77
@@ -39,6 +38,7 @@ const AD_COOLDOWN := 90.0
 const SAFE_TOP := 58.0
 const SAFE_BOTTOM := 40.0
 const SAFE_SIDE := 22.0
+const MENU_W := 720.0
 const BRAND_INK := Color(0.11, 0.16, 0.29)
 const BRAND_CREAM := Color(0.99, 0.97, 0.93)
 const BRAND_CYAN := Color(0.05, 0.74, 0.84)
@@ -302,7 +302,6 @@ var shown_radius := LEVEL_RADIUS[0]
 var shown_vel := 0.0
 var level := 0
 var score := 0
-var time_left := ROUND_TIME
 var playing := true
 var edge_probe := false
 var latency_probe := false
@@ -417,7 +416,6 @@ var quality_tries := 0
 var quality_ceiling := 2.05
 var quality_locked := false
 var score_lbl: Label
-var timer_lbl: Label
 var level_lbl: Label
 var sha_lbl: Label
 var over_panel: Control
@@ -427,7 +425,6 @@ var debug_on := false
 var speed_scale := 1.0
 var joy_ui: Control
 var shown_score := -1
-var shown_sec := -1
 var shown_level := -1
 var tex_roads: Texture2D
 var tex_commercial: Texture2D
@@ -476,6 +473,7 @@ var round_cleared := false
 var coins_earned := 0
 var doubled := false
 var menu_layer: CanvasLayer
+var menu_root: Control
 var hud_layer: CanvasLayer
 var continue_btn: Button
 var next_btn: Button
@@ -522,6 +520,7 @@ func _ready() -> void:
 	_ensure_models()
 	_build_menu_layer()
 	_build_chrome()
+	_focus_canvas()
 	AdService.interstitial_closed.connect(_after_ad)
 	AdService.rewarded_done.connect(_after_reward)
 	_prewarm_shaders()
@@ -540,8 +539,33 @@ func _ready() -> void:
 		call_deferred("_preview_progress")
 	elif preview == "daily":
 		_show_screen("daily")
+	elif preview == "daily2":
+		Save.last_daily = Save.today_key()
+		Save.daily_doubled = true
+		_show_screen("daily")
 	elif preview == "skins":
 		_show_screen("skins")
+	elif preview == "shop":
+		_show_screen("shop")
+	elif preview == "settings":
+		_show_screen("settings")
+	elif preview == "home":
+		pass
+	elif preview == "hud":
+		clear_total = 1000
+		clear_eaten = 420
+		clear_shown = 0.42
+		score = 840
+		mode = "play"
+		playing = false
+		_set_chrome(false)
+		_set_match_hud(true)
+		_refresh_hud()
+	elif preview == "ads":
+		_show_screen("shop")
+		AdService.show_rewarded()
+	elif preview == "gate":
+		call_deferred("_probe_gate")
 	elif preview == "hole" or preview == "street" or preview == "facade":
 		call_deferred("_preview_shot", preview)
 	elif preview == "small" or preview == "wide":
@@ -1116,6 +1140,32 @@ func _preview_eaten() -> void:
 	start_round(2)
 	playing = false
 	_offer_continue("Scoot")
+
+func _focus_canvas() -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c)return;c.setAttribute('tabindex','0');var f=function(){try{c.focus({preventScroll:true});}catch(e){c.focus();}};if(!c.__holeFocus){c.__holeFocus=true;c.addEventListener('pointerdown',f,true);c.addEventListener('touchstart',f,true);}f();})();", true)
+
+func _probe_gate() -> void:
+	var kept := Save.unlocked_level
+	Save.unlocked_level = 4
+	for i in Save.maps_cleared.size():
+		Save.maps_cleared[i] = 0
+	Save.stars[0] = 3
+	Save.clears = 12
+	Save._refresh_unlocks()
+	print("GATE keep %d" % Save.unlocked_level)
+	Save.unlocked_level = 0
+	Save._refresh_unlocks()
+	print("GATE stars-only %d" % Save.unlocked_level)
+	Save.maps_cleared[0] = 1
+	Save._refresh_unlocks()
+	print("GATE after-clear0 %d" % Save.unlocked_level)
+	Save.maps_cleared[1] = 1
+	Save._refresh_unlocks()
+	print("GATE after-clear1 %d" % Save.unlocked_level)
+	Save.unlocked_level = kept
+	get_tree().quit()
 
 func _short_sha() -> String:
 	var s := BUILD_SHA.strip_edges()
@@ -3242,46 +3292,79 @@ func _build_ui() -> void:
 	hud_layer = ui
 	add_child(ui)
 	clear_track = ColorRect.new()
-	clear_track.position = Vector2(28, 18)
-	clear_track.size = Vector2(664, 36)
-	clear_track.color = Color(0.08, 0.10, 0.16, 0.78)
+	clear_track.anchor_left = 0.5
+	clear_track.anchor_right = 0.5
+	clear_track.offset_left = -332
+	clear_track.offset_right = 332
+	clear_track.offset_top = 16
+	clear_track.offset_bottom = 76
+	clear_track.color = Color(0.06, 0.08, 0.12, 0.92)
 	clear_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui.add_child(clear_track)
 	clear_fill = ColorRect.new()
-	clear_fill.position = Vector2(4, 4)
-	clear_fill.size = Vector2(0, 28)
+	clear_fill.position = Vector2(6, 6)
+	clear_fill.size = Vector2(0, 48)
 	clear_fill.color = BRAND_CYAN
 	clear_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	clear_track.add_child(clear_fill)
+	var goal_pip := ColorRect.new()
+	goal_pip.anchor_left = 1.0
+	goal_pip.anchor_right = 1.0
+	goal_pip.anchor_top = 0.0
+	goal_pip.anchor_bottom = 1.0
+	goal_pip.offset_left = -10
+	goal_pip.offset_right = -4
+	goal_pip.offset_top = 4
+	goal_pip.offset_bottom = -4
+	goal_pip.color = Color(1.0, 0.86, 0.22)
+	goal_pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clear_track.add_child(goal_pip)
 	clear_lbl = Label.new()
-	clear_lbl.position = Vector2(28, 58)
-	clear_lbl.size = Vector2(664, 56)
+	clear_lbl.anchor_left = 0.5
+	clear_lbl.anchor_right = 0.5
+	clear_lbl.offset_left = -332
+	clear_lbl.offset_right = 332
+	clear_lbl.offset_top = 80
+	clear_lbl.offset_bottom = 128
 	clear_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	clear_lbl.text = "City cleared 0%"
-	_style(clear_lbl, 42)
+	clear_lbl.text = "Clear the map  0% / 95%"
+	_style(clear_lbl, 34)
 	ui.add_child(clear_lbl)
 	score_lbl = Label.new()
-	score_lbl.position = Vector2(28, 118)
-	score_lbl.size = Vector2(320, 52)
-	_style(score_lbl, 40)
+	score_lbl.anchor_left = 0.5
+	score_lbl.anchor_right = 0.5
+	score_lbl.offset_left = -332
+	score_lbl.offset_right = -16
+	score_lbl.offset_top = 128
+	score_lbl.offset_bottom = 176
+	_style(score_lbl, 36)
 	ui.add_child(score_lbl)
-	timer_lbl = Label.new()
-	timer_lbl.visible = false
-	ui.add_child(timer_lbl)
 	level_lbl = Label.new()
-	level_lbl.position = Vector2(340, 118)
-	level_lbl.size = Vector2(352, 52)
+	level_lbl.anchor_left = 0.5
+	level_lbl.anchor_right = 0.5
+	level_lbl.offset_left = 16
+	level_lbl.offset_right = 332
+	level_lbl.offset_top = 128
+	level_lbl.offset_bottom = 176
 	level_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_style(level_lbl, 36)
+	_style(level_lbl, 32)
 	ui.add_child(level_lbl)
 	next_lbl = Label.new()
-	next_lbl.position = Vector2(28, 176)
-	next_lbl.size = Vector2(664, 44)
-	_style(next_lbl, 32)
+	next_lbl.anchor_left = 0.5
+	next_lbl.anchor_right = 0.5
+	next_lbl.offset_left = -332
+	next_lbl.offset_right = 332
+	next_lbl.offset_top = 180
+	next_lbl.offset_bottom = 220
+	_style(next_lbl, 28)
 	ui.add_child(next_lbl)
 	var next_bg := ColorRect.new()
-	next_bg.position = Vector2(28, 224)
-	next_bg.size = Vector2(420, 18)
+	next_bg.anchor_left = 0.5
+	next_bg.anchor_right = 0.5
+	next_bg.offset_left = -332
+	next_bg.offset_right = -80
+	next_bg.offset_top = 224
+	next_bg.offset_bottom = 242
 	next_bg.color = Color(0.08, 0.10, 0.16, 0.55)
 	next_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui.add_child(next_bg)
@@ -3378,15 +3461,16 @@ func _build_ui() -> void:
 	result_card.add_child(star_row)
 	for i in 3:
 		var cap := Label.new()
-		cap.position = Vector2(36, 268 + i * 112)
-		cap.size = Vector2(588, 48)
-		_style(cap, 36)
+		cap.position = Vector2(36, 256 + i * 118)
+		cap.size = Vector2(588, 60)
+		_style(cap, 28)
+		cap.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		cap.add_theme_color_override("font_color", BRAND_INK)
 		cap.add_theme_constant_override("outline_size", 0)
 		result_card.add_child(cap)
 		result_labels.append(cap)
 		var track := ColorRect.new()
-		track.position = Vector2(36, 320 + i * 112)
+		track.position = Vector2(36, 318 + i * 118)
 		track.size = Vector2(588, 22)
 		track.color = Color(0.86, 0.88, 0.92)
 		track.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -3605,6 +3689,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
 			_begin_play()
 		_refresh_joystick()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		# Desktop clicks stay mouse events. Touch emulation was eating the first menu tap.
+		if event.pressed:
+			joy_held = true
+			joy_id = -1
+			joy_anchor = event.position
+			joy_finger = event.position
+		elif joy_id == -1:
+			if mode == "attract" and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
+				_begin_play()
+			joy_held = false
+		_refresh_joystick()
+	elif event is InputEventMouseMotion and joy_held and joy_id == -1:
+		joy_finger = event.position
+		if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
+			_begin_play()
+		_refresh_joystick()
 
 func _screen_vector_to_world(screen: Vector2) -> Vector3:
 	var basis := cam.global_transform.basis
@@ -3784,8 +3885,9 @@ func _tick_clear_bar(delta: float) -> void:
 	if absf(clear_shown - goal) < 0.002:
 		clear_shown = goal
 	if clear_fill != null and clear_track != null:
-		var inner := maxf(clear_track.size.x - 8.0, 0.0)
-		clear_fill.size = Vector2(inner * clear_shown, clear_fill.size.y)
+		var inner := maxf(clear_track.size.x - 16.0, 0.0)
+		var toward := clampf(clear_shown / CLEAR_RATIO, 0.0, 1.0)
+		clear_fill.size = Vector2(inner * toward, 48)
 	if clear_lbl:
 		clear_lbl.text = _clear_caption()
 	guide_wait = maxf(0.0, guide_wait - delta)
@@ -3795,10 +3897,13 @@ func _tick_clear_bar(delta: float) -> void:
 
 func _clear_caption() -> String:
 	var pct := int(round(clear_shown * 100.0))
+	var goal := int(round(CLEAR_RATIO * 100.0))
+	if clear_total > 0 and clear_shown + 0.001 >= CLEAR_RATIO:
+		return "Map clear"
 	var remain := maxi(clear_total - clear_eaten, 0)
 	if playing and remain > 0 and _clear_ratio() >= 0.88:
-		return "City cleared %d%%   %d left" % [pct, remain]
-	return "City cleared %d%%" % pct
+		return "Clear the map  %d%% / %d%%   %d left" % [pct, goal, remain]
+	return "Clear the map  %d%% / %d%%" % [pct, goal]
 
 func _update_guide() -> void:
 	var was := guide_on
@@ -3865,7 +3970,7 @@ func _refresh_next_skin() -> void:
 	var skin: Dictionary = nxt.skin
 	var prog: Dictionary = nxt.progress
 	next_lbl.visible = true
-	next_lbl.text = "%s  %d/%d" % [str(prog.get("label", "Next skin")), int(prog.cur), int(prog.need)]
+	next_lbl.text = _goal_line(prog)
 	if next_fill:
 		next_fill.visible = true
 		var track := next_fill.get_parent() as ColorRect
@@ -4924,13 +5029,11 @@ func start_round(index: int) -> void:
 	hole_pos = Vector3.ZERO
 	velocity = Vector3.ZERO
 	joy_held = false
-	time_left = ROUND_TIME
 	round_cleared = false
 	round_settled = false
 	coins_earned = 0
 	doubled = false
 	shown_score = -1
-	shown_sec = -1
 	shown_level = -1
 	_spawn_city()
 	_spawn_rivals()
@@ -4974,19 +5077,22 @@ func _enter_attract(index: int) -> void:
 	hole_pos = Vector3.ZERO
 	velocity = Vector3.ZERO
 	joy_held = false
-	time_left = ROUND_TIME
 	round_cleared = false
 	round_settled = false
 	coins_earned = 0
 	doubled = false
 	shown_score = -1
-	shown_sec = -1
 	shown_level = -1
 	ad_hold = false
-	_spawn_city()
-	_spawn_rivals()
-	_tally_clear()
-	_sync_level()
+	if _light_preview():
+		clear_total = 0
+		clear_eaten = 0
+		clear_shown = 0.0
+	else:
+		_spawn_city()
+		_spawn_rivals()
+		_tally_clear()
+		_sync_level()
 	player_invuln = 0.0
 	hole_mesh.visible = true
 	hole_mesh.position = hole_pos
@@ -5015,7 +5121,6 @@ func _begin_play() -> void:
 	hole_radius = _start_radius()
 	shown_radius = hole_radius
 	hole_open = hole_radius
-	time_left = ROUND_TIME
 	round_settled = false
 	player_invuln = 2.8
 	continue_used = false
@@ -5024,7 +5129,6 @@ func _begin_play() -> void:
 	_arm_trial()
 	_tally_clear()
 	shown_score = -1
-	shown_sec = -1
 	shown_level = -1
 	_set_chrome(false)
 	_set_match_hud(true)
@@ -5370,8 +5474,6 @@ func _set_match_hud(on: bool) -> void:
 	for n in [clear_track, clear_lbl, score_lbl, level_lbl, next_lbl]:
 		if n:
 			n.visible = on
-	if timer_lbl:
-		timer_lbl.visible = false
 	if next_fill and next_fill.get_parent():
 		next_fill.get_parent().visible = on
 	if combo_lbl and not on:
@@ -5380,6 +5482,8 @@ func _set_match_hud(on: bool) -> void:
 func _set_chrome(on: bool) -> void:
 	if chrome_layer:
 		chrome_layer.visible = on
+	if hint_lbl:
+		hint_lbl.visible = on and Save.rounds == 0
 	if on:
 		_refresh_level_pill()
 		_refresh_currency()
@@ -5449,17 +5553,19 @@ func _build_chrome() -> void:
 	daily_btn.pressed.connect(_show_screen.bind("daily"))
 	chrome_layer.add_child(daily_btn)
 	hint_lbl = Label.new()
-	hint_lbl.text = "Tap or drag to play"
+	hint_lbl.text = "Drag to move. Eat small things first, then grow."
 	hint_lbl.anchor_left = 0.5
 	hint_lbl.anchor_right = 0.5
 	hint_lbl.anchor_top = 1.0
 	hint_lbl.anchor_bottom = 1.0
-	hint_lbl.offset_left = -240
-	hint_lbl.offset_right = 240
-	hint_lbl.offset_top = -(SAFE_BOTTOM + 210)
-	hint_lbl.offset_bottom = -(SAFE_BOTTOM + 160)
+	hint_lbl.offset_left = -300
+	hint_lbl.offset_right = 300
+	hint_lbl.offset_top = -(SAFE_BOTTOM + 268)
+	hint_lbl.offset_bottom = -(SAFE_BOTTOM + 168)
 	hint_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_style(hint_lbl, 44)
+	hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint_lbl.visible = Save.rounds == 0
+	_style(hint_lbl, 32)
 	chrome_layer.add_child(hint_lbl)
 	hand_icon = UiGlyph.new()
 	hand_icon.glyph = "hand"
@@ -5618,14 +5724,75 @@ func _build_menu_layer() -> void:
 	menu_layer.layer = 4
 	add_child(menu_layer)
 
+func _light_preview() -> bool:
+	var p := _query_preview()
+	return p in ["levels", "skins", "shop", "settings", "daily", "daily2", "home", "hud", "ads", "gate"]
+
+func _clear_menu() -> void:
+	menu_root = null
+	if menu_layer == null:
+		return
+	for c in menu_layer.get_children():
+		c.queue_free()
+
+func _mount_menu_column() -> Control:
+	_clear_menu()
+	menu_layer.visible = true
+	var dim := ColorRect.new()
+	dim.color = Color(0.11, 0.16, 0.29, 0.45)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	menu_layer.add_child(dim)
+	var root := Control.new()
+	root.anchor_left = 0.5
+	root.anchor_right = 0.5
+	root.anchor_top = 0.0
+	root.anchor_bottom = 1.0
+	root.offset_left = -MENU_W * 0.5
+	root.offset_right = MENU_W * 0.5
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	menu_layer.add_child(root)
+	menu_root = root
+	var sheet := Panel.new()
+	sheet.set_anchors_preset(Control.PRESET_FULL_RECT)
+	sheet.offset_left = 8
+	sheet.offset_top = SAFE_TOP
+	sheet.offset_right = -8
+	sheet.offset_bottom = -SAFE_BOTTOM
+	sheet.add_theme_stylebox_override("panel", _panel_style())
+	sheet.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(sheet)
+	if shot_path == "":
+		sheet.modulate.a = 0.0
+		sheet.offset_top = SAFE_TOP + 36.0
+		var tw := create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(sheet, "modulate:a", 1.0, 0.18).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(sheet, "offset_top", SAFE_TOP, 0.18).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	return root
+
+func _menu_add(node: Node) -> Node:
+	var host: Node = menu_root if menu_root != null else menu_layer
+	host.add_child(node)
+	return node
+
+func _screen_header(title: String) -> void:
+	var label := _menu_label(title, Vector2(28, 18), 48)
+	label.size = Vector2(420, 68)
+	label.clip_text = true
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_menu_add(label)
+	var back := _make_button("Back", Vector2(468, 16), Vector2(220, 72), BRAND_INK, 32)
+	back.pressed.connect(_show_screen.bind("attract"))
+	_menu_add(back)
+
 func _show_screen(which: String) -> void:
 	if which == "menu" or which == "attract":
 		mode = "attract"
 		playing = false
 		if menu_layer:
 			menu_layer.visible = false
-			for c in menu_layer.get_children():
-				c.queue_free()
+			_clear_menu()
 		if hud_layer:
 			hud_layer.visible = true
 		_set_match_hud(false)
@@ -5635,29 +5802,7 @@ func _show_screen(which: String) -> void:
 	playing = false
 	_set_chrome(false)
 	hud_layer.visible = true
-	menu_layer.visible = true
-	for c in menu_layer.get_children():
-		c.queue_free()
-	var dim := ColorRect.new()
-	dim.color = Color(0.11, 0.16, 0.29, 0.32)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	menu_layer.add_child(dim)
-	var sheet := Panel.new()
-	sheet.set_anchors_preset(Control.PRESET_FULL_RECT)
-	sheet.offset_left = SAFE_SIDE
-	sheet.offset_top = SAFE_TOP
-	sheet.offset_right = -SAFE_SIDE
-	sheet.offset_bottom = -SAFE_BOTTOM
-	sheet.add_theme_stylebox_override("panel", _panel_style())
-	sheet.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	sheet.modulate.a = 0.0
-	sheet.offset_top = SAFE_TOP + 72.0
-	menu_layer.add_child(sheet)
-	var tw := create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(sheet, "modulate:a", 1.0, 0.28).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tw.tween_property(sheet, "offset_top", SAFE_TOP, 0.28).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_mount_menu_column()
 	if which == "levels":
 		_screen_levels()
 	elif which == "skins":
@@ -5674,15 +5819,17 @@ func _on_play() -> void:
 	start_round(i)
 
 func _screen_levels() -> void:
-	_add_currency_pills(18)
-	menu_layer.add_child(_menu_label("Levels", Vector2(36, 78), 56))
-	var back := _make_button("Back", Vector2(470, 78), Vector2(200, 80), BRAND_INK, 34)
-	back.pressed.connect(_show_screen.bind("attract"))
-	menu_layer.add_child(back)
+	_screen_header("Levels")
+	_add_currency_pills(104)
 	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(24, 180)
-	scroll.size = Vector2(672, 980)
-	menu_layer.add_child(scroll)
+	scroll.anchor_right = 1.0
+	scroll.anchor_bottom = 1.0
+	scroll.offset_left = 20
+	scroll.offset_top = 184
+	scroll.offset_right = -20
+	scroll.offset_bottom = -(SAFE_BOTTOM + 12)
+	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	_menu_add(scroll)
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 16)
@@ -5693,15 +5840,17 @@ func _screen_levels() -> void:
 		grid.add_child(_level_card(i, maps[i]))
 
 func _screen_skins() -> void:
-	_add_currency_pills(18)
-	menu_layer.add_child(_menu_label("Skins", Vector2(36, 78), 56))
-	var back := _make_button("Back", Vector2(470, 78), Vector2(200, 80), BRAND_INK, 34)
-	back.pressed.connect(_show_screen.bind("attract"))
-	menu_layer.add_child(back)
+	_screen_header("Skins")
+	_add_currency_pills(104)
 	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(28, 180)
-	scroll.size = Vector2(664, 1040)
-	menu_layer.add_child(scroll)
+	scroll.anchor_right = 1.0
+	scroll.anchor_bottom = 1.0
+	scroll.offset_left = 24
+	scroll.offset_top = 184
+	scroll.offset_right = -24
+	scroll.offset_bottom = -(SAFE_BOTTOM + 12)
+	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	_menu_add(scroll)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 12)
 	box.custom_minimum_size = Vector2(640, 0)
@@ -5725,8 +5874,8 @@ func _fill_result_bars() -> void:
 	else:
 		var skin: Dictionary = nxt.skin
 		var prog: Dictionary = nxt.progress
-		_set_result_row(0, "%s  %s %d/%d" % [str(skin.name), str(prog.get("label", "")), int(prog.cur), int(prog.need)], float(prog.ratio), skin.a)
-	_set_result_row(1, "City cleared  %d%%" % int(round(_clear_ratio() * 100.0)), _clear_ratio(), Color(1.0, 0.72, 0.18))
+		_set_result_row(0, "%s — %s" % [str(skin.name), _goal_line(prog)], float(prog.ratio), skin.a)
+	_set_result_row(1, "Map cleared  %d%%  (goal %d%%)" % [int(round(_clear_ratio() * 100.0)), int(round(CLEAR_RATIO * 100.0))], clampf(_clear_ratio() / CLEAR_RATIO, 0.0, 1.0), Color(1.0, 0.72, 0.18))
 	var buy: Dictionary = Save.next_purchase()
 	if buy.is_empty():
 		_set_result_row(2, "Coins %d" % Save.coins, 1.0, Color(0.95, 0.78, 0.2))
@@ -5760,8 +5909,29 @@ func _paint_star(ci: CanvasItem, center: Vector2, radius: float, filled: bool) -
 		ci.draw_colored_polygon(PackedVector2Array([center, right, tip, left]), color)
 
 func _lock_text(unlock: String) -> String:
-	var p := Save.progress_for(unlock)
-	return "%s %d/%d" % [str(p.get("label", "Challenge")), int(p.cur), int(p.need)]
+	return _goal_line(Save.progress_for(unlock))
+
+func _goal_line(p: Dictionary) -> String:
+	var label := str(p.get("label", "Challenge"))
+	var cur := int(p.get("cur", 0))
+	var need := maxi(int(p.get("need", 1)), 1)
+	if str(p.get("unit", "")) == "":
+		return label
+	if need <= 1:
+		return label
+	return "%s — %s of %s" % [label, _grouped(mini(cur, need)), _grouped(need)]
+
+func _grouped(n: int) -> String:
+	var s := str(maxi(n, 0))
+	var out := ""
+	var count := 0
+	for i in range(s.length() - 1, -1, -1):
+		if count == 3:
+			out = "," + out
+			count = 0
+		out = s[i] + out
+		count += 1
+	return out
 
 func _on_try_skin(id: String) -> void:
 	if Save.has_skin(id):
@@ -5785,97 +5955,112 @@ func _on_skin(id: String) -> void:
 	_show_screen("skins")
 
 func _screen_shop() -> void:
-	menu_layer.add_child(_menu_label("Shop", Vector2(40, 24), 56))
-	menu_layer.add_child(_menu_label("Coins %d" % Save.coins, Vector2(40, 96), 36))
-	var back := _make_button("Back", Vector2(470, 28), Vector2(200, 80), BRAND_INK, 34)
-	back.pressed.connect(_show_screen.bind("attract"))
-	menu_layer.add_child(back)
-	_shop_row("Starting size", Save.size_rank, "size", 250)
-	_shop_row("Speed", Save.speed_rank, "speed", 400)
-	_shop_row("Head start", Save.time_rank, "time", 550)
-	menu_layer.add_child(_menu_label("Head start keeps older round-time upgrades.", Vector2(50, 640), 28))
+	_screen_header("Shop")
+	var coins := _menu_label("%s coins" % _grouped(Save.coins), Vector2(28, 100), 32)
+	coins.size = Vector2(660, 40)
+	_menu_add(coins)
+	_shop_row("Starting size", Save.size_rank, "size", 156)
+	_shop_row("Speed", Save.speed_rank, "speed", 292)
+	_shop_row("Head start", Save.time_rank, "time", 428)
+	var note := _menu_label("Head start keeps older round-time upgrades.", Vector2(32, 560), 26)
+	note.size = Vector2(640, 36)
+	_menu_add(note)
 	var ads := "Ads removed" if IapService.no_ads else "Remove Ads  %s" % IapService.price_text()
-	var ads_btn := _make_button(ads, Vector2(60, 720), Vector2(600, 96), Color(0.45, 0.18, 0.22), 34)
+	var ads_btn := _make_button(ads, Vector2(32, 608), Vector2(656, 88), Color(0.45, 0.18, 0.22), 32)
 	ads_btn.disabled = IapService.no_ads
 	ads_btn.pressed.connect(_confirm_remove_ads)
-	menu_layer.add_child(ads_btn)
-	menu_layer.add_child(_menu_label("Test purchase. Removes interstitials only.", Vector2(60, 840), 28))
+	_menu_add(ads_btn)
+	var test := _menu_label("Test purchase. Removes interstitials only.", Vector2(32, 708), 26)
+	test.size = Vector2(640, 36)
+	_menu_add(test)
 
 func _shop_row(title: String, rank: int, which: String, y: float) -> void:
 	var cost := Save.next_cost(rank)
-	var detail := "%s  %d/5" % [title, rank + 1]
-	if cost < 0:
-		detail += "    Max"
-	else:
-		detail += "    %d coins" % cost
-	menu_layer.add_child(_menu_label(detail, Vector2(50, y), 36))
-	var b := _make_button("Buy", Vector2(470, y - 8), Vector2(190, 80), Color(0.2, 0.48, 0.32), 34)
-	b.disabled = cost < 0 or Save.coins < cost
+	var name_l := _menu_label("%s   %d/5" % [title, rank + 1], Vector2(32, y), 30)
+	name_l.size = Vector2(380, 40)
+	_menu_add(name_l)
+	var price := "Maxed" if cost < 0 else "%s coins" % _grouped(cost)
+	var price_l := _menu_label(price, Vector2(430, y), 28)
+	price_l.size = Vector2(258, 40)
+	price_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_menu_add(price_l)
+	var caption := "Maxed"
+	var can := false
+	if cost >= 0:
+		var missing := cost - Save.coins
+		if missing > 0:
+			caption = "Need %s more coins" % _grouped(missing)
+		else:
+			caption = "Buy"
+			can = true
+	var b := _make_button(caption, Vector2(32, y + 44), Vector2(656, 76), Color(0.2, 0.48, 0.32), 28)
+	b.disabled = not can
+	b.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	b.pressed.connect(_buy_upgrade.bind(which))
-	menu_layer.add_child(b)
+	_menu_add(b)
 
 func _buy_upgrade(which: String) -> void:
 	Save.try_buy_upgrade(which)
 	_show_screen("shop")
 
 func _confirm_remove_ads() -> void:
-	for c in menu_layer.get_children():
-		c.queue_free()
-	var bg := ColorRect.new()
-	bg.color = Color(0.08, 0.1, 0.16, 0.96)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.mouse_filter = Control.MOUSE_FILTER_STOP
-	menu_layer.add_child(bg)
-	var msg := _menu_label("Remove ads for %s?\nTest purchase. No charge.\nInterstitials stop. Rewarded ads stay optional." % IapService.price_text(), Vector2(60, 340), 36)
-	msg.size = Vector2(600, 140)
+	_mount_menu_column()
+	mode = "shop"
+	var msg := _menu_label("Remove ads for %s?\nTest purchase. No charge.\nInterstitials stop. Rewarded ads stay optional." % IapService.price_text(), Vector2(48, 220), 34)
+	msg.size = Vector2(624, 180)
 	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	menu_layer.add_child(msg)
-	var yes := _make_button("Confirm", Vector2(80, 640), Vector2(560, 92), Color(0.55, 0.2, 0.22))
+	_menu_add(msg)
+	var yes := _make_button("Confirm", Vector2(48, 460), Vector2(624, 88), Color(0.55, 0.2, 0.22))
 	yes.pressed.connect(_do_remove_ads)
-	menu_layer.add_child(yes)
-	var no := _make_button("Cancel", Vector2(80, 752), Vector2(560, 88), Color(0.2, 0.24, 0.34))
+	_menu_add(yes)
+	var no := _make_button("Cancel", Vector2(48, 568), Vector2(624, 84), Color(0.2, 0.24, 0.34))
 	no.pressed.connect(_show_screen.bind("shop"))
-	menu_layer.add_child(no)
+	_menu_add(no)
 
 func _screen_settings() -> void:
-	menu_layer.add_child(_menu_label("Settings", Vector2(48, 78), 56))
-	var back := _make_button("Back", Vector2(470, 78), Vector2(200, 80), BRAND_INK, 34)
-	back.pressed.connect(_show_screen.bind("attract"))
-	menu_layer.add_child(back)
-	var music := _make_button("Music: %s" % ("On" if Save.music_on else "Off"), Vector2(60, 240), Vector2(600, 96), BRAND_CYAN if Save.music_on else BRAND_INK)
+	_screen_header("Settings")
+	var music := _make_button("Music: %s" % ("On" if Save.music_on else "Off"), Vector2(48, 200), Vector2(624, 92), BRAND_CYAN if Save.music_on else BRAND_INK)
 	music.pressed.connect(_toggle_music)
-	menu_layer.add_child(music)
-	var sfx_btn := _make_button("SFX: %s" % ("On" if Save.sfx_on else "Off"), Vector2(60, 360), Vector2(600, 96), BRAND_CYAN if Save.sfx_on else BRAND_INK)
+	_menu_add(music)
+	var sfx_btn := _make_button("SFX: %s" % ("On" if Save.sfx_on else "Off"), Vector2(48, 312), Vector2(624, 92), BRAND_CYAN if Save.sfx_on else BRAND_INK)
 	sfx_btn.pressed.connect(_toggle_sfx)
-	menu_layer.add_child(sfx_btn)
-	var hap_btn := _make_button("Haptics: %s" % ("On" if Save.haptics_on else "Off"), Vector2(60, 480), Vector2(600, 96), BRAND_CYAN if Save.haptics_on else BRAND_INK)
+	_menu_add(sfx_btn)
+	var hap_btn := _make_button("Haptics: %s" % ("On" if Save.haptics_on else "Off"), Vector2(48, 424), Vector2(624, 92), BRAND_CYAN if Save.haptics_on else BRAND_INK)
 	hap_btn.pressed.connect(_toggle_haptics)
-	menu_layer.add_child(hap_btn)
-	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(60, 610), 32)
-	note.size = Vector2(560, 80)
+	_menu_add(hap_btn)
+	var note := _menu_label("Music is a CC0 loop. Sound effects are original.", Vector2(48, 540), 30)
+	note.size = Vector2(624, 80)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	menu_layer.add_child(note)
+	_menu_add(note)
 
 func _screen_daily() -> void:
-	menu_layer.add_child(_menu_label("Daily reward", Vector2(48, 78), 56))
-	var back := _make_button("Back", Vector2(470, 78), Vector2(200, 80), BRAND_INK, 34)
-	back.pressed.connect(_show_screen.bind("attract"))
-	menu_layer.add_child(back)
+	_screen_header("Daily reward")
 	var amount := Save.DAILY_COINS
 	if not Save.daily_claimed():
-		menu_layer.add_child(_menu_label("Today: %d coins" % amount, Vector2(60, 260), 44))
-		var claim := _make_button("Claim", Vector2(60, 360), Vector2(600, 96), Color(0.16, 0.66, 0.42))
+		var today := _menu_label("Today: %d coins" % amount, Vector2(48, 240), 40)
+		today.size = Vector2(624, 56)
+		today.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_menu_add(today)
+		var claim := _make_button("Claim", Vector2(48, 340), Vector2(624, 92), Color(0.16, 0.66, 0.42))
 		claim.pressed.connect(_on_claim_daily)
-		menu_layer.add_child(claim)
+		_menu_add(claim)
 	else:
-		menu_layer.add_child(_menu_label("Claimed today: %d coins" % amount, Vector2(60, 260), 40))
+		var got := amount * (2 if Save.daily_doubled else 1)
+		var claimed := _menu_label("Claimed today: %d coins" % got, Vector2(48, 240), 36)
+		claimed.size = Vector2(624, 64)
+		claimed.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		claimed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_menu_add(claimed)
 		if Save.daily_doubled:
-			menu_layer.add_child(_menu_label("Doubled. Come back tomorrow.", Vector2(60, 360), 36))
+			var done := _menu_label("Doubled. Come back tomorrow.", Vector2(48, 330), 32)
+			done.size = Vector2(624, 48)
+			done.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			_menu_add(done)
 		else:
-			var dbl := _make_button("Double today's reward", Vector2(60, 360), Vector2(600, 96), Color(0.90, 0.62, 0.18))
+			var dbl := _make_button("Double today's reward", Vector2(48, 340), Vector2(624, 92), Color(0.90, 0.62, 0.18))
 			dbl.pressed.connect(_on_double_daily)
-			menu_layer.add_child(dbl)
+			_menu_add(dbl)
 
 func _on_claim_daily() -> void:
 	Save.claim_daily()
@@ -5912,6 +6097,7 @@ func _make_button(text: String, pos: Vector2, size: Vector2, color: Color, font_
 	b.add_theme_color_override("font_color", Color.WHITE)
 	b.add_theme_color_override("font_hover_color", Color.WHITE)
 	b.add_theme_color_override("font_pressed_color", Color(1, 0.95, 0.8))
+	b.add_theme_color_override("font_disabled_color", Color(0.93, 0.94, 0.96))
 	var normal := _btn_box(color)
 	var hover := _btn_box(color.lightened(0.12))
 	var pressed := _btn_box(color.darkened(0.12))
@@ -5954,14 +6140,13 @@ func _gradient_bg(top: Color, mid: Color, bottom: Color) -> TextureRect:
 	return rect
 
 func _add_currency_pills(y: float) -> void:
-	var coins := _make_button("%d coins" % Save.coins, Vector2(24, y), Vector2(250, 72), Color(0.95, 0.62, 0.16), 32)
+	var coins := _make_button("%s coins" % _grouped(Save.coins), Vector2(28, y), Vector2(324, 64), Color(0.95, 0.62, 0.16), 28)
 	coins.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	menu_layer.add_child(coins)
-	var star_n := Save.total_stars()
-	var stars_btn := _make_button("%d stars" % star_n, Vector2(290, y), Vector2(230, 72), Color(0.98, 0.78, 0.18), 32)
+	_menu_add(coins)
+	var stars_btn := _make_button("%s stars" % _grouped(Save.total_stars()), Vector2(368, y), Vector2(324, 64), Color(0.98, 0.78, 0.18), 28)
 	stars_btn.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stars_btn.add_theme_color_override("font_color", Color(0.35, 0.22, 0.05))
-	menu_layer.add_child(stars_btn)
+	_menu_add(stars_btn)
 
 func _level_card(index: int, m: Dictionary) -> Control:
 	var locked := index > Save.unlocked_level
@@ -6016,23 +6201,7 @@ func _level_card(index: int, m: Dictionary) -> Control:
 	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var gate := locked and index > 0 and index == Save.unlocked_level + 1
 	if gate:
-		var prev := int(Save.stars[index - 1]) if index - 1 < Save.stars.size() else 0
-		var need := index * 3
-		var have := mini(Save.clears, need)
-		sub.text = "3-star previous (%d/3)\nClears %d/%d" % [prev, have, need]
-		var ratio := minf(float(prev) / 3.0, float(Save.clears) / float(need))
-		var track := ColorRect.new()
-		track.position = Vector2(16, 258)
-		track.size = Vector2(284, 16)
-		track.color = Color(1, 1, 1, 0.35)
-		track.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		card.add_child(track)
-		var fill := ColorRect.new()
-		fill.position = Vector2(2, 2)
-		fill.size = Vector2(280.0 * clampf(ratio, 0.0, 1.0), 12)
-		fill.color = Color(1, 0.95, 0.55)
-		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		track.add_child(fill)
+		sub.text = "Clear the previous level (95%)"
 	elif locked:
 		sub.text = "Locked"
 	else:
@@ -6044,7 +6213,7 @@ func _skin_card(s: Dictionary) -> Control:
 	var id := str(s.id)
 	var owned := Save.has_skin(id)
 	var wrap := Control.new()
-	wrap.custom_minimum_size = Vector2(640, 176)
+	wrap.custom_minimum_size = Vector2(640, 200)
 	var status := "Equip"
 	if Save.skin_id == id and Save.trial_skin != id:
 		status = "Equipped"
@@ -6064,15 +6233,13 @@ func _skin_card(s: Dictionary) -> Control:
 	var prog := Save.progress_for(str(s.unlock))
 	var line := "Ready"
 	if str(s.unlock) != "free":
-		if owned:
-			line = "%s %d/%d" % [str(prog.get("label", "Challenge")), int(prog.need), int(prog.need)]
-		else:
-			line = _lock_text(str(s.unlock))
-	var lock_l := _menu_label(line, Vector2(8, 96), 30)
-	lock_l.size = Vector2(620, 40)
+		line = _goal_line(prog)
+	var lock_l := _menu_label(line, Vector2(8, 96), 26)
+	lock_l.size = Vector2(620, 52)
+	lock_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	wrap.add_child(lock_l)
 	var track := ColorRect.new()
-	track.position = Vector2(16, 142)
+	track.position = Vector2(16, 156)
 	track.size = Vector2(608, 16)
 	track.color = Color(1, 1, 1, 0.35)
 	track.mouse_filter = Control.MOUSE_FILTER_IGNORE

@@ -485,15 +485,15 @@ func progress_for(unlock: String) -> Dictionary:
 		"rivals":
 			label = "Rival holes eaten"
 		"clean":
-			label = "Clear without being eaten"
+			label = "Clear a level without being eaten"
 		"streak":
-			label = "Clears in a row"
+			label = "Clear levels in a row"
 		"sweeps":
-			label = "Full rival sweeps"
+			label = "Sweep every rival in one level"
 		"maps":
-			label = "Levels fully cleared"
+			label = "Fully clear levels"
 		"stars3":
-			label = "3-star levels"
+			label = "Earn 3 stars on levels"
 		_:
 			label = "Challenge"
 	return {
@@ -636,17 +636,20 @@ func note_clear(index: int, clean: bool, sweep: bool) -> Array:
 	return fresh
 
 func _refresh_unlocks() -> void:
+	# A level opens when the previous one is cleared (95%). Stars stay a rating.
+	# Already-open levels stay open, so older 3-star saves are not re-locked.
 	var earned := unlocked_level
 	var i := unlocked_level + 1
-	while i <= 10:
+	var last := maps_cleared.size() - 1
+	while i <= last:
 		var prev := i - 1
-		var prev_stars := int(stars[prev]) if prev >= 0 and prev < stars.size() else 0
-		if prev_stars >= 3 and clears >= i * 3:
+		if prev >= 0 and prev < maps_cleared.size() and int(maps_cleared[prev]) > 0:
 			earned = i
 			i += 1
 		else:
 			break
-	unlocked_level = mini(earned, 10)
+	if earned > unlocked_level:
+		unlocked_level = mini(earned, last)
 
 func unlock_all() -> void:
 	unlocked_level = 10
