@@ -212,8 +212,8 @@ vec3 themed_road(vec2 xz, vec2 uv, float which) {
 		col = vec3(0.18, 0.2, 0.24);
 		stripe = mix(vec3(0.75, 0.22, 0.2), vec3(0.2, 0.42, 0.78), step(0.5, fract(xz.x * 0.2)));
 	} else if (which < 7.5) {
-		col = vec3(0.50, 0.56, 0.66);
-		stripe = vec3(0.74, 0.84, 0.92);
+		col = vec3(0.66, 0.72, 0.82);
+		stripe = vec3(0.86, 0.91, 0.97);
 	} else if (which < 8.5) {
 		vec2 cell = abs(fract(xz * 1.1) - 0.5);
 		float seam = step(0.42, max(cell.x, cell.y));
@@ -225,7 +225,9 @@ vec3 themed_road(vec2 xz, vec2 uv, float which) {
 		stripe = vec3(0.95, 0.9, 0.7);
 	}
 	col = mix(col, stripe, lane * 0.75);
-	col = mix(col, col * 0.72, edge * 0.35);
+	if (which < 6.5 || which > 7.5) {
+		col = mix(col, col * 0.72, edge * 0.35);
+	}
 	return clamp(col, vec3(0.0), vec3(1.0));
 }
 vec3 theme_ground(vec3 base, vec2 xz, float which) {
@@ -1547,7 +1549,8 @@ func _preview_idle() -> void:
 	var closed := hunt0 - hunt1
 	print("IDLE moved %.3f score +%d clear +%d movers %d hunt %d %.1f -> %.1f closed %.1f eaten '%s'" % [moved, gained, cleared, mover_fed, hunter, hunt0, hunt1, closed, eaten_by])
 	var still := moved < 0.2
-	var fed_ok := mover_fed <= 1 and gained < 24
+	# Score and clears are the player's. A rival may snack a few movers nearby.
+	var fed_ok := gained < 8 and cleared < 1 and mover_fed <= 12
 	var hunted := hunter >= 0 and (closed > 12.0 or hunt1 < 10.0 or eaten_by != "")
 	print("IDLE_OK" if still and fed_ok and hunted else "IDLE_FAIL")
 	get_tree().quit(0 if still and fed_ok and hunted else 1)
