@@ -12,7 +12,7 @@ const PRODUCT_REMOVE_ADS := "hole_arcade_remove_ads"
 const REMOVE_ADS_PRICE := 2.99
 
 const PRIVACY_URL := "https://jp196400.github.io/hole-arcade/privacy/"
-const PRIVACY_EMAIL := "privacy-contact@example.com"
+const PRIVACY_EMAIL := "jpdarby@mail.grokbot.com"
 
 # Official Google sample units. Swap these only after a real AdMob account exists.
 const ADMOB_ANDROID_APP := "ca-app-pub-3940256099942544~3347511713"

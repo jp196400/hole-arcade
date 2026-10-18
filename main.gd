@@ -758,7 +758,11 @@ var menu_tucks: Array = []
 var joy_anchor := Vector2.ZERO
 var joy_finger := Vector2.ZERO
 var joy_id := -2
+var touch_ids := {}
+var web_pointer_down := false
 var web_steer := false
+var pace_origin := Vector3.ZERO
+var pace_far := 0.0
 var web_phase_live := false
 var _announced_phase := ""
 var _steer_cb = null
@@ -1165,6 +1169,8 @@ func _ready() -> void:
 		call_deferred("_preview_idle")
 	elif preview == "still":
 		call_deferred("_preview_still")
+	elif preview == "scorebit":
+		call_deferred("_preview_scorebit")
 	elif preview == "save":
 		call_deferred("_preview_save")
 	elif preview == "iap":
@@ -1703,6 +1709,44 @@ func _preview_chase() -> void:
 	Engine.time_scale = 1.0
 	get_tree().quit(0 if caught else 1)
 
+func _bark_near(c: Color, target: Color) -> bool:
+	return absf(c.r - target.r) < 0.06 and absf(c.g - target.g) < 0.06 and absf(c.b - target.b) < 0.06
+
+func _palm_trunk_pose(mesh: Mesh) -> Vector4:
+	# x top height, y lean at the top, z foot radius, w mesh height.
+	# Only the added bark colors count, so a textured palm trunk does not.
+	var lo := Color(0.62, 0.32, 0.12)
+	var hi := Color(0.78, 0.46, 0.18)
+	var height := 0.0
+	var top_y := -1.0
+	var top_xz := 0.0
+	var foot_r := 0.0
+	if mesh == null:
+		return Vector4.ZERO
+	for s in mesh.get_surface_count():
+		var arrays: Array = mesh.surface_get_arrays(s)
+		var vert_var = arrays[Mesh.ARRAY_VERTEX]
+		if not (vert_var is PackedVector3Array):
+			continue
+		var verts: PackedVector3Array = vert_var
+		var cols := PackedColorArray()
+		var col_var = arrays[Mesh.ARRAY_COLOR]
+		if col_var is PackedColorArray:
+			cols = col_var
+		for i in verts.size():
+			height = maxf(height, verts[i].y)
+			if i >= cols.size():
+				continue
+			var c: Color = cols[i]
+			if not _bark_near(c, lo) and not _bark_near(c, hi):
+				continue
+			if verts[i].y >= top_y:
+				top_y = verts[i].y
+				top_xz = Vector2(verts[i].x, verts[i].z).length()
+			if verts[i].y < 0.2:
+				foot_r = maxf(foot_r, Vector2(verts[i].x, verts[i].z).length())
+	return Vector4(top_y, top_xz, foot_r, height)
+
 func _bark_crown(mesh: Mesh) -> Vector2:
 	var crown := 0.0
 	var bark := 0.0
@@ -1791,9 +1835,20 @@ func _preview_still() -> void:
 		if id == "habitat" and near:
 			habitat = true
 	print("STILL menu rocket %s habitat %s" % [str(rocket), str(habitat)])
-	var ids := ["jpalm", "jpalmtall", "ppalm", "dpalm", "fernleaf", "fernwide", "jvine", "tree_small", "tree_large", "tree_simple", "hpine", "htree", "roundtree"]
+	var palms := ["jpalm", "jpalmtall", "ppalm", "dpalm", "fernleaf", "fernwide", "jvine"]
+	var trees := ["tree_small", "tree_large", "tree_simple", "hpine", "htree", "roundtree"]
 	var trunk_bad := 0
-	for id in ids:
+	for id in palms:
+		if not kind_by_id.has(id):
+			trunk_bad += 1
+			print("TRUNK missing %s" % id)
+			continue
+		var pose := _palm_trunk_pose(kind_meshes[int(kind_by_id[id])])
+		var ok := pose.x > pose.w * 0.75 and pose.y < pose.x * 0.22 and pose.z < maxf(pose.x * 0.22, 0.02) and pose.z > 0.02
+		if not ok:
+			trunk_bad += 1
+		print("PALM %s top %.3f lean %.3f rad %.3f height %.3f %s" % [id, pose.x, pose.y, pose.z, pose.w, "ok" if ok else "FAIL"])
+	for id in trees:
 		if not kind_by_id.has(id):
 			trunk_bad += 1
 			print("TRUNK missing %s" % id)
@@ -1807,6 +1862,55 @@ func _preview_still() -> void:
 	var ok_all := idle_ok and pause_ok and rocket and habitat and trunk_bad == 0
 	print("STILL_OK" if ok_all else "STILL_FAIL")
 	get_tree().quit(0 if ok_all else 1)
+
+func _preview_scorebit() -> void:
+	start_round(0)
+	var swallowed := 0
+	for o in props:
+		if swallowed >= 4:
+			break
+		if not bool(o.alive) or int(o.mover) == 2:
+			continue
+		if float(o.base) > hole_radius * FIT_RATIO:
+			continue
+		o.sink = -1
+		if not _take_body(o):
+			continue
+		if o.body != null:
+			var b: RigidBody3D = o.body
+			var p: Vector3 = o.pos
+			b.global_position = Vector3(p.x, -3.0, p.z)
+		_drive_body(o)
+		swallowed += 1
+	_refresh_hud()
+	var label := score_lbl.text if score_lbl else ""
+	var match := label == "%d pts" % score
+	print("SCOREBIT score %d label %s eaten %d swallows %d" % [score, label, player_eaten, swallowed])
+	var ok := score > 0 and player_eaten > 0 and match
+	# Retry starts clean, then another bite has to count again.
+	var retry_score := score
+	start_round(0)
+	var again := false
+	for o in props:
+		if not bool(o.alive) or int(o.mover) == 2:
+			continue
+		if float(o.base) > hole_radius * FIT_RATIO:
+			continue
+		o.sink = -1
+		if not _take_body(o):
+			continue
+		if o.body != null:
+			var b2: RigidBody3D = o.body
+			var p2: Vector3 = o.pos
+			b2.global_position = Vector3(p2.x, -3.0, p2.z)
+		_drive_body(o)
+		again = true
+		break
+	_refresh_hud()
+	var retry_ok := again and score > 0 and score_lbl.text == "%d pts" % score
+	print("SCOREBIT retry was %d now %d label %s" % [retry_score, score, score_lbl.text])
+	print("SCOREBIT_OK" if ok and retry_ok else "SCOREBIT_FAIL")
+	get_tree().quit(0 if ok and retry_ok else 1)
 
 func _preview_menu() -> void:
 	_enter_attract(7)
@@ -2843,7 +2947,10 @@ func _focus_canvas() -> void:
 	_steer_cb = JavaScriptBridge.create_callback(_on_web_steer)
 	var window := JavaScriptBridge.get_interface("window")
 	window.__holeSteerCb = _steer_cb
-	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var focus=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointerover',focus,true);var send=function(down,ax,ay,x,y){window.__holeDown=!!down;window.__holeDownAt=performance.now();var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down,ax,ay,x,y,r.width,r.height);};window.addEventListener('pointerdown',function(e){if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;if(e.pointerType==='touch'||e.button!==0)return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch')return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if((e.buttons&1)===0){if(window.__holeAX!==undefined){send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;}return;}if(window.__holeAX===undefined){window.__holeAX=x;window.__holeAY=y;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e.pointerType==='touch')return;if(window.__holeAX===undefined)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);window.addEventListener('blur',function(){if(window.__holeAX===undefined)return;send(0,0,0,0,0);window.__holeAX=undefined;},true);c.addEventListener('pointerleave',function(e){if(e.pointerType==='touch'||(e.buttons&1)!==0||window.__holeAX===undefined)return;send(0,window.__holeAX,window.__holeAY,0,0);window.__holeAX=undefined;},true);var drop=function(){send(0,0,0,0,0);};c.addEventListener('touchend',drop,true);c.addEventListener('touchcancel',drop,true);window.addEventListener('touchend',drop,true);window.addEventListener('touchcancel',drop,true);focus();})();", true)
+	# A hover must not arm the stick. Only pointerdown (left button) or a
+	# real touch index may. pointermove used to start a drag whenever
+	# buttons looked held, and a resting cursor then kept the hole moving.
+	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var armed=false;var pid=-1;var send=function(down,ax,ay,x,y){window.__holeDown=!!down;window.__holeDownAt=performance.now();var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down?1:0,ax||0,ay||0,x||0,y||0,r.width,r.height);};var drop=function(){var ax=window.__holeAX||0,ay=window.__holeAY||0;armed=false;pid=-1;window.__holeAX=undefined;window.__holeAY=undefined;send(0,ax,ay,0,0);};window.addEventListener('pointerdown',function(e){if(e.pointerType==='touch'||e.button!==0)return;if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;armed=true;pid=e.pointerId;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch'||!armed||e.pointerId!==pid)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if((e.buttons&1)===0){drop();return;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e&&e.pointerType==='touch')return;if(!armed)return;if(e&&e.pointerId!==undefined&&pid!==-1&&e.pointerId!==pid)return;drop();};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);window.addEventListener('blur',function(){drop();},true);document.addEventListener('visibilitychange',function(){if(document.hidden)drop();},true);c.addEventListener('pointerleave',function(e){if(e.pointerType==='touch')return;if((e.buttons&1)!==0)return;drop();},true);c.addEventListener('pointerover',function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}},true);})();", true)
 	web_steer = true
 
 func _css_to_view(p: Vector2, css: Vector2) -> Vector2:
@@ -2871,14 +2978,17 @@ func _on_web_steer(args: Array) -> void:
 			_refresh_joystick()
 		return
 	if not down:
-		if joy_held:
-			if mode == "attract" and joy_id == -1 and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
-				_begin_play()
+		var tap := mode == "attract" and joy_id < 0 and joy_held and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE
+		web_pointer_down = false
+		if joy_held or joy_id >= 0 or velocity.length_squared() > 0.0:
 			joy_held = false
 			joy_id = -1
 			velocity = Vector3.ZERO
 			_refresh_joystick()
+		if tap:
+			_begin_play()
 		return
+	web_pointer_down = true
 	if not joy_held or joy_id != -1:
 		if _blocks_world(finger):
 			return
@@ -2901,48 +3011,71 @@ func _apply_shot_stick() -> void:
 	joy_finger = joy_anchor + Vector2(46, -36)
 
 func _steer_button_down() -> bool:
-	# A touch finger steers only while that gesture is still held. A mouse
-	# steers only while the button is down. On web, a lost pointerup can leave
-	# window.__holeDown stuck; Godot reporting the button up overrides it,
-	# so a resting pointer does not keep the hole moving.
-	if joy_id >= 0 and joy_held:
+	# A finger steers only while that touch index is still down. On the web,
+	# a mouse steers only after pointerdown set web_pointer_down. Elsewhere,
+	# the left button has to be down. A hover, or a stuck emulated touch,
+	# does not count.
+	if joy_id >= 0 and joy_held and (touch_ids.has(joy_id) or not web_steer):
 		return true
-	return Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	if web_steer:
+		return web_pointer_down and joy_held and joy_id < 0
+	return joy_id < 0 and joy_held and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 
 func _sim_frozen() -> bool:
 	return paused or get_tree().paused
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_drop_pointer_steer()
+	elif what == NOTIFICATION_WM_MOUSE_EXIT and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_drop_pointer_steer()
+
+func _drop_pointer_steer() -> void:
+	web_pointer_down = false
+	touch_ids.clear()
+	if joy_held or joy_id >= 0 or velocity.length_squared() > 0.0:
+		joy_held = false
+		joy_id = -1
+		velocity = Vector3.ZERO
+		_refresh_joystick()
+
 func _poll_pointer_steer() -> void:
-	# Web drags are delivered by _on_web_steer. Elsewhere, sample the cursor
-	# every frame so a held offset keeps moving even when events are sparse.
-	# A hovering pointer never steers. Releasing the button drops the stick,
-	# including a stuck web flag while the real button is up.
-	if joy_id < 0 and not _steer_button_down():
-		if joy_held or velocity.length_squared() > 0.0:
+	# Web drags arrive from _on_web_steer. A hover never samples the cursor.
+	# Releasing the button, leaving the canvas, or losing focus drops the stick.
+	if web_steer:
+		if web_pointer_down or not touch_ids.is_empty():
+			return
+		if joy_held or joy_id >= 0 or velocity.length_squared() > 0.0:
 			joy_held = false
 			joy_id = -1
 			velocity = Vector3.ZERO
 			_refresh_joystick()
-	if web_steer:
 		return
-	if mode != "play" and mode != "attract":
-		return
-	if mode == "play" and not playing:
-		return
-	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		return
-	var mp := get_viewport().get_mouse_position()
-	if not joy_held or joy_id != -1:
-		if _blocks_world(mp):
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		if mode != "play" and mode != "attract":
 			return
-		joy_held = true
-		joy_id = -1
-		joy_anchor = mp
+		if mode == "play" and not playing:
+			return
+		var mp := get_viewport().get_mouse_position()
+		if not joy_held or joy_id != -1:
+			if _blocks_world(mp):
+				return
+			joy_held = true
+			joy_id = -1
+			joy_anchor = mp
+			joy_finger = mp
+			return
 		joy_finger = mp
+		if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
+			_begin_play()
 		return
-	joy_finger = mp
-	if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
-		_begin_play()
+	if joy_id >= 0 and joy_held:
+		return
+	if joy_held or velocity.length_squared() > 0.0 or joy_id >= 0:
+		joy_held = false
+		joy_id = -1
+		velocity = Vector3.ZERO
+		_refresh_joystick()
 
 func _probe_gate() -> void:
 	var kept := Save.unlocked_level
@@ -4168,14 +4301,13 @@ func _trunk_canopies() -> void:
 		if done.has(mid):
 			kind_meshes[ki] = done[mid]
 			continue
-		var leaned := _lean_canopy(mesh)
+		var leaned := _lean_canopy(mesh, role == "palm")
 		done[mid] = leaned
 		kind_meshes[ki] = leaned
 
-func _lean_canopy(mesh: Mesh) -> Mesh:
-	# Pull every frond into a narrow column, then lean a brown trunk past
-	# that crown. The lean is in mesh space, so instance scale cannot
-	# fold it back into the leaves.
+func _lean_canopy(mesh: Mesh, upright: bool = false) -> Mesh:
+	# Trees keep a gathered crown and a leaned trunk. Palms stay tall:
+	# a slim, mostly upright trunk with the canopy left at the top.
 	if mesh.get_surface_count() < 1:
 		return mesh
 	var src := PackedVector3Array()
@@ -4236,22 +4368,34 @@ func _lean_canopy(mesh: Mesh) -> Mesh:
 		height = maxf(height, v.y)
 	if crown < 0.02:
 		return mesh
-	var column := maxf(crown * 0.12, 0.02)
-	for vi in src.size():
-		var leaf := src[vi]
-		if Vector2(leaf.x, leaf.z).length() > column:
-			leaf.x *= 0.38
-			leaf.z *= 0.38
-			src[vi] = leaf
-	var post := 0.02
-	for v2 in src:
-		post = maxf(post, Vector2(v2.x, v2.z).length())
-	var reach := post * 1.9
-	var aim := Vector3(2.7, 0.0, 1.55).normalized()
-	var lean := aim * reach
-	var foot := aim * reach * 0.2
-	var rad := maxf(post * 0.22, 0.05)
-	var y1 := maxf(height * 0.55, post * 0.8)
+	var lean := Vector3.ZERO
+	var foot := Vector3.ZERO
+	var rad := 0.06
+	var y1 := height
+	if upright:
+		# A few degrees of lean, not a fallen log. The crown stays where the mesh put it.
+		rad = clampf(height * 0.055, 0.05, 0.14)
+		y1 = maxf(height * 0.9, rad * 8.0)
+		var aim := Vector3(0.86, 0.0, 0.42).normalized()
+		lean = aim * (y1 * 0.08)
+		foot = lean * 0.12
+	else:
+		var column := maxf(crown * 0.12, 0.02)
+		for vi in src.size():
+			var leaf := src[vi]
+			if Vector2(leaf.x, leaf.z).length() > column:
+				leaf.x *= 0.38
+				leaf.z *= 0.38
+				src[vi] = leaf
+		var post := 0.02
+		for v2 in src:
+			post = maxf(post, Vector2(v2.x, v2.z).length())
+		var reach := post * 1.9
+		var aim := Vector3(2.7, 0.0, 1.55).normalized()
+		lean = aim * reach
+		foot = aim * reach * 0.2
+		rad = maxf(post * 0.22, 0.05)
+		y1 = maxf(height * 0.55, post * 0.8)
 	var bark_lo := Color(0.62, 0.32, 0.12, 1.0)
 	var bark_hi := Color(0.78, 0.46, 0.18, 1.0)
 	var sides := 8
@@ -7760,20 +7904,28 @@ func _unhandled_input(event: InputEvent) -> void:
 	# first and would start a round from the same tap.
 	if mode == "attract" and (event is InputEventScreenTouch or event is InputEventScreenDrag):
 		return
+	# emulate_touch_from_mouse turns a mouse into ScreenTouch and ScreenDrag.
+	# Those must not steer: a hover can look like a finger. The mouse path
+	# below, and the web pointer tracker, own the button.
+	if (event is InputEventScreenTouch or event is InputEventScreenDrag) and int(event.device) == InputEvent.DEVICE_ID_EMULATION:
+		return
 	if event is InputEventScreenTouch:
 		if event.pressed:
+			touch_ids[event.index] = true
 			joy_held = true
 			joy_id = event.index
 			joy_anchor = event.position
 			joy_finger = event.position
-		elif event.index == joy_id:
-			if mode == "attract" and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
-				_begin_play()
-			joy_held = false
-			joy_id = -1
-			velocity = Vector3.ZERO
+		else:
+			touch_ids.erase(event.index)
+			if event.index == joy_id or touch_ids.is_empty():
+				if mode == "attract" and joy_held and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
+					_begin_play()
+				joy_held = false
+				joy_id = -1
+				velocity = Vector3.ZERO
 		_refresh_joystick()
-	elif event is InputEventScreenDrag and joy_held and event.index == joy_id:
+	elif event is InputEventScreenDrag and touch_ids.has(event.index) and joy_held and event.index == joy_id:
 		joy_finger = event.position
 		if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
 			_begin_play()
@@ -7782,16 +7934,25 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		# Desktop clicks stay mouse events. Touch emulation was eating the first menu tap.
-		if event.pressed:
+		var held_button: bool = (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0
+		if event.pressed and held_button:
 			joy_held = true
 			joy_id = -1
 			joy_anchor = event.position
 			joy_finger = event.position
-		elif joy_id == -1:
-			if mode == "attract" and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
+		elif joy_id < 0:
+			if mode == "attract" and joy_held and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
 				_begin_play()
 			joy_held = false
+			joy_id = -1
+			velocity = Vector3.ZERO
 		_refresh_joystick()
+	elif event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
+		if joy_id < 0 and (joy_held or velocity.length_squared() > 0.0):
+			joy_held = false
+			joy_id = -1
+			velocity = Vector3.ZERO
+			_refresh_joystick()
 	elif event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
 		# A desktop browser can drop the first mousedown while it focuses the
 		# canvas. A held move still steers, same as a touch drag.
@@ -8143,6 +8304,11 @@ func _tick_clear_bar(delta: float) -> void:
 		clear_fill.size = Vector2(inner * toward, maxf(clear_track.size.y - 6.0, 4.0))
 	if clear_lbl:
 		clear_lbl.text = _clear_caption()
+	if score_lbl:
+		var pts_caption := "%d pts" % score
+		if score_lbl.text != pts_caption:
+			score_lbl.text = pts_caption
+			shown_score = score
 	guide_wait = maxf(0.0, guide_wait - delta)
 	if guide_wait <= 0.0:
 		guide_wait = 0.15
@@ -9130,10 +9296,14 @@ func _accum_pace(delta: float) -> void:
 	# Once a second, not every frame. The live page reads window.__holePace.
 	if not pace_ready:
 		pace_from = hole_pos
+		pace_origin = hole_pos
+		pace_far = 0.0
 		pace_ready = true
 		pace_wait = 0.0
 		pace_rival_i = -1
+		_publish_pace(0.0, 0.0, 0.0)
 		return
+	pace_far = maxf(pace_far, _xz_dist(hole_pos, pace_origin))
 	if pace_rival_i < 0 or pace_rival_i >= rivals.size() or not bool(rivals[pace_rival_i].alive):
 		pace_rival_i = -1
 		var best := 9999.0
@@ -9157,11 +9327,17 @@ func _accum_pace(delta: float) -> void:
 		rival_mps = _xz_dist(rivals[pace_rival_i].pos, pace_rival_from) / span
 		cap = _rival_move_speed(rivals[pace_rival_i])
 		pace_rival_from = rivals[pace_rival_i].pos
-	var full := _move_speed()
-	var fps := Engine.get_frames_per_second()
-	JavaScriptBridge.eval("window.__holePace={fps:%d,player:%.3f,full:%.3f,rival:%.3f,cap:%.3f};" % [fps, player_mps, full, rival_mps, cap], true)
+	_publish_pace(player_mps, rival_mps, cap)
 	pace_from = hole_pos
 	pace_wait = 0.0
+
+func _publish_pace(player_mps: float, rival_mps: float, cap: float) -> void:
+	if not OS.has_feature("web"):
+		return
+	var full := _move_speed()
+	var fps := Engine.get_frames_per_second()
+	var held := 1 if _steer_button_down() else 0
+	JavaScriptBridge.eval("window.__holePace={fps:%d,player:%.3f,full:%.3f,rival:%.3f,cap:%.3f,score:%d,x:%.3f,z:%.3f,far:%.3f,clear:%.4f,size:%d,held:%d,label:%s};" % [fps, player_mps, full, rival_mps, cap, score, hole_pos.x, hole_pos.z, pace_far, _clear_ratio(), level + 1, held, JSON.stringify(score_lbl.text if score_lbl else "")], true)
 
 func _process(delta: float) -> void:
 	_announce_web_phase()
@@ -10319,7 +10495,10 @@ func _swallow_done(o: Dictionary) -> void:
 			else:
 				combo = 1
 			combo_left = COMBO_WINDOW
-			var gained := int(round(float(int(o.points)) * _combo_mult()))
+			var pts := int(o.get("points", 0))
+			if pts < 1:
+				pts = 1
+			var gained := int(round(float(pts) * _combo_mult()))
 			score += gained
 			player_eaten += 1
 			_sync_level()
@@ -10556,7 +10735,10 @@ func start_round(index: int) -> void:
 	hole_pos = Vector3.ZERO
 	velocity = Vector3.ZERO
 	joy_held = false
+	web_pointer_down = false
+	touch_ids.clear()
 	pace_ready = false
+	pace_far = 0.0
 	steer_idle = 0.0
 	round_cleared = false
 	round_settled = false
@@ -10620,6 +10802,8 @@ func _enter_attract(index: int) -> void:
 	hole_pos = Vector3.ZERO
 	velocity = Vector3.ZERO
 	joy_held = false
+	web_pointer_down = false
+	touch_ids.clear()
 	round_cleared = false
 	round_settled = false
 	coins_earned = 0
@@ -10770,6 +10954,8 @@ func _open_pause() -> void:
 		return
 	paused = true
 	playing = false
+	web_pointer_down = false
+	touch_ids.clear()
 	joy_held = false
 	joy_id = -1
 	velocity = Vector3.ZERO

@@ -41,4 +41,11 @@ Tracking declaration: the app requests App Tracking Transparency. The prompt tex
 
 Privacy policy URL for both stores: https://jp196400.github.io/hole-arcade/privacy/
 
-Contact on that page is the placeholder `privacy-contact@example.com` until John-paul replaces it.
+## Privacy contact
+
+| Form | Field | Value |
+| --- | --- | --- |
+| Google Play Data safety | Contact email | jpdarby@mail.grokbot.com |
+| App Store privacy | Privacy contact email | jpdarby@mail.grokbot.com |
+
+The same address is the contact on the privacy policy page.

@@ -40,6 +40,8 @@ The first unsigned archive has not been built here. The workflow is ready to dis
 
 ## ATT, AdMob, and SKAdNetwork
 
+App Store privacy contact email: jpdarby@mail.grokbot.com. Use the same address on the privacy policy page and in App Store Connect.
+
 `tools/inject_ios_plist.py` writes these into every exported `Info.plist`:
 
 - `NSUserTrackingUsageDescription`: "Hole Arcade uses this to show more relevant ads. You can still play if you say no."

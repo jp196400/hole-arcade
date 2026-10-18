@@ -62,6 +62,12 @@ Ads are served by Google AdMob and may include mediation partners. The game asks
 
 Music is a CC0 loop. Sound effects are original.
 
+## Privacy contact
+
+jpdarby@mail.grokbot.com
+
+Use this for the Play Data safety contact email and the App Store privacy contact. The privacy policy page uses the same address.
+
 ## Screenshot files
 
 See store/screenshots/. Phone shots are real gameplay frames. The feature graphic is a real gameplay crop with the title set in the game font.
