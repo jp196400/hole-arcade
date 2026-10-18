@@ -14,9 +14,9 @@ const ROAD_STEP := 5
 const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?speed= multiplies this
 const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
-# One hitch must not integrate half a second of stick, and a released
-# pointer must not coast on a leftover velocity.
-const STEER_DT_MAX := 0.5
+# One rendered frame integrates at most 0.05 s of stick. A longer hitch
+# must not jump the hole over a snack, and a released pointer must not coast.
+const STEER_DT_MAX := 0.05
 const STOP_RATE := 34.0
 const CAM_PITCH_DEG := 62.0
 const CAM_PITCH_FAR := 62.0
@@ -1054,6 +1054,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_PAUSABLE
 	randomize()
 	debug_on = _query_debug() and not MobileIds.STORE_BUILD
+	_apply_fps_cap()
 	_prepare_shot()
 	speed_scale = _query_speed()
 	if _query_unlockall():
@@ -1197,6 +1198,8 @@ func _ready() -> void:
 		if close_rest.is_valid_int():
 			close_idx = int(close_rest)
 		call_deferred("_preview_close", close_idx)
+	elif preview == "lowfps":
+		call_deferred("_preview_lowfps")
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
@@ -1862,6 +1865,131 @@ func _preview_still() -> void:
 	var ok_all := idle_ok and pause_ok and rocket and habitat and trunk_bad == 0
 	print("STILL_OK" if ok_all else "STILL_FAIL")
 	get_tree().quit(0 if ok_all else 1)
+
+func _preview_lowfps() -> void:
+	# Huge process steps, the way a 1 fps browser hitch arrives, then real 1/60 steps.
+	start_round(0)
+	Save.first_ad_shown = true
+	player_invuln = 999.0
+	web_steer = true
+	web_pointer_down = false
+	var origin := hole_pos
+	var score0 := score
+	var radius0 := hole_radius
+	var cam0 := cam.position
+	joy_held = true
+	joy_id = -1
+	joy_anchor = Vector2(360.0, 640.0)
+	joy_finger = joy_anchor + Vector2(0.0, -55.0)
+	velocity = Vector3(6.0, 0.0, 4.0)
+	for _frame in 24:
+		_poll_pointer_steer()
+		_process(1.0)
+		for _tick in 8:
+			_physics_process(1.0 / 60.0)
+	var idle_moved := _xz_dist(hole_pos, origin)
+	var cam_moved := Vector2(cam.position.x - cam0.x, cam.position.z - cam0.z).length()
+	var idle_ok := idle_moved < 0.001 and score == score0 and absf(hole_radius - radius0) < 0.001 and cam_moved < 0.001 and not _steer_button_down()
+	print("LOWFPS idle moved %.4f cam %.4f score %d radius %.3f held %s" % [idle_moved, cam_moved, score, hole_radius, str(_steer_button_down())])
+	var snack: Dictionary = {}
+	for o in props:
+		if not bool(o.alive) or bool(o.in_body):
+			continue
+		if float(o.base) > hole_radius * FIT_RATIO:
+			continue
+		if int(o.mover) == 2:
+			continue
+		snack = o
+		break
+	var once_ok := false
+	if not snack.is_empty():
+		var pts := maxi(int(snack.get("points", 1)), 1)
+		snack.sink = -1
+		var before := score
+		var bites0 := player_eaten
+		_swallow_done(snack)
+		snack.alive = true
+		_swallow_done(snack)
+		once_ok = score == before + pts and player_eaten == bites0 + 1
+		print("LOWFPS once +%d score %d -> %d bites %d" % [pts, before, score, player_eaten - bites0])
+	else:
+		print("LOWFPS once missing snack")
+	start_round(0)
+	Save.first_ad_shown = true
+	player_invuln = 999.0
+	for rival in rivals:
+		rival.alive = false
+		rival.respawn = 99999.0
+	var treat: Dictionary = {}
+	for o in props:
+		if bool(o.get("opening_treat", false)):
+			treat = o
+			break
+	web_steer = false
+	joy_id = 1
+	joy_held = true
+	joy_anchor = Vector2(300.0, 400.0)
+	joy_finger = joy_anchor + Vector2(0.0, -JOY_FULL_RADIUS)
+	var slow_score := _lowfps_drag(1.0, 48)
+	var slow_dead := not treat.is_empty() and not bool(treat.alive)
+	var slow_pts := score
+	if not treat.is_empty():
+		treat.alive = true
+		var held_score := score
+		_swallow_done(treat)
+		slow_dead = slow_dead and score == held_score
+	print("LOWFPS drag1 score %d dead %s treat %s" % [slow_score, str(slow_dead), str(int(treat.get("points", -1)) if not treat.is_empty() else -1)])
+	start_round(0)
+	Save.first_ad_shown = true
+	player_invuln = 999.0
+	for rival in rivals:
+		rival.alive = false
+		rival.respawn = 99999.0
+	treat = {}
+	for o in props:
+		if bool(o.get("opening_treat", false)):
+			treat = o
+			break
+	web_steer = false
+	joy_id = 1
+	joy_held = true
+	joy_anchor = Vector2(300.0, 400.0)
+	joy_finger = joy_anchor + Vector2(0.0, -JOY_FULL_RADIUS)
+	var fast_score := _lowfps_drag(1.0 / 60.0, 180)
+	var fast_dead := not treat.is_empty() and not bool(treat.alive)
+	print("LOWFPS drag60 score %d dead %s" % [fast_score, str(fast_dead)])
+	var step_ok := true
+	hole_pos = Vector3.ZERO
+	velocity = Vector3(_move_speed(), 0.0, 0.0)
+	joy_held = true
+	joy_id = 1
+	var cap_pos := hole_pos
+	_move_hole(1.0)
+	var hopped := _xz_dist(hole_pos, cap_pos)
+	var cap_dist := _move_speed() * STEER_DT_MAX + 0.02
+	if hopped > cap_dist:
+		step_ok = false
+	print("LOWFPS step %.3f cap %.3f" % [hopped, cap_dist])
+	var ok := idle_ok and once_ok and slow_score > 0 and slow_dead and fast_score > 0 and fast_dead and step_ok and slow_pts > 0
+	print("LOWFPS_OK" if ok else "LOWFPS_FAIL")
+	get_tree().quit(0 if ok else 1)
+
+func _lowfps_drag(frame_dt: float, frames: int) -> int:
+	var aim := Vector3(0.0, 0.0, -1.0)
+	for o in props:
+		if bool(o.get("opening_treat", false)):
+			aim = o.pos - hole_pos
+			break
+	aim.y = 0.0
+	if aim.length_squared() < 0.0001:
+		aim = Vector3(0.0, 0.0, -1.0)
+	_set_touch_stick(aim)
+	for _frame in frames:
+		_process(frame_dt)
+		var ticks := 8 if frame_dt > 0.2 else 1
+		for _tick in ticks:
+			_physics_process(1.0 / 60.0)
+	return score
 
 func _preview_scorebit() -> void:
 	start_round(0)
@@ -3178,6 +3306,23 @@ func _preview_iap() -> void:
 		print("IAP_WEB granted %s" % str(granted))
 		print("IAP_WEB_OK" if granted else "IAP_WEB_FAIL")
 	get_tree().quit()
+
+func _apply_fps_cap() -> void:
+	if MobileIds.STORE_BUILD:
+		return
+	var search := _web_search()
+	var key := "fps="
+	var at := search.find(key)
+	if at == -1:
+		return
+	var rest := search.substr(at + key.length())
+	var amp := rest.find("&")
+	if amp != -1:
+		rest = rest.substr(0, amp)
+	var cap := int(rest)
+	if cap < 1:
+		return
+	Engine.max_fps = mini(cap, 60)
 
 func _query_preview() -> String:
 	var search := _web_search()
@@ -8119,6 +8264,22 @@ func _stick_velocity() -> Vector3:
 		return Vector3.ZERO
 	return dir.normalized() * _move_speed() * power
 
+func _eat_span(from: Vector3, to: Vector3) -> void:
+	if not playing or _sim_frozen():
+		return
+	var travel := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	var dist := travel.length()
+	if dist < 0.0001:
+		return
+	var rad := maxf(hole_radius, 0.12)
+	var spacing := maxf(rad * 0.45, 0.08)
+	var n := int(ceil(dist / spacing))
+	n = clampi(n, 1, 6)
+	for i in range(n + 1):
+		var t := float(i) / float(n)
+		var p := from.lerp(to, t)
+		_take_covered(p, rad, -1)
+
 func _move_hole(delta: float) -> void:
 	if _sim_frozen():
 		velocity = Vector3.ZERO
@@ -8141,7 +8302,9 @@ func _move_hole(delta: float) -> void:
 		if playing:
 			steer_idle += delta
 		return
-	var step := velocity * minf(maxf(delta, 0.0), STEER_DT_MAX)
+	var step_dt := minf(maxf(delta, 0.0), STEER_DT_MAX)
+	var step := velocity * step_dt
+	var prev := hole_pos
 	var nx := hole_pos.x + step.x
 	var nz := hole_pos.z + step.z
 	if _surf_f(nx, hole_pos.z) != SURF_WATER:
@@ -8151,6 +8314,11 @@ func _move_hole(delta: float) -> void:
 	var lim := CITY_HALF - 0.6
 	hole_pos.x = clampf(hole_pos.x, -lim, lim)
 	hole_pos.z = clampf(hole_pos.z, -lim, lim)
+	# Sample the segment the hole actually crossed. One landing check misses
+	# a snack that sat between the previous spot and this one.
+	var mid := Vector3(hole_pos.x, prev.y, prev.z)
+	_eat_span(prev, mid)
+	_eat_span(mid, hole_pos)
 
 func _refresh_joystick() -> void:
 	if joy_ui:
@@ -9381,9 +9549,9 @@ func _process(delta: float) -> void:
 		frame_delta = 1.0 / 60.0
 		bot_clock += frame_delta
 	_tick_quality(frame_delta)
-	# Hole steering uses the real frame time. A 20fps cap made a slow machine crawl.
+	# Steering, falls, and the camera all see at most one short step per frame.
 	var steer_delta := frame_delta if bot_drive else minf(frame_delta, STEER_DT_MAX)
-	delta = frame_delta if bot_drive else minf(delta, 1.0 / 20.0)
+	delta = frame_delta if bot_drive else minf(delta, STEER_DT_MAX)
 	if mode == "play" or mode == "attract":
 		_poll_pointer_steer()
 	_apply_shot_stick()
@@ -10482,13 +10650,16 @@ func _swallow_done(o: Dictionary) -> void:
 	if o.body != null:
 		var b: RigidBody3D = o.body
 		at = b.global_position
-	if playing and bool(o.alive):
+	var already := bool(o.get("credited", false))
+	if playing and bool(o.alive) and not already:
+		o["credited"] = true
 		clear_eaten += 1
 		_note_clear_mark()
 		var sink := int(o.get("sink", -1))
 		if sink >= 0 and sink < rivals.size() and bool(rivals[sink].alive):
 			_credit_rival(rivals[sink], 1)
-			_sync_level()
+			# A rival snack clears the map. It must not grow the player hole,
+			# or an idle camera dollies out and looks like the hole moved.
 		else:
 			if combo_left > 0.0:
 				combo += 1
