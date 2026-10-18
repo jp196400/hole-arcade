@@ -1867,7 +1867,7 @@ func _preview_still() -> void:
 	get_tree().quit(0 if ok_all else 1)
 
 func _preview_lowfps() -> void:
-	# Huge process steps, the way a 1 fps browser hitch arrives, then real 1/60 steps.
+	# A 1 s process step with a stuck hover must not move the hole or the camera.
 	start_round(0)
 	Save.first_ad_shown = true
 	player_invuln = 999.0
@@ -1895,7 +1895,7 @@ func _preview_lowfps() -> void:
 	for o in props:
 		if not bool(o.alive) or bool(o.in_body):
 			continue
-		if float(o.base) > hole_radius * FIT_RATIO:
+		if float(o.base) > hole_radius * OPEN_FIT:
 			continue
 		if int(o.mover) == 2:
 			continue
@@ -1914,82 +1914,70 @@ func _preview_lowfps() -> void:
 		print("LOWFPS once +%d score %d -> %d bites %d" % [pts, before, score, player_eaten - bites0])
 	else:
 		print("LOWFPS once missing snack")
-	start_round(0)
-	Save.first_ad_shown = true
-	player_invuln = 999.0
-	for rival in rivals:
-		rival.alive = false
-		rival.respawn = 99999.0
-	var treat: Dictionary = {}
-	for o in props:
-		if bool(o.get("opening_treat", false)):
-			treat = o
-			break
-	web_steer = false
-	joy_id = 1
-	joy_held = true
-	joy_anchor = Vector2(300.0, 400.0)
-	joy_finger = joy_anchor + Vector2(0.0, -JOY_FULL_RADIUS)
-	var slow_score := _lowfps_drag(1.0, 48)
-	var slow_dead := not treat.is_empty() and not bool(treat.alive)
-	var slow_pts := score
-	if not treat.is_empty():
-		treat.alive = true
-		var held_score := score
-		_swallow_done(treat)
-		slow_dead = slow_dead and score == held_score
-	print("LOWFPS drag1 score %d dead %s treat %s" % [slow_score, str(slow_dead), str(int(treat.get("points", -1)) if not treat.is_empty() else -1)])
-	start_round(0)
-	Save.first_ad_shown = true
-	player_invuln = 999.0
-	for rival in rivals:
-		rival.alive = false
-		rival.respawn = 99999.0
-	treat = {}
-	for o in props:
-		if bool(o.get("opening_treat", false)):
-			treat = o
-			break
-	web_steer = false
-	joy_id = 1
-	joy_held = true
-	joy_anchor = Vector2(300.0, 400.0)
-	joy_finger = joy_anchor + Vector2(0.0, -JOY_FULL_RADIUS)
-	var fast_score := _lowfps_drag(1.0 / 60.0, 180)
-	var fast_dead := not treat.is_empty() and not bool(treat.alive)
-	print("LOWFPS drag60 score %d dead %s" % [fast_score, str(fast_dead)])
-	var step_ok := true
+	var slow := await _lowfps_drag(1)
+	var fast := await _lowfps_drag(60)
 	hole_pos = Vector3.ZERO
 	velocity = Vector3(_move_speed(), 0.0, 0.0)
 	joy_held = true
 	joy_id = 1
+	web_steer = false
 	var cap_pos := hole_pos
 	_move_hole(1.0)
 	var hopped := _xz_dist(hole_pos, cap_pos)
 	var cap_dist := _move_speed() * STEER_DT_MAX + 0.02
-	if hopped > cap_dist:
-		step_ok = false
+	var step_ok := hopped <= cap_dist and hopped > 0.05
 	print("LOWFPS step %.3f cap %.3f" % [hopped, cap_dist])
-	var ok := idle_ok and once_ok and slow_score > 0 and slow_dead and fast_score > 0 and fast_dead and step_ok and slow_pts > 0
+	var ok := idle_ok and once_ok and bool(slow.ok) and bool(fast.ok) and step_ok
 	print("LOWFPS_OK" if ok else "LOWFPS_FAIL")
 	get_tree().quit(0 if ok else 1)
 
-func _lowfps_drag(frame_dt: float, frames: int) -> int:
+func _lowfps_drag(cap: int) -> Dictionary:
+	start_round(0)
+	Save.first_ad_shown = true
+	player_invuln = 999.0
+	for rival in rivals:
+		rival.alive = false
+		rival.respawn = 99999.0
+	web_steer = false
 	var aim := Vector3(0.0, 0.0, -1.0)
+	var target: Dictionary = {}
+	var best := INF
 	for o in props:
-		if bool(o.get("opening_treat", false)):
-			aim = o.pos - hole_pos
-			break
+		if not bool(o.alive) or bool(o.in_body) or int(o.mover) != 0:
+			continue
+		if not _fits_r(float(o.base), hole_radius):
+			continue
+		var home := Vector2(o.pos.x, o.pos.z).length()
+		if home < 1.1 or home > 6.0 or home >= best:
+			continue
+		best = home
+		target = o
+		aim = o.pos
 	aim.y = 0.0
-	if aim.length_squared() < 0.0001:
-		aim = Vector3(0.0, 0.0, -1.0)
-	_set_touch_stick(aim)
-	for _frame in frames:
-		_process(frame_dt)
-		var ticks := 8 if frame_dt > 0.2 else 1
-		for _tick in ticks:
-			_physics_process(1.0 / 60.0)
-	return score
+	_set_touch_stick(aim - hole_pos)
+	var score0 := score
+	if cap <= 2:
+		# One-second frames. Movement is clamped; the physics server still has to finish the fall.
+		for _frame in 16:
+			_process(1.0)
+		for _frame in 40:
+			await get_tree().physics_frame
+			if not target.is_empty() and not bool(target.alive):
+				break
+	else:
+		for _frame in 180:
+			await get_tree().process_frame
+			if not target.is_empty() and not bool(target.alive):
+				break
+	var gained := score - score0
+	var dead := not target.is_empty() and not bool(target.alive)
+	var replay := score
+	if dead:
+		target.alive = true
+		_swallow_done(target)
+	var once := gained > 0 and score == replay
+	print("LOWFPS drag%d score +%d once %s dead %s pos %.2f %.2f" % [cap, gained, str(once), str(dead), hole_pos.x, hole_pos.z])
+	return {"ok": once and dead, "score": gained}
 
 func _preview_scorebit() -> void:
 	start_round(0)
