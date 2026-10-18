@@ -124,6 +124,7 @@ const CLEAR_COIN_BONUS := 100
 const RIVAL_GROW := 0.36
 const GROUND_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_back, shadows_disabled;
+global uniform float game_time;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec3 openings[8];
 uniform float opening_r[8];
@@ -276,7 +277,7 @@ vec3 theme_ground(vec3 base, vec2 xz, float which) {
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	if (paint_mode > 3.5 && paint_mode < 4.5) {
-		VERTEX.y += sin(TIME * 1.15 + world_pos.x * 0.85) * 0.028 + cos(TIME * 0.9 + world_pos.z * 0.7) * 0.018;
+		VERTEX.y += sin(game_time * 1.15 + world_pos.x * 0.85) * 0.028 + cos(game_time * 0.9 + world_pos.z * 0.7) * 0.018;
 	}
 }
 void fragment() {
@@ -456,7 +457,7 @@ void fragment() {
 			outc = mix(outc, vec3(0.93, 0.97, 1.0), flake * pebble * 0.4);
 		}
 	} else if (paint_mode > 3.5 && paint_mode < 4.5) {
-		vec2 drift = xz * 0.9 + vec2(TIME * 0.24, -TIME * 0.17);
+		vec2 drift = xz * 0.9 + vec2(game_time * 0.24, -game_time * 0.17);
 		float n1 = vnoise(drift * 1.7);
 		float n2 = vnoise(drift * 3.2 + vec2(4.0, 1.5));
 		outc = mix(outc, outc * vec3(0.74, 0.95, 1.08), n1 * 0.38);
@@ -517,7 +518,7 @@ void fragment() {
 		float shore = smoothstep(0.92, 1.12, pd) * (1.0 - smoothstep(1.12, 1.45, pd));
 		if (water_m > 0.001 && rd > 1.55) {
 			vec3 water = mix(vec3(0.05, 0.24, 0.4), vec3(0.14, 0.42, 0.58), shade);
-			vec2 drift = xz * 0.85 + vec2(TIME * 0.24, -TIME * 0.17);
+			vec2 drift = xz * 0.85 + vec2(game_time * 0.24, -game_time * 0.17);
 			float n1 = vnoise(drift * 1.6);
 			float n2 = vnoise(drift * 3.1 + vec2(2.0, 6.0));
 			water = mix(water, water * vec3(0.78, 0.96, 1.08), n1 * 0.45);
@@ -635,15 +636,16 @@ void fragment() {
 """
 const LIFE_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_disabled;
+global uniform float game_time;
 void vertex() {
 	float amp = INSTANCE_CUSTOM.r;
 	float phase = INSTANCE_CUSTOM.g;
 	float spd = max(INSTANCE_CUSTOM.b, 0.8);
 	float h = max(VERTEX.y, 0.0);
-	float wave = sin(TIME * spd + phase) * amp * h;
+	float wave = sin(game_time * spd + phase) * amp * h;
 	VERTEX.x += wave;
-	VERTEX.z += cos(TIME * spd * 0.73 + phase) * amp * h * 0.45;
-	VERTEX.y += sin(TIME * spd * 1.25 + phase) * amp * 0.35;
+	VERTEX.z += cos(game_time * spd * 0.73 + phase) * amp * h * 0.45;
+	VERTEX.y += sin(game_time * spd * 1.25 + phase) * amp * 0.35;
 }
 void fragment() {
 	vec3 src = clamp(COLOR.rgb, vec3(0.0), vec3(1.0));
@@ -657,15 +659,16 @@ void fragment() {
 """
 const VEG_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_disabled;
+global uniform float game_time;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float sway = 0.04;
 varying vec4 vcol;
 void vertex() {
 	vcol = COLOR;
 	float h = clamp(VERTEX.y, 0.0, 4.0);
-	float wave = sin(TIME * 1.25 + VERTEX.x * 1.7 + VERTEX.z * 0.8) * sway * h;
+	float wave = sin(game_time * 1.25 + VERTEX.x * 1.7 + VERTEX.z * 0.8) * sway * h;
 	VERTEX.x += wave;
-	VERTEX.z += cos(TIME * 0.9 + VERTEX.z * 1.3) * sway * h * 0.4;
+	VERTEX.z += cos(game_time * 0.9 + VERTEX.z * 1.3) * sway * h * 0.4;
 }
 void fragment() {
 	vec3 tex = clamp(texture(albedo_tex, UV).rgb, vec3(0.0), vec3(1.0));
@@ -689,6 +692,7 @@ const LIFE_AMP := {
 }
 const HOLE_SHADER := """shader_type spatial;
 render_mode unshaded, cull_disabled, blend_mix, depth_draw_opaque;
+global uniform float game_time;
 uniform vec3 rim_color : source_color = vec3(0.05, 0.86, 1.0);
 uniform vec3 rim_color_b : source_color = vec3(0.8, 0.98, 1.0);
 uniform int pattern = 0;
@@ -715,7 +719,7 @@ void fragment() {
 	pit = mix(pit, vec3(0.11, 0.12, 0.15), smoothstep(0.42, 0.82, t));
 	pit = mix(pit, vec3(0.02, 0.022, 0.03), smoothstep(0.82, 1.0, t) * 0.35);
 	float ang = atan(xz.x, xz.y);
-	float spin = ang + TIME * 1.35 - dist * 7.5;
+	float spin = ang + game_time * 1.35 - dist * 7.5;
 	float arm = pow(clamp(sin(spin * 3.0) * 0.5 + 0.5, 0.0, 1.0), 3.0);
 	arm *= smoothstep(0.08, 0.28, dist) * (1.0 - smoothstep(0.78, 0.96, dist));
 	pit += rim_color * arm * swirl * 0.22;
@@ -767,6 +771,9 @@ var joy_id := -2
 var touch_ids := {}
 var web_pointer_down := false
 var web_steer := false
+var web_drag_blocked := false
+var game_time := 0.0
+var halted_players: Array = []
 var pace_origin := Vector3.ZERO
 var pace_far := 0.0
 var web_phase_live := false
@@ -1059,6 +1066,7 @@ func _ready() -> void:
 	# Swallow, score, and the physics step live on this node. Pausable means
 	# a scene-tree pause freezes them; the pause card opts back in.
 	process_mode = Node.PROCESS_MODE_PAUSABLE
+	_register_game_clock()
 	randomize()
 	debug_on = _query_debug() and not MobileIds.STORE_BUILD
 	_apply_fps_cap()
@@ -1207,6 +1215,8 @@ func _ready() -> void:
 		call_deferred("_preview_close", close_idx)
 	elif preview == "lowfps":
 		call_deferred("_preview_lowfps")
+	elif preview == "drag":
+		call_deferred("_preview_drag")
 	elif preview == "goals":
 		call_deferred("_preview_goals")
 	elif preview.begins_with("play"):
@@ -1827,6 +1837,37 @@ func _preview_still() -> void:
 	var shown0 := clear_shown
 	var score1 := score
 	_open_pause()
+	var clock_paused := float(RenderingServer.global_shader_parameter_get("game_time"))
+	var nub := Node3D.new()
+	add_child(nub)
+	var tw := create_tween()
+	tw.pause_mode = Tween.TWEEN_PAUSE_BOUND
+	tw.tween_property(nub, "position", Vector3(6.0, 0.0, 0.0), 0.05)
+	var host := Node3D.new()
+	add_child(host)
+	var ap := AnimationPlayer.new()
+	ap.process_mode = Node.PROCESS_MODE_ALWAYS
+	host.add_child(ap)
+	var anim := Animation.new()
+	anim.length = 1.0
+	var track := anim.add_track(Animation.TYPE_VALUE)
+	anim.track_set_path(track, NodePath(".:position"))
+	anim.track_insert_key(track, 0.0, Vector3.ZERO)
+	anim.track_insert_key(track, 1.0, Vector3(3.0, 0.0, 0.0))
+	var lib := AnimationLibrary.new()
+	lib.add_animation("wiggle", anim)
+	ap.add_animation_library("", lib)
+	ap.play("wiggle")
+	var stray := Node.new()
+	stray.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(stray)
+	_halt_world_playback()
+	var anim_at := ap.current_animation_position
+	await get_tree().create_timer(0.25).timeout
+	var clock_held := float(RenderingServer.global_shader_parameter_get("game_time"))
+	var freeze_ok := clock_paused > 1.0 and absf(clock_held - clock_paused) < 0.001 and nub.position.length() < 0.01 and absf(ap.current_animation_position - anim_at) < 0.02 and stray.process_mode == Node.PROCESS_MODE_PAUSABLE and pause_layer.process_mode == Node.PROCESS_MODE_ALWAYS and menu_layer.process_mode == Node.PROCESS_MODE_ALWAYS
+	var shaders_ok := LIFE_SHADER.find("TIME") < 0 and VEG_SHADER.find("TIME") < 0 and HOLE_SHADER.find("TIME") < 0 and GROUND_SHADER.find("TIME") < 0 and LIFE_SHADER.find("game_time") >= 0
+	print("STILL freeze clock %.3f -> %.3f tween %.3f anim %.3f shaders %s" % [clock_paused, clock_held, nub.position.length(), ap.current_animation_position, str(shaders_ok)])
 	for _step in 30:
 		_process(1.0)
 		_physics_process(1.0)
@@ -1898,7 +1939,7 @@ func _preview_still() -> void:
 	_settings_back()
 	var menu_back := not get_tree().paused and mode == "attract" and not paused
 	print("STILL menu settings frozen %s back %s" % [str(menu_frozen), str(menu_back)])
-	var ok_all := idle_ok and pause_ok and rocket and habitat and trunk_bad == 0 and settings_ok and menu_frozen and menu_back
+	var ok_all := idle_ok and pause_ok and rocket and habitat and trunk_bad == 0 and settings_ok and menu_frozen and menu_back and freeze_ok and shaders_ok
 	print("STILL_OK" if ok_all else "STILL_FAIL")
 	get_tree().quit(0 if ok_all else 1)
 
@@ -2008,6 +2049,80 @@ func _preview_goals() -> void:
 	print("GOALS round '%s' score %d people %d" % [round_line, round_score, life])
 	var ok := idle_same and spawn_ok and grace_ok and lock_ok and rival_ok and player_ok and gap_ok and big_ok and target_ok and banner_ok
 	print("GOALS_OK" if ok else "GOALS_FAIL")
+	get_tree().quit(0 if ok else 1)
+
+func _preview_drag() -> void:
+	# Press and move are separate frames. Touch stays on ScreenTouch. A hover
+	# and a released stick do not move the hole. The drag hint and top HUD
+	# do not consume the press; the pause button still does.
+	start_round(0)
+	Save.first_ad_shown = true
+	player_invuln = 999.0
+	for rival in rivals:
+		rival.alive = false
+		rival.respawn = 99999.0
+	web_steer = true
+	web_pointer_down = false
+	joy_held = false
+	joy_id = -1
+	drag_hint.visible = true
+	center_pill.visible = true
+	score_pill.visible = true
+	map_pill.visible = true
+	pause_btn.visible = true
+	var filters_ok := drag_hint.mouse_filter == Control.MOUSE_FILTER_IGNORE and center_pill.mouse_filter == Control.MOUSE_FILTER_IGNORE and score_pill.mouse_filter == Control.MOUSE_FILTER_IGNORE and map_pill.mouse_filter == Control.MOUSE_FILTER_IGNORE and drag_pill.mouse_filter == Control.MOUSE_FILTER_IGNORE and pause_btn.mouse_filter == Control.MOUSE_FILTER_STOP
+	var hint_open := not _blocks_world(drag_hint.get_global_rect().get_center()) and not _blocks_world(center_pill.get_global_rect().get_center())
+	var pause_blocks := _blocks_world(pause_btn.get_global_rect().get_center())
+	var origin := hole_pos
+	var down := InputEventScreenTouch.new()
+	down.index = 0
+	down.position = Vector2(360.0, 760.0)
+	down.pressed = true
+	_unhandled_input(down)
+	_process(0.05)
+	var press_still := _xz_dist(hole_pos, origin) < 0.001 and _steer_button_down()
+	var slide := InputEventScreenDrag.new()
+	slide.index = 0
+	slide.position = Vector2(360.0, 680.0)
+	_unhandled_input(slide)
+	_process(0.5)
+	var touch_moved := _xz_dist(hole_pos, origin)
+	var parked := hole_pos
+	var up := InputEventScreenTouch.new()
+	up.index = 0
+	up.position = slide.position
+	up.pressed = false
+	_unhandled_input(up)
+	_process(0.5)
+	var touch_stopped := _xz_dist(hole_pos, parked) < 0.02 and not _steer_button_down()
+	hole_pos = Vector3.ZERO
+	velocity = Vector3.ZERO
+	joy_held = false
+	joy_id = -1
+	web_pointer_down = false
+	var anchor := Vector2(400.0, 820.0)
+	_apply_latched_drag(true, anchor, anchor)
+	_process(0.05)
+	var split_still := _xz_dist(hole_pos, Vector3.ZERO) < 0.001 and _steer_button_down()
+	_apply_latched_drag(true, anchor, anchor + Vector2(0.0, -70.0))
+	_process(0.5)
+	var split_moved := _xz_dist(hole_pos, Vector3.ZERO)
+	var held_at := hole_pos
+	_process(0.5)
+	var kept := _xz_dist(hole_pos, held_at)
+	_apply_latched_drag(false, anchor, anchor)
+	var released_at := hole_pos
+	_process(0.5)
+	var released := _xz_dist(hole_pos, released_at) < 0.02 and not joy_held and not web_pointer_down
+	hole_pos = Vector3.ZERO
+	velocity = Vector3.ZERO
+	_process(1.0)
+	var hover_ok := _xz_dist(hole_pos, Vector3.ZERO) < 0.001 and not _steer_button_down()
+	var touch_ok := press_still and touch_moved > 0.4 and touch_stopped
+	var mouse_ok := split_still and split_moved > 0.4 and kept > 0.2 and released and hover_ok
+	print("DRAG filters %s hint %s pause %s touch %.3f split %.3f kept %.3f" % [str(filters_ok), str(hint_open), str(pause_blocks), touch_moved, split_moved, kept])
+	var ok := filters_ok and hint_open and pause_blocks and touch_ok and mouse_ok
+	print("DRAG_OK" if ok else "DRAG_FAIL")
 	get_tree().quit(0 if ok else 1)
 
 func _preview_lowfps() -> void:
@@ -3207,17 +3322,99 @@ func _preview_eaten() -> void:
 func _focus_canvas() -> void:
 	if not OS.has_feature("web"):
 		return
-	# Desktop browsers drop the first mousedown when the canvas takes focus.
-	# A capture-phase tracker records the press point itself, and setPointerCapture
-	# keeps the gesture alive. Steering then reads that offset every frame.
-	_steer_cb = JavaScriptBridge.create_callback(_on_web_steer)
-	var window := JavaScriptBridge.get_interface("window")
-	window.__holeSteerCb = _steer_cb
-	# A hover must not arm the stick. Only pointerdown (left button) or a
-	# real touch index may. pointermove used to start a drag whenever
-	# buttons looked held, and a resting cursor then kept the hole moving.
-	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var armed=false;var pid=-1;var send=function(down,ax,ay,x,y){window.__holeDown=!!down;window.__holeDownAt=performance.now();var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down?1:0,ax||0,ay||0,x||0,y||0,r.width,r.height);};var drop=function(){var ax=window.__holeAX||0,ay=window.__holeAY||0;armed=false;pid=-1;window.__holeAX=undefined;window.__holeAY=undefined;send(0,ax,ay,0,0);};window.addEventListener('pointerdown',function(e){if(e.pointerType==='touch'||e.button!==0)return;if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;armed=true;pid=e.pointerId;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch'||!armed||e.pointerId!==pid)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if((e.buttons&1)===0){drop();return;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e&&e.pointerType==='touch')return;if(!armed)return;if(e&&e.pointerId!==undefined&&pid!==-1&&e.pointerId!==pid)return;drop();};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);window.addEventListener('blur',function(){drop();},true);document.addEventListener('visibilitychange',function(){if(document.hidden)drop();},true);c.addEventListener('pointerleave',function(e){if(e.pointerType==='touch')return;if((e.buttons&1)!==0)return;drop();},true);c.addEventListener('pointerover',function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}},true);})();", true)
+	# The gesture lives in the page, not in a wasm callback. A 1 fps frame can
+	# sleep for a whole second, and a callback into Godot during that gap is
+	# dropped. pointerdown latches the press; later pointermoves update the
+	# finger even when Firefox on X11 reports buttons 0. The next rendered
+	# frame polls the latch, so the press and the move do not have to share a
+	# frame. Touch stays on Godot's ScreenTouch path.
+	JavaScriptBridge.eval("""
+(function(){
+var c=document.getElementById('canvas');
+if(!c||c.__holeSteer)return;
+c.__holeSteer=1;
+c.setAttribute('tabindex','0');
+var g=window.__holeGesture={down:0,ax:0,ay:0,x:0,y:0,id:0};
+window.__holeSawTouch=0;
+function box(){return c.getBoundingClientRect();}
+function inside(x,y){var r=box();return x>=r.left&&y>=r.top&&x<=r.right&&y<=r.bottom;}
+function publish(){
+  var r=box();
+  window.__holeDown=!!g.down;
+  window.__holeAX=g.ax; window.__holeAY=g.ay;
+  window.__holeX=g.x; window.__holeY=g.y;
+  window.__holeW=r.width; window.__holeH=r.height;
+  window.__holeSeq=g.id;
+}
+function press(x,y){
+  if(!inside(x,y))return;
+  var r=box();
+  var lx=x-r.left, ly=y-r.top;
+  if(!g.down){g.id=(g.id||0)+1; g.ax=lx; g.ay=ly;}
+  g.down=1; g.x=lx; g.y=ly;
+  publish();
+}
+function move(x,y){
+  if(!g.down)return;
+  var r=box();
+  g.x=x-r.left; g.y=y-r.top;
+  publish();
+}
+function release(){
+  if(!g.down)return;
+  g.down=0;
+  publish();
+}
+window.addEventListener('pointerdown',function(e){
+  if(e.pointerType==='touch'){window.__holeSawTouch=1;return;}
+  if(e.button!==0)return;
+  if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;
+  try{c.setPointerCapture(e.pointerId);}catch(err){}
+  press(e.clientX,e.clientY);
+},true);
+window.addEventListener('pointermove',function(e){
+  if(e.pointerType==='touch'||!g.down)return;
+  move(e.clientX,e.clientY);
+},true);
+function pup(e){
+  if(e&&e.pointerType==='touch'){window.__holeSawTouch=0;return;}
+  release();
+}
+window.addEventListener('pointerup',pup,true);
+window.addEventListener('pointercancel',pup,true);
+window.addEventListener('mousedown',function(e){
+  if(window.__holeSawTouch||e.button!==0)return;
+  if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;
+  press(e.clientX,e.clientY);
+},true);
+window.addEventListener('mousemove',function(e){
+  if(window.__holeSawTouch||!g.down)return;
+  move(e.clientX,e.clientY);
+},true);
+window.addEventListener('mouseup',function(e){
+  if(window.__holeSawTouch){window.__holeSawTouch=0;return;}
+  if(e.button!==0)return;
+  release();
+},true);
+window.addEventListener('blur',function(){release();},true);
+document.addEventListener('visibilitychange',function(){if(document.hidden)release();},true);
+c.addEventListener('pointerover',function(){
+  if(document.activeElement===c)return;
+  try{c.focus({preventScroll:true});}catch(err){c.focus();}
+},true);
+})();
+""", true)
 	web_steer = true
+
+func _register_game_clock() -> void:
+	var names: Array = RenderingServer.global_shader_parameter_get_list()
+	if not names.has("game_time"):
+		RenderingServer.global_shader_parameter_add("game_time", RenderingServer.GLOBAL_VAR_TYPE_FLOAT, 0.0)
+	RenderingServer.global_shader_parameter_set("game_time", game_time)
+
+func _advance_game_time(delta: float) -> void:
+	game_time += maxf(delta, 0.0)
+	RenderingServer.global_shader_parameter_set("game_time", game_time)
 
 func _css_to_view(p: Vector2, css: Vector2) -> Vector2:
 	var vp := get_viewport().get_visible_rect().size
@@ -3293,11 +3490,14 @@ func _sim_frozen() -> bool:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		_drop_pointer_steer()
-	elif what == NOTIFICATION_WM_MOUSE_EXIT and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+	elif what == NOTIFICATION_WM_MOUSE_EXIT and not web_steer and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_drop_pointer_steer()
 
 func _drop_pointer_steer() -> void:
 	web_pointer_down = false
+	web_drag_blocked = false
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("(function(){var g=window.__holeGesture;if(!g||!g.down)return;g.down=0;window.__holeDown=false;})()", true)
 	touch_ids.clear()
 	if joy_held or joy_id >= 0 or velocity.length_squared() > 0.0:
 		joy_held = false
@@ -3305,10 +3505,60 @@ func _drop_pointer_steer() -> void:
 		velocity = Vector3.ZERO
 		_refresh_joystick()
 
+func _read_web_gesture() -> void:
+	if not OS.has_feature("web"):
+		return
+	var raw = JavaScriptBridge.eval("(function(){var g=window.__holeGesture;if(!g)return '';return [g.down,g.ax,g.ay,g.x,g.y,window.__holeW||1,window.__holeH||1].join(',');})()", true)
+	var text := str(raw)
+	if text == "" or text == "null":
+		return
+	var parts := text.split(",")
+	if parts.size() < 7:
+		return
+	var css := Vector2(float(parts[5]), float(parts[6]))
+	var anchor := _css_to_view(Vector2(float(parts[1]), float(parts[2])), css)
+	var finger := _css_to_view(Vector2(float(parts[3]), float(parts[4])), css)
+	_apply_latched_drag(int(float(parts[0])) != 0, anchor, finger)
+
+func _apply_latched_drag(down: bool, anchor: Vector2, finger: Vector2) -> void:
+	# A finger already owns the stick. The mouse latch must not steal it.
+	if joy_id >= 0 and touch_ids.has(joy_id):
+		return
+	if not down:
+		web_drag_blocked = false
+		web_pointer_down = false
+		return
+	if web_drag_blocked:
+		return
+	if mode != "play" and mode != "attract":
+		return
+	if mode == "play" and not playing:
+		return
+	if block_start_until_up:
+		return
+	if not joy_held or joy_id != -1:
+		# Only the press point can reject the gesture. A later move across the
+		# HUD keeps the vector that was latched on the way down.
+		if _blocks_world(anchor):
+			web_drag_blocked = true
+			web_pointer_down = false
+			return
+		joy_held = true
+		joy_id = -1
+	web_pointer_down = true
+	joy_anchor = anchor
+	joy_finger = finger
+	_unlock_audio()
+	if mode == "attract" and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
+		_begin_play()
+	_refresh_joystick()
+
 func _poll_pointer_steer() -> void:
-	# Web drags arrive from _on_web_steer. A hover never samples the cursor.
-	# Releasing the button, leaving the canvas, or losing focus drops the stick.
+	# Web drags are polled from the page latch. A hover never samples the cursor.
+	# The last drag vector stays until pointerup, even if the move landed
+	# between rendered frames or reported buttons 0.
 	if web_steer:
+		_read_web_gesture()
 		if web_pointer_down or not touch_ids.is_empty():
 			return
 		if joy_held or joy_id >= 0 or velocity.length_squared() > 0.0:
@@ -7934,9 +8184,25 @@ func _build_ui() -> void:
 	drag_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	drag_hint.visible = false
 	_style_hud(drag_hint, 72)
+	drag_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui.add_child(drag_hint)
+	_pass_play_hud()
 	_refresh_hud()
 	_build_unlock_popup()
+
+func _pass_play_hud() -> void:
+	# Full-screen and top-of-screen HUD must not consume a drag. Buttons stay put.
+	var pass_nodes: Array = [sky_haze, score_pill, map_pill, center_pill, score_lbl, level_lbl, size_badge, size_lbl, clear_lbl, clear_track, clear_fill, next_lbl, next_bg, next_fill, combo_lbl, mile_pill, mile_lbl, kept_lbl, name_lbl, drag_pill, drag_hint, joy_ui, guide_ui, debug_lbl, sha_lbl]
+	for n in pass_nodes:
+		if n is Control:
+			(n as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for tag in rival_labels:
+		if tag is Control:
+			(tag as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for fl in floaters:
+		var lbl = (fl as Dictionary).get("lbl", null)
+		if lbl is Control:
+			(lbl as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func _draw_guide() -> void:
 	if guide_ui == null or not guide_on or cam == null:
@@ -8133,6 +8399,9 @@ func _blocks_world(pos: Vector2) -> bool:
 		return true
 	if pause_btn != null and pause_btn.visible and pos.x >= 0.0 and pause_btn.get_global_rect().has_point(pos):
 		return true
+	# The drag hint and the top HUD sit on top of the world. They are not buttons.
+	if _rect_hit(drag_hint, pos, 0.0) or _rect_hit(drag_pill, pos, 0.0) or _rect_hit(center_pill, pos, 0.0) or _rect_hit(score_pill, pos, 0.0) or _rect_hit(map_pill, pos, 0.0):
+		return false
 	if mode != "attract":
 		return false
 	var hovered := get_viewport().gui_get_hovered_control()
@@ -9718,6 +9987,9 @@ func _process(delta: float) -> void:
 	_sync_pause_button()
 	if _sim_frozen():
 		return
+	# Shader TIME ignores the scene-tree pause. This clock does not, so a
+	# paused or settings frame keeps animals, plants, water, and the hole still.
+	_advance_game_time(delta)
 	var frame_delta := delta
 	if bot_drive:
 		if not bot_step_ready:
@@ -11067,6 +11339,7 @@ func _clear_city() -> void:
 func start_round(index: int) -> void:
 	get_tree().paused = false
 	paused = false
+	_resume_world_playback()
 	_clear_city()
 	map_index = clampi(index, 0, CatalogScript.maps().size() - 1)
 	Save.practice = _practice_level(map_index)
@@ -11137,6 +11410,7 @@ func start_round(index: int) -> void:
 func _enter_attract(index: int) -> void:
 	get_tree().paused = false
 	paused = false
+	_resume_world_playback()
 	_clear_city()
 	Save.practice = false
 	map_index = clampi(index, 0, CatalogScript.maps().size() - 1)
@@ -11316,6 +11590,7 @@ func _open_pause() -> void:
 	velocity = Vector3.ZERO
 	_refresh_joystick()
 	get_tree().paused = true
+	_halt_world_playback()
 	if name_lbl:
 		name_lbl.visible = false
 	_sync_pause_button()
@@ -11327,6 +11602,7 @@ func _resume_pause() -> void:
 		return
 	get_tree().paused = false
 	paused = false
+	_resume_world_playback()
 	playing = true
 	joy_held = false
 	velocity = Vector3.ZERO
@@ -11337,6 +11613,7 @@ func _resume_pause() -> void:
 func _restart_pause() -> void:
 	get_tree().paused = false
 	paused = false
+	_resume_world_playback()
 	if pause_layer:
 		pause_layer.visible = false
 	_request_round(map_index)
@@ -11344,6 +11621,7 @@ func _restart_pause() -> void:
 func _exit_pause() -> void:
 	get_tree().paused = false
 	paused = false
+	_resume_world_playback()
 	if pause_layer:
 		pause_layer.visible = false
 	# The same tap that closed the card must not count as "tap to start".
@@ -12354,6 +12632,35 @@ func _screen_header(title: String) -> void:
 	back.pressed.connect(_show_screen.bind("attract"))
 	_menu_add(back)
 
+func _halt_world_playback() -> void:
+	# Pause and Settings already stop this node's _process. AnimationPlayers
+	# and any stray always-running world nodes pause too. The pause card and
+	# the settings sheet stay always-on so their buttons still click.
+	_halt_walk(self)
+
+func _halt_walk(n: Node) -> void:
+	if n == pause_layer or n == menu_layer:
+		return
+	if n is AnimationPlayer:
+		var ap := n as AnimationPlayer
+		ap.process_mode = Node.PROCESS_MODE_PAUSABLE
+		if ap.is_playing():
+			ap.pause()
+			if not halted_players.has(ap):
+				halted_players.append(ap)
+	elif n != self and n.process_mode == Node.PROCESS_MODE_ALWAYS:
+		n.process_mode = Node.PROCESS_MODE_PAUSABLE
+	for c in n.get_children():
+		_halt_walk(c)
+
+func _resume_world_playback() -> void:
+	for p in halted_players:
+		if is_instance_valid(p) and p is AnimationPlayer:
+			var ap := p as AnimationPlayer
+			if not ap.is_playing():
+				ap.play()
+	halted_players.clear()
+
 func _freeze_for_settings() -> void:
 	# The settings sheet uses the same freeze as the pause card, so animals
 	# and falls stop while it is open.
@@ -12365,10 +12672,12 @@ func _freeze_for_settings() -> void:
 	joy_id = -1
 	velocity = Vector3.ZERO
 	get_tree().paused = true
+	_halt_world_playback()
 
 func _show_screen(which: String) -> void:
 	if which == "menu" or which == "attract":
 		get_tree().paused = false
+		_resume_world_playback()
 		Save.practice = false
 		mode = "attract"
 		playing = false
