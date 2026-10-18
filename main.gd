@@ -37,6 +37,8 @@ const EAT_RATIO := 1.18
 # catches a smaller one slowly instead of racing away.
 const SIZE_SPEED_K := 0.14
 const SIZE_SPEED_CAP := 0.30
+# Equal-size rivals sit under the player. A bigger rival may use its size bonus.
+const RIVAL_CRUISE := 0.93
 # Spawn and revive only. Tester mode and level select use the same window.
 const SPAWN_GRACE := 2.6
 const GROW_MULTIPLE := 10.0
@@ -725,6 +727,8 @@ void fragment() {
 var hole_pos := Vector3.ZERO
 var velocity := Vector3.ZERO
 var joy_held := false
+var steer_idle := 0.0
+var menu_tucks: Array = []
 var joy_anchor := Vector2.ZERO
 var joy_finger := Vector2.ZERO
 var joy_id := -2
@@ -1126,6 +1130,12 @@ func _ready() -> void:
 		call_deferred("_preview_lanes")
 	elif preview == "speed":
 		call_deferred("_preview_speed")
+	elif preview == "idle":
+		call_deferred("_preview_idle")
+	elif preview == "menu":
+		call_deferred("_preview_menu")
+	elif preview == "spacemenu":
+		call_deferred("_enter_attract", 7)
 	elif preview == "treats":
 		call_deferred("_preview_treats")
 	elif preview.begins_with("road"):
@@ -1209,29 +1219,103 @@ func _preview_lanes() -> void:
 		_report_lane("%s-3s" % str(map.get("layout", "")))
 	print("LANE DONE")
 
+func _arm_duel(player_r: float, rival_r: float, gap: float) -> Dictionary:
+	for rival in rivals:
+		rival.alive = false
+	var foe: Dictionary = rivals[0]
+	hole_radius = player_r
+	shown_radius = player_r
+	hole_pos = Vector3.ZERO
+	velocity = Vector3.ZERO
+	foe.alive = true
+	foe.radius = rival_r
+	foe.shown = rival_r
+	foe.grace = 0.0
+	foe.fleeing = true
+	foe.pos = Vector3(gap, 0.0, 0.0)
+	player_invuln = 0.0
+	playing = true
+	mode = "play"
+	round_eaten = ""
+	return foe
+
+func _open_chase(foe: Dictionary, player_hunts: bool, limit: float) -> float:
+	# Straight line on open ground, using the live speed and eat rules.
+	var t := 0.0
+	var dt := 1.0 / 60.0
+	while t < limit:
+		var pspd := _move_speed()
+		var rspd := _rival_move_speed(foe)
+		var foe_pos: Vector3 = foe.pos
+		var dir := foe_pos - hole_pos
+		if dir.length_squared() < 0.0001:
+			dir = Vector3.RIGHT
+		dir = dir.normalized()
+		if player_hunts:
+			hole_pos += dir * pspd * dt
+			foe.pos += dir * rspd * dt
+			_resolve_eats()
+			if not bool(foe.alive):
+				return t + dt
+		else:
+			hole_pos -= dir * pspd * dt
+			foe.pos -= dir * rspd * dt
+			_resolve_eats()
+			if not playing or round_eaten != "":
+				return t + dt
+		t += dt
+	return -1.0
+
 func _preview_speed() -> void:
 	start_round(0)
 	var start_r := hole_radius
 	hole_radius = start_r
 	shown_radius = start_r
 	var mul1 := _size_speed_mul(start_r)
-	var spd1 := _move_speed()
+	var player1 := _move_speed()
+	var equal := {"radius": start_r, "shown": start_r, "speed": 2.22, "fleeing": true}
+	var equal_spd := _rival_move_speed(equal)
+	hole_radius = start_r * 1.3
+	shown_radius = start_r * 1.3
+	var player13 := _move_speed()
+	var flee10 := _rival_move_speed({"radius": start_r, "shown": start_r, "speed": 2.22, "fleeing": true})
+	hole_radius = start_r
+	shown_radius = start_r
+	var rival13 := _rival_move_speed({"radius": start_r * 1.3, "shown": start_r * 1.3, "speed": 2.22, "fleeing": false})
 	hole_radius = start_r * 1.5
 	shown_radius = start_r * 1.5
 	var mul15 := _size_speed_mul(shown_radius)
-	var spd15 := _move_speed()
+	var player15 := _move_speed()
 	var mul_max := _size_speed_mul(maxf(final_radius, start_r * GROW_MULTIPLE))
-	var small := {"radius": start_r, "speed": 2.22, "fleeing": true}
-	var big := {"radius": start_r * 1.5, "speed": 2.22, "fleeing": true}
-	var flee_s := _rival_move_speed(small)
-	var flee_b := _rival_move_speed(big)
-	var player_now := _move_speed()
-	var spd_ratio := spd15 / maxf(spd1, 0.001)
-	print("SPEED x1 mul %.4f spd %.4f | x1.5 mul %.4f spd %.4f | spd_ratio %.4f | max_mul %.4f | flee_small %.4f flee_big %.4f player %.4f" % [mul1, spd1, mul15, spd15, spd_ratio, mul_max, flee_s, flee_b, player_now])
+	var equal_ratio := equal_spd / maxf(player1, 0.001)
+	print("SPEED equal player %.4f rival %.4f ratio %.4f" % [player1, equal_spd, equal_ratio])
+	print("SPEED x1.3 player %.4f flee1.0 %.4f | x1.0 player %.4f rival1.3 %.4f" % [player13, flee10, player1, rival13])
+	print("SPEED x1.5 player %.4f mul %.4f | x1 mul %.4f | max_mul %.4f" % [player15, mul15, mul1, mul_max])
 	var modest := mul15 > mul1 and mul15 <= 1.20 and mul_max >= 1.25 and mul_max <= 1.35
-	modest = modest and spd15 > spd1 and spd_ratio < 1.45
-	modest = modest and flee_s < player_now and flee_s < flee_b
-	modest = modest and absf(flee_b - player_now) / maxf(player_now, 0.001) < 0.04
+	modest = modest and player15 > player1 and player15 / maxf(player1, 0.001) < 1.45
+	modest = modest and equal_spd <= player1 and equal_ratio >= 0.90 and equal_ratio <= 0.95
+	modest = modest and flee10 < player13 and rival13 > player1
+	var size_rel := _size_speed_mul(start_r * 1.3) / maxf(_size_speed_mul(start_r), 0.001)
+	modest = modest and rival13 <= player1 * size_rel * 1.001
+	var foe := _arm_duel(start_r * 1.3, start_r, 4.0)
+	var score0 := score
+	var bites0 := rival_bites
+	var touch := _swallow_reach(_ring_radius(hole_radius, shown_radius), _ring_radius(start_r, start_r)) * 0.45
+	foe.pos = Vector3(touch, 0.0, 0.0)
+	player_invuln = SPAWN_GRACE
+	_resolve_eats()
+	var ate_in_grace := not bool(foe.alive) and score > score0 and rival_bites > bites0 and playing
+	print("EAT_PLAYER grace %s score %d bites %d" % [str(ate_in_grace), score, rival_bites])
+	foe = _arm_duel(start_r * 1.3, start_r, 4.0)
+	var hunt_t := _open_chase(foe, true, 6.0)
+	print("CHASE player_1.3 ate flee_1.0 in %.2f" % hunt_t)
+	foe = _arm_duel(start_r, start_r * 1.3, 4.0)
+	# A 1.3x rival is only its size bonus faster, so a 4 m gap takes longer
+	# than the fleeing-small case. It still has to catch.
+	var caught_t := _open_chase(foe, false, 16.0)
+	print("CHASE rival_1.3 ate player_1.0 in %.2f" % caught_t)
+	var hunted := hunt_t > 0.5 and hunt_t <= 6.0
+	var caught := caught_t > 4.0 and caught_t <= 16.0
 	tester_on = true
 	start_round(3)
 	var grace_set := absf(player_invuln - SPAWN_GRACE) < 0.001 and playing and mode == "play"
@@ -1239,10 +1323,10 @@ func _preview_speed() -> void:
 	var base_r := hole_radius
 	for rival in rivals:
 		rival.alive = false
-	var foe: Dictionary = rivals[0]
+	foe = rivals[0]
 	var rr := base_r * 1.40
 	var old_line := rr * 0.72
-	var reach := _swallow_reach(rr, base_r)
+	var reach := _swallow_reach(_ring_radius(rr, rr), _ring_radius(base_r, base_r))
 	var dist := (old_line + reach) * 0.5
 	foe.alive = true
 	foe.radius = rr
@@ -1273,7 +1357,7 @@ func _preview_speed() -> void:
 	var eaten := mode == "results" and round_eaten != "" and not playing
 	print("EAT_TOUCH eaten %s mode %s by '%s'" % [str(eaten), mode, round_eaten])
 	var past_old := dist > old_line and dist < reach and dist < rr
-	var ok := modest and grace_set and blocked and eaten and past_old
+	var ok := modest and ate_in_grace and hunted and caught and grace_set and blocked and eaten and past_old
 	print("SPEED_OK" if ok else "SPEED_FAIL")
 	get_tree().quit(0 if ok else 1)
 
@@ -1315,13 +1399,97 @@ func _preview_treats() -> void:
 					rocket = o.pos
 					saw = true
 					break
-			if not saw or rocket.x < -2.2:
+			var treat_at := Vector2(float(ground.x), float(ground.z))
+			var gap := Vector2(rocket.x, rocket.z).distance_to(treat_at)
+			var astros := 0
+			for o2 in props:
+				if kind_id_of(int(o2.kind)) != "astro":
+					continue
+				if absf(o2.pos.x) < 8.0 and absf(o2.pos.z) < 8.0:
+					astros += 1
+			var rocket_ok := saw and rocket.x > -2.2 and rocket.z > -4.6 and rocket.z < 2.0 and gap > 2.2 and astros >= 2
+			if not rocket_ok:
 				bad += 1
-				print("ROCKET FAIL at %.2f %.2f" % [rocket.x, rocket.z])
+				print("ROCKET FAIL at %.2f %.2f gap %.2f astros %d" % [rocket.x, rocket.z, gap, astros])
 			else:
-				print("ROCKET OK at %.2f %.2f" % [rocket.x, rocket.z])
+				print("ROCKET OK at %.2f %.2f gap %.2f astros %d" % [rocket.x, rocket.z, gap, astros])
 	print("TREAT_OK" if bad == 0 else "TREAT_FAIL")
 	get_tree().quit(0 if bad == 0 else 1)
+
+func _preview_idle() -> void:
+	start_round(0)
+	joy_held = false
+	velocity = Vector3.ZERO
+	steer_idle = 2.0
+	player_invuln = 0.0
+	for rival in rivals:
+		rival.grace = 0.0
+	var origin := hole_pos
+	var score0 := score
+	var clear0 := clear_eaten
+	var hunter := -1
+	var hunt0 := 0.0
+	var pr := _ring_radius(hole_radius, shown_radius)
+	for i in rivals.size():
+		var rival: Dictionary = rivals[i]
+		var rr := _ring_radius(float(rival.radius), float(rival.shown))
+		if not _can_swallow(rr, pr):
+			continue
+		var d := _xz_dist(rival.pos, hole_pos)
+		if hunter < 0 or d < hunt0:
+			hunter = i
+			hunt0 = d
+	var eaten_by := ""
+	var steps := 12 * 30
+	var dt := 1.0 / 30.0
+	for _step in steps:
+		if not playing:
+			eaten_by = round_eaten
+			break
+		_move_hole(dt)
+		_tick_movers(dt)
+		_tick_rivals(dt)
+		_activate_nearby()
+		if not playing:
+			eaten_by = round_eaten
+			break
+	var moved := _xz_dist(hole_pos, origin)
+	var gained := score - score0
+	var cleared := clear_eaten - clear0
+	var mover_fed := 0
+	for o in movers:
+		if not bool(o.alive) or bool(o.in_body):
+			mover_fed += 1
+	var hunt1 := hunt0
+	if hunter >= 0 and hunter < rivals.size():
+		hunt1 = _xz_dist(rivals[hunter].pos, hole_pos)
+	var closed := hunt0 - hunt1
+	print("IDLE moved %.3f score +%d clear +%d movers %d hunt %d %.1f -> %.1f closed %.1f eaten '%s'" % [moved, gained, cleared, mover_fed, hunter, hunt0, hunt1, closed, eaten_by])
+	var still := moved < 0.2
+	var fed_ok := mover_fed <= 1 and gained < 24
+	var hunted := hunter >= 0 and (closed > 12.0 or hunt1 < 10.0 or eaten_by != "")
+	print("IDLE_OK" if still and fed_ok and hunted else "IDLE_FAIL")
+	get_tree().quit(0 if still and fed_ok and hunted else 1)
+
+func _preview_menu() -> void:
+	_enter_attract(7)
+	var shown := 0
+	var parked := 0
+	for o in treats:
+		if not bool(o.get("opening_treat", false)):
+			continue
+		shown += 1
+		if float(o.pos.y) < -20.0:
+			parked += 1
+	var dim_ok := false
+	if chrome_layer and chrome_layer.visible and chrome_layer.get_child_count() > 0:
+		var veil := chrome_layer.get_child(0)
+		if veil is ColorRect and (veil as ColorRect).color.a > 0.4:
+			dim_ok = true
+	print("MENU treats %d parked %d dim %s" % [shown, parked, str(dim_ok)])
+	var ok := shown > 0 and parked == shown and dim_ok
+	print("MENU_OK" if ok else "MENU_FAIL")
+	get_tree().quit(0 if ok else 1)
 
 func _report_lane(tag: String) -> void:
 	var cars: Array = []
@@ -2338,7 +2506,7 @@ func _focus_canvas() -> void:
 	_steer_cb = JavaScriptBridge.create_callback(_on_web_steer)
 	var window := JavaScriptBridge.get_interface("window")
 	window.__holeSteerCb = _steer_cb
-	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var focus=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointerover',focus,true);var send=function(down,ax,ay,x,y){var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down,ax,ay,x,y,r.width,r.height);};window.addEventListener('pointerdown',function(e){if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;if(e.pointerType==='touch'||e.button!==0)return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch')return;if((e.buttons&1)===0)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if(window.__holeAX===undefined){window.__holeAX=x;window.__holeAY=y;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e.pointerType==='touch')return;if(window.__holeAX===undefined)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);focus();})();", true)
+	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var focus=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointerover',focus,true);var send=function(down,ax,ay,x,y){var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down,ax,ay,x,y,r.width,r.height);};window.addEventListener('pointerdown',function(e){if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;if(e.pointerType==='touch'||e.button!==0)return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch')return;if((e.buttons&1)===0)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if(window.__holeAX===undefined){window.__holeAX=x;window.__holeAY=y;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e.pointerType==='touch')return;if(window.__holeAX===undefined)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);var drop=function(){send(0,0,0,0,0);};c.addEventListener('touchend',drop,true);c.addEventListener('touchcancel',drop,true);window.addEventListener('touchend',drop,true);window.addEventListener('touchcancel',drop,true);focus();})();", true)
 	web_steer = true
 
 func _css_to_view(p: Vector2, css: Vector2) -> Vector2:
@@ -2366,10 +2534,12 @@ func _on_web_steer(args: Array) -> void:
 			_refresh_joystick()
 		return
 	if not down:
-		if joy_id == -1 and joy_held:
-			if mode == "attract" and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
+		if joy_held:
+			if mode == "attract" and joy_id == -1 and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
 				_begin_play()
 			joy_held = false
+			joy_id = -1
+			velocity = Vector3.ZERO
 			_refresh_joystick()
 		return
 	if not joy_held or joy_id != -1:
@@ -3590,11 +3760,20 @@ func _palm_trunk(info: Dictionary, target: float) -> Dictionary:
 	if size.y * scale > 9.0:
 		scale = 9.0 / maxf(size.y, 0.05)
 	scale = maxf(scale, 0.05)
-	# Thick enough that a short palm still shows bark under the crown.
-	var radius := 0.88 / scale
+	# Spread the crown in, then lean a thick trunk out so the overhead
+	# camera sees bark beside the fronds instead of only green blades.
+	var crown := size.y * 0.42
+	for vi in verts.size():
+		if verts[vi].y < crown:
+			continue
+		var leaf := verts[vi]
+		leaf.x *= 0.56
+		leaf.z *= 0.56
+		verts[vi] = leaf
+	var radius := 1.45 / scale
 	var y0 := minf(0.04, size.y * 0.04)
-	var y1 := size.y * 0.9
-	var lean := Vector3(0.55, 0.0, 0.28) / scale
+	var y1 := size.y * 1.02
+	var lean := Vector3(1.25, 0.0, 0.7) / scale
 	var sides := 8
 	var bark_lo := Color(0.55, 0.30, 0.12, 1.0)
 	var bark_hi := Color(0.68, 0.40, 0.16, 1.0)
@@ -5546,14 +5725,18 @@ func _dress_opening(layout: String) -> void:
 			_vista_spot("blossom", Vector3(0.9, 0, 1.8))
 		"space":
 			var pad := [SURF_SAND, SURF_CONCRETE, SURF_DIRT]
-			# Centered and a little further up-screen so the wide rocket stays
-			# inside the opening and clear of the astronauts.
-			_place_id("stackrocket", Vector3(0.0, 0, -6.2), Vector3.ZERO, 0.2, 1.0, Color.WHITE, -1, -1, [], true)
-			_place_id("habitat", Vector3(3.5, 0, -4.1), Vector3.ZERO, 0.5, 1.0, Color.WHITE, -1, -1, [], true)
-			if _place_id("astro", Vector3(1.45, 0, -2.45), Vector3(0.2, 0, 1.0), -1.0, 1.0, Color.WHITE, -1, 1, pad, true):
-				props[props.size() - 1]["walk"] = pad
-			if _place_id("astro", Vector3(-1.4, 0, -2.6), Vector3(-0.2, 0, 1.0), -1.0, 1.0, Color.WHITE, -1, 1, pad, true):
-				props[props.size() - 1]["walk"] = pad
+			# z=-6.2 put the nose under the top HUD. This pad is lower, beside
+			# the opening gem, so the whole rocket sits in the open middle.
+			_place_id("stackrocket", Vector3(2.6, 0, -0.6), Vector3.ZERO, 0.2, 1.0, Color.WHITE, -1, -1, [], true)
+			_place_id("habitat", Vector3(-3.4, 0, -1.2), Vector3.ZERO, 0.5, 1.0, Color.WHITE, -1, -1, [], true)
+			var crew := [Vector3(-1.6, 0, 1.6), Vector3(4.4, 0, 0.6), Vector3(-4.5, 0, 2.2), Vector3(4.6, 0, -5.4), Vector3(-4.2, 0, -5.2)]
+			var crew_n := 0
+			for spot in crew:
+				if crew_n >= 2:
+					break
+				if _place_id("astro", spot, Vector3(0.15, 0, 1.0), 0.4, 1.0, Color.WHITE, -1, 1, pad, true):
+					props[props.size() - 1]["walk"] = pad
+					crew_n += 1
 			_vista_spot("solarpanel", Vector3(4.4, 0, -3.2), 0.4)
 			_vista_spot("solarpanel", Vector3(-4.2, 0, -3.4), 1.0)
 			_vista_spot("satdish", Vector3(2.8, 0, -13.5), 0.6)
@@ -7313,13 +7496,14 @@ func _stick_velocity() -> Vector3:
 func _move_hole(delta: float) -> void:
 	if bot_drive:
 		velocity = _bot_velocity()
-	elif joy_held:
+	elif joy_held and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
 		velocity = _stick_velocity()
+		steer_idle = 0.0
 	else:
-		var alpha := 1.0 - exp(-STOP_RATE * delta)
-		velocity = velocity.lerp(Vector3.ZERO, alpha)
-		if velocity.length_squared() < 0.01:
-			velocity = Vector3.ZERO
+		# No finger, no drift. A released stick stops instead of coasting.
+		velocity = Vector3.ZERO
+		if playing:
+			steer_idle += delta
 	var step := velocity * delta
 	var nx := hole_pos.x + step.x
 	var nz := hole_pos.z + step.z
@@ -7791,15 +7975,17 @@ func _rival_threatened(rival: Dictionary) -> bool:
 	return _xz_dist(rival.pos, hole_pos) < hole_radius + lerpf(16.0, 22.0, _rival_diff())
 
 func _rival_move_speed(rival: Dictionary) -> float:
-	# Same size curve as the player, on this rival's radius. The screen factor
-	# stays the player's, so a small hole is not several times slower just
-	# because the camera has pulled back. Pace and cruise stay within a few
-	# percent. Size is what lets a bigger hole catch a smaller one.
-	var pace := lerpf(0.98, 1.02, clampf((float(rival.get("speed", 2.2)) - 2.05) / 0.40, 0.0, 1.0))
-	var speed := BASE_SPEED * speed_scale * Save.speed_mul() * _screen_speed_factor(shown_radius) * _size_speed_mul(float(rival.radius)) * pace
-	if not bool(rival.get("fleeing", false)):
-		speed *= lerpf(0.97, 0.99, _rival_diff())
-	return speed
+	# Same screen factor as the player, so a small hole is not several times
+	# slower just because the camera pulled back. Equal size stays a little
+	# under the player. A larger rival keeps only its size bonus, never more.
+	var player_spd := _move_speed()
+	var pr := maxf(shown_radius, 0.12)
+	var rr := maxf(float(rival.get("radius", pr)), 0.12)
+	var rel := _size_speed_mul(rr) / maxf(_size_speed_mul(pr), 0.001)
+	var speed := player_spd * rel * RIVAL_CRUISE
+	if rel > 1.0:
+		speed = player_spd * rel
+	return minf(speed, player_spd * rel)
 
 func _rival_avoid(i: int) -> Vector3:
 	var rival: Dictionary = rivals[i]
@@ -7922,9 +8108,13 @@ func _rival_aim(i: int) -> Vector3:
 		var chase_at := Vector3.ZERO
 		var chasing := false
 		var chase_d := 999.0
-		if player_invuln <= 0.0 and radius > hole_radius * chase_ratio:
+		# A rival that can swallow the player hunts across the opening, not
+		# only from a few meters away.
+		var can_eat := _can_swallow(radius, _ring_radius(hole_radius, shown_radius))
+		var hunt := 64.0 if can_eat else chase_range
+		if player_invuln <= 0.0 and (can_eat or radius > hole_radius * chase_ratio):
 			var pd := _xz_dist(pos, hole_pos)
-			if pd < chase_range and pd < chase_d:
+			if pd < hunt and pd < chase_d:
 				chase_d = pd
 				chase_at = hole_pos
 				chasing = true
@@ -7951,10 +8141,25 @@ func _rival_aim(i: int) -> Vector3:
 	var wander := Vector3(cos(float(rival.wander)), 0.0, sin(float(rival.wander)))
 	return _steer_blend(wander, avoid, 0.6)
 
+func _ring_radius(logical: float, shown: float) -> float:
+	var ring := shown if shown > 0.08 else logical
+	return maxf(ring, 0.12)
+
+func _can_swallow(eater_r: float, prey_r: float) -> bool:
+	return eater_r >= prey_r * EAT_RATIO - 0.0001
+
+func _hole_is_idle() -> bool:
+	return playing and not joy_held and steer_idle > 0.75 and velocity.length() < 0.25
+
 func _separate_hole(pos: Vector3, radius: float, ignore: int) -> Vector3:
 	var out := pos
-	var can_eat_player := radius > hole_radius * EAT_RATIO
-	var player_can_eat := hole_radius > radius * EAT_RATIO
+	var pr := _ring_radius(hole_radius, shown_radius)
+	var rr := radius
+	if ignore >= 0 and ignore < rivals.size():
+		var self_r: Dictionary = rivals[ignore]
+		rr = _ring_radius(float(self_r.radius), float(self_r.get("shown", radius)))
+	var can_eat_player := _can_swallow(rr, pr)
+	var player_can_eat := _can_swallow(pr, rr)
 	if not can_eat_player and not player_can_eat and _xz_dist(out, hole_pos) < radius + hole_radius + 0.35:
 		var push := out - hole_pos
 		if push.length_squared() < 0.0001:
@@ -7975,10 +8180,8 @@ func _separate_hole(pos: Vector3, radius: float, ignore: int) -> Vector3:
 	return out
 
 func _swallow_reach(eater_r: float, prey_r: float) -> float:
-	# The player swallows a rival at 0.72 of the eater radius. A rival swallows
-	# the player on that same depth, or once the player's center is inside the
-	# rival by half the player radius, whichever reaches farther. A small lip
-	# still counts a center that has crossed into the rival hole.
+	# Same overlap both ways. 0.72 of the eater, or the prey center inside
+	# the eater by half the prey radius, whichever reaches farther.
 	var deep := eater_r - prey_r * 0.5
 	var inside := eater_r - minf(prey_r * 0.12, 0.4)
 	return maxf(eater_r * 0.72, maxf(deep, inside))
@@ -7986,16 +8189,16 @@ func _swallow_reach(eater_r: float, prey_r: float) -> float:
 func _resolve_player_threat() -> void:
 	if not playing or player_invuln > 0.0:
 		return
+	var pr := _ring_radius(hole_radius, shown_radius)
 	for rival in rivals:
 		if not playing:
 			return
 		if not bool(rival.alive):
 			continue
-		var rr := float(rival.radius)
-		if rr < hole_radius * EAT_RATIO:
+		var rr := _ring_radius(float(rival.radius), float(rival.get("shown", 0.0)))
+		if not _can_swallow(rr, pr):
 			continue
-		var dist := _xz_dist(hole_pos, rival.pos)
-		if dist < _swallow_reach(rr, hole_radius):
+		if _xz_dist(hole_pos, rival.pos) < _swallow_reach(rr, pr):
 			_rival_eats_player(rival)
 			return
 
@@ -8005,12 +8208,13 @@ func _resolve_eats() -> void:
 	_resolve_player_threat()
 	if not playing:
 		return
+	var pr := _ring_radius(hole_radius, shown_radius)
 	var i := 0
 	while i < rivals.size() and playing:
 		var rival: Dictionary = rivals[i]
 		if bool(rival.alive):
-			var dist := _xz_dist(hole_pos, rival.pos)
-			if hole_radius > float(rival.radius) * EAT_RATIO and dist < hole_radius * 0.72:
+			var rr := _ring_radius(float(rival.radius), float(rival.get("shown", 0.0)))
+			if _can_swallow(pr, rr) and _xz_dist(hole_pos, rival.pos) < _swallow_reach(pr, rr):
 				_player_eats_rival(rival)
 		i += 1
 	for a in rivals.size():
@@ -8019,16 +8223,18 @@ func _resolve_eats() -> void:
 		var left: Dictionary = rivals[a]
 		if not bool(left.alive):
 			continue
+		var lr := _ring_radius(float(left.radius), float(left.get("shown", 0.0)))
 		for b in range(a + 1, rivals.size()):
 			var right: Dictionary = rivals[b]
 			if not bool(right.alive):
 				continue
+			var rr2 := _ring_radius(float(right.radius), float(right.get("shown", 0.0)))
 			var gap := _xz_dist(left.pos, right.pos)
-			if float(left.radius) > float(right.radius) * EAT_RATIO and gap < float(left.radius) * 0.72:
+			if _can_swallow(lr, rr2) and gap < _swallow_reach(lr, rr2):
 				_credit_rival(left, 6 + int(float(right.radius) * 4.0))
 				left.pulse = 0.18
 				_kill_rival(right)
-			elif float(right.radius) > float(left.radius) * EAT_RATIO and gap < float(right.radius) * 0.72:
+			elif _can_swallow(rr2, lr) and gap < _swallow_reach(rr2, lr):
 				_credit_rival(right, 6 + int(float(left.radius) * 4.0))
 				right.pulse = 0.18
 				_kill_rival(left)
@@ -8732,6 +8938,12 @@ func _advance_mover(o: Dictionary, delta: float) -> void:
 		dir = dir.rotated(Vector3.UP, randf_range(-0.7, 0.7))
 	if mover == 1 and _surf_f(o.pos.x, o.pos.z) == SURF_ROAD:
 		dir = dir.rotated(Vector3.UP, 1.2)
+	if _hole_is_idle():
+		var away: Vector3 = (o.pos as Vector3) - hole_pos
+		var gap := away.length()
+		var keep := hole_radius + maxf(float(o.base), 0.3) + 0.8
+		if gap < keep:
+			dir = away.normalized() if gap > 0.05 else Vector3(1.0, 0.0, 0.0)
 	var step := maxf(spd * delta, 0.04)
 	var ahead: Vector3 = (o.pos as Vector3) + dir * (step + 0.35)
 	if not _walk_ok(ahead, walk) or _mover_blocked(ahead, int(o.uid)) or _surf_f(ahead.x, ahead.z) == SURF_ROAD:
@@ -8793,6 +9005,12 @@ func _advance_car(o: Dictionary, delta: float) -> void:
 		dir = -dir
 	var side := Vector3(-dir.z, 0.0, dir.x)
 	var pos: Vector3 = sample.pos + side * absf(next_lane)
+	if _hole_is_idle():
+		var away: Vector3 = pos - hole_pos
+		var gap := away.length()
+		var keep := hole_radius + maxf(float(o.base), 0.4) + 1.1
+		if gap < keep and gap > 0.05:
+			pos = hole_pos + away.normalized() * keep
 	if spd > 0.01 and _car_must_wait(o, pos, dir):
 		o.wait = maxf(float(o.wait), 0.08)
 		return
@@ -8871,8 +9089,66 @@ func _note_clear_mark() -> void:
 		clear_mark = mark
 		_toast("%d%% cleared!" % mark)
 
+func _park_instance(o: Dictionary) -> void:
+	if bool(o.get("menu_parked", false)):
+		return
+	o["menu_parked"] = true
+	var saved: Vector3 = o.pos
+	var xf: Transform3D = o.xform
+	menu_tucks.append({"o": o, "pos": saved, "xform": xf})
+	var parked := saved
+	parked.y = -40.0
+	o.pos = parked
+	xf.origin = parked
+	o.xform = xf
+	if bool(o.get("in_mesh", false)):
+		var mm := _mm_of(o)
+		if mm:
+			mm.set_instance_transform(int(o.index), xf)
+
+func _restore_menu_clutter() -> void:
+	for item in menu_tucks:
+		var o: Dictionary = item.o
+		o.pos = item.pos
+		o.xform = item.xform
+		o["menu_parked"] = false
+		if bool(o.get("in_mesh", false)):
+			var mm := _mm_of(o)
+			if mm:
+				mm.set_instance_transform(int(o.index), o.xform)
+	menu_tucks.clear()
+
+func _tuck_menu_clutter() -> void:
+	for o in treats:
+		_park_instance(o)
+	if cam == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	if vp.y < 2.0:
+		return
+	var band := vp.y * 0.46
+	var cx := vp.x * 0.5
+	var half := vp.x * 0.42
+	for o in props:
+		if bool(o.get("treat", false)) or bool(o.get("menu_parked", false)):
+			continue
+		if int(o.get("mover", 0)) != 0:
+			continue
+		if float(o.get("height", 0.0)) < 1.6:
+			continue
+		var top: Vector3 = o.pos + Vector3(0.0, float(o.height) * 0.55, 0.0)
+		if cam.is_position_behind(top):
+			continue
+		var s := cam.unproject_position(top)
+		if s.y < band and absf(s.x - cx) < half:
+			_park_instance(o)
+
 func _tick_treats() -> void:
 	if treats.is_empty():
+		return
+	if mode != "play":
+		for o in treats:
+			_park_instance(o)
 		return
 	var t := float(Time.get_ticks_msec()) / 1000.0
 	for o in treats:
@@ -8931,7 +9207,7 @@ func _physics_process(delta: float) -> void:
 		if player_invuln > 0.0:
 			player_invuln = maxf(0.0, player_invuln - delta)
 		# Every physics tick, including tester mode and a level picked from the menu.
-		_resolve_player_threat()
+		_resolve_eats()
 		_activate_nearby()
 	var i := active.size() - 1
 	while i >= 0:
@@ -9044,6 +9320,8 @@ func _take_covered(sp: Vector3, rad: float, sink: int) -> void:
 			continue
 		if bool(o.get("opening_treat", false)) and _xz_dist(o.pos, sp) > rad * 0.92:
 			continue
+		if sink < 0 and _hole_is_idle() and int(o.get("mover", 0)) != 0:
+			continue
 		var base := float(o.base)
 		if not _fits_r(base, rad):
 			continue
@@ -9068,6 +9346,8 @@ func _take_partials(centers: Array, radii: Array, sinks: Array) -> void:
 				if seen.has(uid) or bool(o.in_body) or not bool(o.alive):
 					continue
 				if bool(o.get("opening_treat", false)) and _xz_dist(o.pos, sp) > rad * 0.92:
+					continue
+				if int(sinks[s]) < 0 and _hole_is_idle() and int(o.get("mover", 0)) != 0:
 					continue
 				seen[uid] = true
 				var base := float(o.base)
@@ -9627,6 +9907,7 @@ func _apply_skin() -> void:
 func _clear_city() -> void:
 	playing = false
 	joy_held = false
+	menu_tucks.clear()
 	for o in active.duplicate():
 		if o.body != null:
 			_pool_body(o.body)
@@ -9668,6 +9949,7 @@ func start_round(index: int) -> void:
 	hole_pos = Vector3.ZERO
 	velocity = Vector3.ZERO
 	joy_held = false
+	steer_idle = 0.0
 	round_cleared = false
 	round_settled = false
 	coins_earned = 0
@@ -9748,6 +10030,7 @@ func _enter_attract(index: int) -> void:
 	hole_mesh.visible = true
 	hole_mesh.position = hole_pos
 	_snap_camera()
+	_tuck_menu_clutter()
 	_warm_view()
 	over_panel.visible = false
 	hud_layer.visible = true
@@ -9775,6 +10058,7 @@ func _begin_play() -> void:
 		return
 	if _blocks_world(get_viewport().get_mouse_position()):
 		return
+	_restore_menu_clutter()
 	mode = "play"
 	playing = true
 	_mark_web_phase()
@@ -10520,6 +10804,11 @@ func _build_chrome() -> void:
 	chrome_layer = CanvasLayer.new()
 	chrome_layer.layer = 6
 	add_child(chrome_layer)
+	var veil := ColorRect.new()
+	veil.color = Color(0.04, 0.07, 0.12, 0.56)
+	veil.set_anchors_preset(Control.PRESET_FULL_RECT)
+	veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chrome_layer.add_child(veil)
 	coin_pill = _make_pill(true)
 	coin_pill.anchor_left = 0.0
 	coin_pill.anchor_top = 0.0
