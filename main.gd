@@ -14,9 +14,10 @@ const ROAD_STEP := 5
 const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?speed= multiplies this
 const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
-# One rendered frame integrates at most 0.05 s of stick. A longer hitch
-# must not jump the hole over a snack, and a released pointer must not coast.
+# One substep is at most 0.05 s so the hole cannot jump a snack.
+# A hitch spends the real frame, in those slices, up to half a second.
 const STEER_DT_MAX := 0.05
+const STEER_FRAME_CAP := 0.5
 const STOP_RATE := 34.0
 const CAM_PITCH_DEG := 62.0
 const CAM_PITCH_FAR := 62.0
@@ -55,7 +56,12 @@ const RIVAL_GROW_RATE := 0.65
 const RIVAL_TURN := 1.55
 const RIVAL_TURN_THREAT := 2.3
 # Spawn and revive only. Tester mode and level select use the same window.
-const SPAWN_GRACE := 2.6
+# Rivals cannot eat the player during this window.
+const SPAWN_GRACE := 10.0
+# Hunters may still roam and eat the map, but they do not path toward the player.
+const HUNT_LOCK := 15.0
+# Opening rivals and respawns stay at least this far from the player.
+const RIVAL_MIN_SPAWN := 25.0
 const GROW_MULTIPLE := 10.0
 const SCREEN_FRAC_START := 0.18
 const SCREEN_FRAC_END := 0.36
@@ -853,6 +859,7 @@ var rival_mm: MultiMesh
 var rival_labels: Array = []
 var rival_rings: Array = []
 var player_invuln := 0.0
+var hunt_lock := 0.0
 var grow_drive := false
 var grow_arm := false
 var opening_centers := PackedVector3Array()
@@ -1200,6 +1207,8 @@ func _ready() -> void:
 		call_deferred("_preview_close", close_idx)
 	elif preview == "lowfps":
 		call_deferred("_preview_lowfps")
+	elif preview == "goals":
+		call_deferred("_preview_goals")
 	elif preview.begins_with("play"):
 		var rest := preview.substr(4)
 		var idx := start_idx
@@ -1540,6 +1549,7 @@ func _preview_idle() -> void:
 	velocity = Vector3.ZERO
 	steer_idle = 2.0
 	player_invuln = 0.0
+	hunt_lock = 0.0
 	for rival in rivals:
 		rival.grace = 0.0
 	var origin := hole_pos
@@ -1827,6 +1837,27 @@ func _preview_still() -> void:
 	if took:
 		pause_ok = pause_ok and bool(victim.alive) and victim.body != null
 	print("STILL pause tree %s score %d clear %d radius %.3f shown %.3f alive %s" % [str(get_tree().paused), score, clear_eaten, hole_radius, clear_shown, str(bool(victim.get("alive", false)))])
+	_open_settings_from_pause()
+	var held_o: Dictionary = {}
+	for o in movers:
+		if bool(o.alive) and not bool(o.in_body) and _xz_dist(o.pos, hole_pos) > 12.0:
+			held_o = o
+			break
+	var held_pos := Vector3.ZERO
+	if not held_o.is_empty():
+		held_pos = held_o.pos
+	var score_s := score
+	for _sheet in 10:
+		_process(1.0)
+		_physics_process(1.0)
+		_tick_movers(1.0)
+	var held_move := 0.0
+	if not held_o.is_empty():
+		held_move = _xz_dist(held_o.pos, held_pos)
+	var settings_ok := mode == "settings" and get_tree().paused and paused and score == score_s and held_move < 0.001
+	_settings_back()
+	settings_ok = settings_ok and mode == "play" and paused and get_tree().paused and not playing
+	print("STILL settings tree %s mode %s moved %.4f score %d" % [str(get_tree().paused), mode, held_move, score])
 	_enter_attract(7)
 	var rocket := false
 	var habitat := false
@@ -1862,9 +1893,122 @@ func _preview_still() -> void:
 		if not ok:
 			trunk_bad += 1
 		print("TRUNK %s crown %.3f bark %.3f %s" % [id, radii.x, radii.y, "ok" if ok else "FAIL"])
-	var ok_all := idle_ok and pause_ok and rocket and habitat and trunk_bad == 0
+	_open_settings_menu()
+	var menu_frozen := get_tree().paused and mode == "settings" and paused
+	_settings_back()
+	var menu_back := not get_tree().paused and mode == "attract" and not paused
+	print("STILL menu settings frozen %s back %s" % [str(menu_frozen), str(menu_back)])
+	var ok_all := idle_ok and pause_ok and rocket and habitat and trunk_bad == 0 and settings_ok and menu_frozen and menu_back
 	print("STILL_OK" if ok_all else "STILL_FAIL")
 	get_tree().quit(0 if ok_all else 1)
+
+func _tally_snap() -> Dictionary:
+	var snap := {}
+	for k in Save.TALLY_KEYS:
+		snap[k] = int(Save.tallies.get(k, 0))
+	return snap
+
+func _preview_goals() -> void:
+	# Lifetime skin counters follow the player's own swallows. A fresh Farm
+	# Valley round, rival snacks, and the props already on the map do not.
+	Save.wipe()
+	start_round(0)
+	_refresh_hud()
+	var fresh_line := next_lbl.text if next_lbl else ""
+	var fresh := _tally_snap()
+	var people_need := int(Save.progress_for("people:5000").need)
+	var score0 := score
+	for _tick in 180:
+		_physics_process(1.0 / 60.0)
+		_process(1.0 / 60.0)
+	var after_idle := _tally_snap()
+	var idle_same := after_idle == fresh and score == score0 and playing and round_eaten == ""
+	var min_spawn := 999.0
+	for rival in rivals:
+		min_spawn = minf(min_spawn, _xz_dist(rival.pos, Vector3.ZERO))
+	var spawn_ok := min_spawn >= RIVAL_MIN_SPAWN - 0.05
+	var grace_ok := player_invuln > 6.0 and hunt_lock > 11.0
+	var kept_alive: Array = []
+	for o in props:
+		kept_alive.append(bool(o.alive))
+		o.alive = false
+	for i in rivals.size():
+		if i == 7:
+			continue
+		rivals[i].alive = false
+		rivals[i].respawn = 9999.0
+	var dribble: Dictionary = rivals[7]
+	dribble.alive = true
+	dribble.grace = 0.0
+	dribble.pos = Vector3(30.0, 0.0, 0.0)
+	dribble.wander = 0.0
+	dribble.aim = Vector3(1.0, 0.0, 0.0)
+	dribble.shown = dribble.radius
+	hole_pos = Vector3.ZERO
+	hole_radius = _start_radius()
+	shown_radius = hole_radius
+	player_invuln = 0.0
+	hunt_lock = HUNT_LOCK
+	var away := _rival_aim(7)
+	hunt_lock = 0.0
+	var toward := _rival_aim(7)
+	var lock_ok := away.x > 0.5 and toward.x < -0.5
+	for i in props.size():
+		props[i].alive = bool(kept_alive[i])
+	var person: Dictionary = {}
+	var person2: Dictionary = {}
+	for o in props:
+		var id := kind_id_of(int(o.kind))
+		if id != "person_a" and id != "person_b" and id != "person_c":
+			continue
+		if not bool(o.alive):
+			continue
+		if person.is_empty():
+			person = o
+		elif person2.is_empty():
+			person2 = o
+			break
+	var people_before := int(Save.tallies.get("people", 0))
+	var rival_score := score
+	var rival_ok := false
+	if not person.is_empty():
+		person.sink = 7
+		dribble.alive = true
+		_swallow_done(person)
+		rival_ok = int(Save.tallies.get("people", 0)) == people_before and score == rival_score
+	dribble.alive = false
+	var player_ok := false
+	if not person2.is_empty():
+		person2.sink = -1
+		var bites0 := player_eaten
+		_swallow_done(person2)
+		player_ok = int(Save.tallies.get("people", 0)) == people_before + 1 and score > rival_score and player_eaten == bites0 + 1
+	_refresh_hud()
+	var earned_line := next_lbl.text if next_lbl else ""
+	hole_pos = Vector3(22.0, 0.0, -18.0)
+	var gap_ok := true
+	for _try in 6:
+		_respawn_rival(dribble)
+		if _xz_dist(dribble.pos, hole_pos) < RIVAL_MIN_SPAWN - 0.05:
+			gap_ok = false
+	var big_ok := true
+	start_round(0)
+	var start_r := _start_radius()
+	for rival in rivals:
+		if float(rival.radius) < start_r * 1.08:
+			big_ok = false
+	var round_score := score
+	var life := int(Save.tallies.get("people", 0))
+	_refresh_hud()
+	var round_line := next_lbl.text if next_lbl else ""
+	var target_ok := people_need == 5000
+	var banner_ok := fresh_line.find("1 / 5,000") < 0 and life == 1 and round_score == 0 and round_line.find("People eaten") >= 0 and round_line.find("5,000") >= 0 and earned_line.find("5,000") >= 0
+	print("GOALS idle %s spawn %.1f grace %s lock %s rival %s player %s gap %s big %s need %d" % [str(idle_same), min_spawn, str(grace_ok), str(lock_ok), str(rival_ok), str(player_ok), str(gap_ok), str(big_ok), people_need])
+	print("GOALS fresh '%s'" % fresh_line)
+	print("GOALS round '%s' score %d people %d" % [round_line, round_score, life])
+	var ok := idle_same and spawn_ok and grace_ok and lock_ok and rival_ok and player_ok and gap_ok and big_ok and target_ok and banner_ok
+	print("GOALS_OK" if ok else "GOALS_FAIL")
+	get_tree().quit(0 if ok else 1)
 
 func _preview_lowfps() -> void:
 	# A 1 s process step with a stuck hover must not move the hole or the camera.
@@ -1926,8 +2070,14 @@ func _preview_lowfps() -> void:
 	var hopped := _xz_dist(hole_pos, cap_pos)
 	var cap_dist := _move_speed() * STEER_DT_MAX + 0.02
 	var step_ok := hopped <= cap_dist and hopped > 0.05
-	print("LOWFPS step %.3f cap %.3f" % [hopped, cap_dist])
-	var ok := idle_ok and once_ok and bool(slow.ok) and bool(fast.ok) and step_ok
+	var burst_from := hole_pos
+	var burst_speed := _move_speed()
+	_process(1.0)
+	var burst := _xz_dist(hole_pos, burst_from)
+	var burst_cap := burst_speed * STEER_FRAME_CAP * 1.45 + 0.2
+	var burst_ok := burst >= burst_speed * 0.35 and burst <= burst_cap
+	print("LOWFPS step %.3f cap %.3f frame %.3f framecap %.3f" % [hopped, cap_dist, burst, burst_cap])
+	var ok := idle_ok and once_ok and bool(slow.ok) and bool(fast.ok) and step_ok and burst_ok
 	print("LOWFPS_OK" if ok else "LOWFPS_FAIL")
 	get_tree().quit(0 if ok else 1)
 
@@ -8268,6 +8418,29 @@ func _eat_span(from: Vector3, to: Vector3) -> void:
 		var p := from.lerp(to, t)
 		_take_covered(p, rad, -1)
 
+func _steer_frame(budget: float) -> void:
+	if _sim_frozen():
+		velocity = Vector3.ZERO
+		return
+	if bot_drive:
+		_move_hole(minf(maxf(budget, 0.0), STEER_DT_MAX))
+		return
+	# Zero input is zero movement. Do not spend the hitch standing still in a loop.
+	if not _steer_button_down():
+		if joy_id < 0:
+			joy_held = false
+		velocity = Vector3.ZERO
+		if playing:
+			steer_idle += maxf(budget, 0.0)
+		return
+	var left := minf(maxf(budget, 0.0), STEER_FRAME_CAP)
+	while left > 0.000001:
+		if not playing or _sim_frozen():
+			break
+		var step := minf(left, STEER_DT_MAX)
+		_move_hole(step)
+		left -= step
+
 func _move_hole(delta: float) -> void:
 	if _sim_frozen():
 		velocity = Vector3.ZERO
@@ -8680,7 +8853,7 @@ func _spawn_rivals() -> void:
 	var n := RIVAL_NAMES.size()
 	for i in n:
 		var ang := TAU * float(i) / float(n) + 0.41
-		var ring := 38.0 + float(i % 6) * 6.5
+		var ring := maxf(38.0 + float(i % 6) * 6.5, RIVAL_MIN_SPAWN)
 		var spot := Vector3(cos(ang) * ring, 0.0, sin(ang) * ring)
 		var guard := 0
 		while _surf_f(spot.x, spot.z) == SURF_WATER and guard < 8:
@@ -8943,7 +9116,9 @@ func _rival_aim(i: int) -> Vector3:
 		# only from a few meters away.
 		var can_eat := _can_swallow(radius, _ring_radius(hole_radius, shown_radius))
 		var hunt := 64.0 if can_eat else chase_range
-		if player_invuln <= 0.0 and (can_eat or radius > hole_radius * chase_ratio):
+		# Opening lock: they can still eat each other and the map, just not the player.
+		var may_hunt_player := player_invuln <= 0.0 and hunt_lock <= 0.0
+		if may_hunt_player and (can_eat or radius > hole_radius * chase_ratio):
 			var pd := _xz_dist(pos, hole_pos)
 			if pd < hunt and pd < chase_d:
 				chase_d = pd
@@ -9128,13 +9303,27 @@ func _kill_rival(rival: Dictionary) -> void:
 
 func _respawn_rival(rival: Dictionary) -> void:
 	var ang := randf() * TAU
-	var ring := 16.0 + randf() * 42.0
-	var pos := Vector3(cos(ang) * ring, 0.0, sin(ang) * ring)
+	var pos := hole_pos
 	var guard := 0
-	while _surf_f(pos.x, pos.z) == SURF_WATER and guard < 6:
-		ring *= 0.7
-		pos = Vector3(cos(ang) * ring, 0.0, sin(ang) * ring)
+	while guard < 10:
+		var ring := RIVAL_MIN_SPAWN + randf() * 40.0
+		var cand := hole_pos + Vector3(cos(ang) * ring, 0.0, sin(ang) * ring)
+		var lim := CITY_HALF - 1.6
+		cand.x = clampf(cand.x, -lim, lim)
+		cand.z = clampf(cand.z, -lim, lim)
+		if _xz_dist(cand, hole_pos) >= RIVAL_MIN_SPAWN - 0.05 and _surf_f(cand.x, cand.z) != SURF_WATER:
+			pos = cand
+			break
+		ang += 0.65
 		guard += 1
+	if _xz_dist(pos, hole_pos) < RIVAL_MIN_SPAWN - 0.05:
+		var away := pos - hole_pos
+		if away.length_squared() < 0.01:
+			away = Vector3(cos(ang), 0.0, sin(ang))
+		pos = hole_pos + away.normalized() * RIVAL_MIN_SPAWN
+		var lim2 := CITY_HALF - 1.6
+		pos.x = clampf(pos.x, -lim2, lim2)
+		pos.z = clampf(pos.z, -lim2, lim2)
 	rival.pos = pos
 	var live := maxf(hole_radius, 0.2)
 	var restart := live * randf_range(1.04, 1.14)
@@ -9537,9 +9726,9 @@ func _process(delta: float) -> void:
 		frame_delta = 1.0 / 60.0
 		bot_clock += frame_delta
 	_tick_quality(frame_delta)
-	# Steering, falls, and the camera all see at most one short step per frame.
-	var steer_delta := frame_delta if bot_drive else minf(frame_delta, STEER_DT_MAX)
-	delta = frame_delta if bot_drive else minf(delta, STEER_DT_MAX)
+	# Keep at most half a second of a hitch. Steering slices that into 0.05 s steps.
+	var sim_delta := frame_delta if bot_drive else minf(maxf(frame_delta, 0.0), STEER_FRAME_CAP)
+	delta = sim_delta
 	if mode == "play" or mode == "attract":
 		_poll_pointer_steer()
 	_apply_shot_stick()
@@ -9572,7 +9761,7 @@ func _process(delta: float) -> void:
 					grow_arm = false
 					_grow_drive_step(delta)
 			else:
-				_move_hole(steer_delta)
+				_steer_frame(sim_delta)
 			_tick_movers(delta)
 			_activate_nearby()
 			if OS.has_feature("web"):
@@ -10139,6 +10328,8 @@ func _physics_process(delta: float) -> void:
 	if playing:
 		if player_invuln > 0.0:
 			player_invuln = maxf(0.0, player_invuln - delta)
+		if hunt_lock > 0.0:
+			hunt_lock = maxf(0.0, hunt_lock - delta)
 		# Fixed 60 Hz. A 120 Hz frame must not add an extra rival step.
 		_tick_rivals(delta)
 		_activate_nearby()
@@ -10644,10 +10835,12 @@ func _swallow_done(o: Dictionary) -> void:
 		clear_eaten += 1
 		_note_clear_mark()
 		var sink := int(o.get("sink", -1))
-		if sink >= 0 and sink < rivals.size() and bool(rivals[sink].alive):
-			_credit_rival(rivals[sink], 1)
+		if sink >= 0:
 			# A rival snack clears the map. It must not grow the player hole,
-			# or an idle camera dollies out and looks like the hole moved.
+			# add score, or move a lifetime skin counter — even if that rival
+			# is already gone when the prop finishes falling.
+			if sink < rivals.size() and bool(rivals[sink].alive):
+				_credit_rival(rivals[sink], 1)
 		else:
 			if combo_left > 0.0:
 				combo += 1
@@ -10910,6 +11103,7 @@ func start_round(index: int) -> void:
 	_tally_clear()
 	_sync_level()
 	player_invuln = SPAWN_GRACE
+	hunt_lock = HUNT_LOCK
 	continue_used = false
 	rivals_bitten = {}
 	round_eaten = ""
@@ -10980,6 +11174,7 @@ func _enter_attract(index: int) -> void:
 		_tally_clear()
 		_sync_level()
 	player_invuln = 0.0
+	hunt_lock = 0.0
 	hole_mesh.visible = true
 	hole_mesh.position = hole_pos
 	_snap_camera()
@@ -11024,6 +11219,7 @@ func _begin_play() -> void:
 	hole_open = hole_radius
 	round_settled = false
 	player_invuln = SPAWN_GRACE
+	hunt_lock = HUNT_LOCK
 	continue_used = false
 	rivals_bitten = {}
 	round_eaten = ""
@@ -12158,8 +12354,21 @@ func _screen_header(title: String) -> void:
 	back.pressed.connect(_show_screen.bind("attract"))
 	_menu_add(back)
 
+func _freeze_for_settings() -> void:
+	# The settings sheet uses the same freeze as the pause card, so animals
+	# and falls stop while it is open.
+	paused = true
+	playing = false
+	web_pointer_down = false
+	touch_ids.clear()
+	joy_held = false
+	joy_id = -1
+	velocity = Vector3.ZERO
+	get_tree().paused = true
+
 func _show_screen(which: String) -> void:
 	if which == "menu" or which == "attract":
+		get_tree().paused = false
 		Save.practice = false
 		mode = "attract"
 		playing = false
@@ -12176,6 +12385,8 @@ func _show_screen(which: String) -> void:
 		_set_chrome(true)
 		_sync_pause_button()
 		return
+	if which == "settings":
+		_freeze_for_settings()
 	mode = which
 	playing = false
 	_mark_web_phase()
@@ -12545,6 +12756,9 @@ func _return_to_pause() -> void:
 	playing = false
 	paused = true
 	joy_held = false
+	joy_id = -1
+	velocity = Vector3.ZERO
+	get_tree().paused = true
 	ad_hold = false
 	if hud_layer:
 		hud_layer.visible = true
