@@ -12,6 +12,9 @@ const ROAD_STEP := 5
 const BASE_SPEED := 3.6  # world units / second at full stick, smallest hole; ?speed= multiplies this
 const JOY_DEADZONE := 14.0
 const JOY_FULL_RADIUS := 56.0
+# One hitch must not integrate half a second of stick, and a released
+# pointer must not coast on a leftover velocity.
+const STEER_DT_MAX := 0.5
 const STOP_RATE := 34.0
 const CAM_PITCH_DEG := 62.0
 const CAM_PITCH_FAR := 62.0
@@ -32,7 +35,7 @@ const FIT_RATIO := 0.84
 # A prop falls when its footprint sits inside the opening, not a smaller inner circle.
 const OPEN_FIT := 0.97
 # One hole must be this much larger before it can swallow the other.
-const EAT_RATIO := 1.18
+const EAT_RATIO := 1.10
 # Bigger holes are a little faster. The bonus caps near +30% so a large hole
 # catches a smaller one slowly instead of racing away.
 const SIZE_SPEED_K := 0.14
@@ -40,8 +43,11 @@ const SIZE_SPEED_CAP := 0.30
 # Fractions of the player's current full-touch speed. A bigger hunter
 # stays under the hunt cap. There is no flee dash and no rubber-band boost.
 const RIVAL_CRUISE := 0.75
-const RIVAL_FLEE := 0.80
+const RIVAL_FLEE := 0.75
 const RIVAL_HUNT := 0.85
+# An edible rival grows from its own bites at about two thirds of the
+# player's growth, so an active player can open a 10% lead.
+const RIVAL_GROW_RATE := 0.65
 # Radians per second. Turn rate is scaled by delta so 120 Hz does not zigzag.
 const RIVAL_TURN := 1.55
 const RIVAL_TURN_THREAT := 2.3
@@ -644,7 +650,9 @@ const VEG_SHADER := """shader_type spatial;
 render_mode diffuse_lambert, cull_disabled;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float sway = 0.04;
+varying vec4 vcol;
 void vertex() {
+	vcol = COLOR;
 	float h = clamp(VERTEX.y, 0.0, 4.0);
 	float wave = sin(TIME * 1.25 + VERTEX.x * 1.7 + VERTEX.z * 0.8) * sway * h;
 	VERTEX.x += wave;
@@ -652,9 +660,11 @@ void vertex() {
 }
 void fragment() {
 	vec3 tex = clamp(texture(albedo_tex, UV).rgb, vec3(0.0), vec3(1.0));
+	float bark = smoothstep(0.08, 0.22, vcol.r - max(vcol.g, vcol.b));
+	vec3 src = mix(tex, clamp(vcol.rgb, vec3(0.0), vec3(1.0)), bark);
 	float ao = clamp(NORMAL.y * 0.35 + 0.78, 0.62, 1.0);
 	float fres = pow(1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0), 2.4);
-	ALBEDO = clamp(tex * ao + tex * fres * 0.06, vec3(0.0), vec3(1.0));
+	ALBEDO = clamp(src * ao + src * fres * 0.06, vec3(0.0), vec3(1.0));
 	ROUGHNESS = 0.8;
 	SPECULAR = 0.04;
 }
@@ -1031,6 +1041,9 @@ const PropKitScript = preload("res://props_kit.gd")
 const ThemeMeshScript = preload("res://theme_meshes.gd")
 
 func _ready() -> void:
+	# Swallow, score, and the physics step live on this node. Pausable means
+	# a scene-tree pause freezes them; the pause card opts back in.
+	process_mode = Node.PROCESS_MODE_PAUSABLE
 	randomize()
 	debug_on = _query_debug()
 	speed_scale = _query_speed()
@@ -1145,6 +1158,10 @@ func _ready() -> void:
 		call_deferred("_preview_speed")
 	elif preview == "idle":
 		call_deferred("_preview_idle")
+	elif preview == "still":
+		call_deferred("_preview_still")
+	elif preview == "chase":
+		call_deferred("_preview_chase")
 	elif preview == "menu":
 		call_deferred("_preview_menu")
 	elif preview == "spacemenu":
@@ -1554,6 +1571,233 @@ func _preview_idle() -> void:
 	var hunted := hunter >= 0 and (closed > 12.0 or hunt1 < 10.0 or eaten_by != "")
 	print("IDLE_OK" if still and fed_ok and hunted else "IDLE_FAIL")
 	get_tree().quit(0 if still and fed_ok and hunted else 1)
+
+func _set_touch_stick(dir: Vector3) -> void:
+	var screen := Vector2(0.0, -1.0)
+	if cam != null:
+		var basis := cam.global_transform.basis
+		var right := Vector3(basis.x.x, 0.0, basis.x.z)
+		var forward := Vector3(-basis.z.x, 0.0, -basis.z.z)
+		if right.length_squared() > 0.0001:
+			right = right.normalized()
+		else:
+			right = Vector3.RIGHT
+		if forward.length_squared() > 0.0001:
+			forward = forward.normalized()
+		else:
+			forward = Vector3(0.0, 0.0, -1.0)
+		var flat := Vector3(dir.x, 0.0, dir.z)
+		if flat.length_squared() < 0.0001:
+			flat = Vector3(0.0, 0.0, -1.0)
+		flat = flat.normalized()
+		screen = Vector2(flat.dot(right), -flat.dot(forward))
+		if screen.length_squared() < 0.0001:
+			screen = Vector2(0.0, -1.0)
+		else:
+			screen = screen.normalized()
+	joy_held = true
+	joy_id = 0
+	joy_anchor = Vector2(360.0, 700.0)
+	joy_finger = joy_anchor + screen * JOY_FULL_RADIUS
+
+func _playlike_aim() -> Vector3:
+	var pr := _ring_radius(hole_radius, shown_radius)
+	var best_d := INF
+	var at := Vector3.ZERO
+	var edible := false
+	for rival in rivals:
+		if not bool(rival.alive):
+			continue
+		var rr := _ring_radius(float(rival.radius), float(rival.shown))
+		if not _can_swallow(pr, rr):
+			continue
+		var d := _xz_dist(hole_pos, rival.pos)
+		if d < best_d:
+			best_d = d
+			at = rival.pos
+			edible = true
+	# Graze props first, the way a person does. Only steer onto a green rival
+	# after that opening, so the catch is not an instant beeline.
+	if play_age < 60.0:
+		edible = false
+	if edible:
+		var toward := at - hole_pos
+		toward.y = 0.0
+		if toward.length_squared() > 0.04:
+			return toward.normalized()
+	var food := _nearest_edible()
+	var step := food - hole_pos
+	step.y = 0.0
+	if step.length_squared() < 0.04:
+		return Vector3(1.0, 0.0, 0.0)
+	return step.normalized()
+
+func _log_hole_sizes(tag: String) -> void:
+	var pr := _ring_radius(hole_radius, shown_radius)
+	var best_name := "-"
+	var best_ratio := 0.0
+	var big_name := "-"
+	var big_ratio := 99.0
+	var edible := 0
+	var threat := 0
+	var green := ""
+	for rival in rivals:
+		if not bool(rival.alive):
+			continue
+		var rr := _ring_radius(float(rival.radius), float(rival.shown))
+		var ratio := pr / maxf(rr, 0.001)
+		if ratio > best_ratio:
+			best_ratio = ratio
+			best_name = str(rival.name)
+		if ratio < big_ratio:
+			big_ratio = ratio
+			big_name = str(rival.name)
+		var cue := _rival_cue(rival)
+		if _can_swallow(pr, rr):
+			edible += 1
+			if green == "":
+				green = str(rival.name)
+		elif _can_swallow(rr, pr):
+			threat += 1
+		if cue.g > 0.8 and green == "":
+			green = str(rival.name)
+	if big_ratio > 90.0:
+		big_ratio = 0.0
+	print("SIZE %s age %.1f player %.3f shown %.3f best %s x%.3f biggest %s x%.3f edible %d threat %d green %s bites %d props %d" % [tag, play_age, hole_radius, pr, best_name, best_ratio, big_name, big_ratio, edible, threat, green, rival_bites, player_eaten])
+
+func _preview_chase() -> void:
+	# Real play loop on Farm Valley: touch stick, props first, then a green rival.
+	start_round(0)
+	playing = true
+	mode = "play"
+	player_invuln = SPAWN_GRACE
+	Engine.time_scale = 8.0
+	var first := -1.0
+	var next_log := 0.0
+	var wall := Time.get_ticks_msec()
+	_log_hole_sizes("start")
+	while play_age < 90.0 and Time.get_ticks_msec() - wall < 150000:
+		_set_touch_stick(_playlike_aim())
+		await get_tree().process_frame
+		if rival_bites > 0 and first < 0.0:
+			first = play_age
+			_log_hole_sizes("eat")
+			break
+		if play_age + 0.001 >= next_log:
+			_log_hole_sizes("t%.0f" % next_log)
+			next_log += 10.0
+	if first < 0.0:
+		_log_hole_sizes("end")
+	var caught := first > 0.0 and first <= 90.0
+	print("CHASE first %.2f bites %d props %d age %.1f" % [first, rival_bites, player_eaten, play_age])
+	print("CHASE_OK" if caught else "CHASE_FAIL")
+	Engine.time_scale = 1.0
+	get_tree().quit(0 if caught else 1)
+
+func _bark_crown(mesh: Mesh) -> Vector2:
+	var crown := 0.0
+	var bark := 0.0
+	if mesh == null:
+		return Vector2.ZERO
+	for s in mesh.get_surface_count():
+		var arrays: Array = mesh.surface_get_arrays(s)
+		var vert_var = arrays[Mesh.ARRAY_VERTEX]
+		if not (vert_var is PackedVector3Array):
+			continue
+		var verts: PackedVector3Array = vert_var
+		var cols := PackedColorArray()
+		var col_var = arrays[Mesh.ARRAY_COLOR]
+		if col_var is PackedColorArray:
+			cols = col_var
+		for i in verts.size():
+			var reach := Vector2(verts[i].x, verts[i].z).length()
+			var brown := false
+			if i < cols.size():
+				var c: Color = cols[i]
+				brown = c.r > 0.45 and c.r > c.g * 1.15 and c.r > c.b * 1.15
+			if brown:
+				bark = maxf(bark, reach)
+			else:
+				crown = maxf(crown, reach)
+	return Vector2(crown, bark)
+
+func _preview_still() -> void:
+	# 1 fps steps, button up, a stuck stick and leftover velocity.
+	start_round(0)
+	Save.first_ad_shown = true
+	web_steer = true
+	var origin := hole_pos
+	var score0 := score
+	joy_held = true
+	joy_id = -1
+	joy_anchor = Vector2(360.0, 640.0)
+	joy_finger = joy_anchor + Vector2(0.0, -60.0)
+	velocity = Vector3(6.0, 0.0, 4.0)
+	for _step in 120:
+		_poll_pointer_steer()
+		_move_hole(1.0)
+		_process(1.0)
+	var moved := _xz_dist(hole_pos, origin)
+	var idle_ok := moved < 0.05 and score == score0 and velocity.length() < 0.01 and not joy_held
+	print("STILL idle moved %.4f score %d -> %d vel %.3f held %s" % [moved, score0, score, velocity.length(), str(joy_held)])
+	var victim: Dictionary = {}
+	for o in props:
+		if not bool(o.alive) or bool(o.in_body):
+			continue
+		if _xz_dist(o.pos, hole_pos) < 8.0:
+			continue
+		victim = o
+		break
+	var took := false
+	if not victim.is_empty():
+		victim.sink = -1
+		took = _take_body(victim)
+		if victim.body != null:
+			var bp: Vector3 = victim.pos
+			(victim.body as RigidBody3D).global_position = Vector3(bp.x, -3.0, bp.z)
+	clear_shown = 0.27
+	var clear0 := clear_eaten
+	var radius0 := hole_radius
+	var shown0 := clear_shown
+	var score1 := score
+	_open_pause()
+	for _step in 30:
+		_process(1.0)
+		_physics_process(1.0)
+		_tick_clear_bar(1.0)
+		if took:
+			_drive_body(victim)
+	var pause_ok := took and get_tree().paused and score == score1 and clear_eaten == clear0 and absf(hole_radius - radius0) < 0.0001 and absf(clear_shown - shown0) < 0.0001
+	if took:
+		pause_ok = pause_ok and bool(victim.alive) and victim.body != null
+	print("STILL pause tree %s score %d clear %d radius %.3f shown %.3f alive %s" % [str(get_tree().paused), score, clear_eaten, hole_radius, clear_shown, str(bool(victim.get("alive", false)))])
+	_enter_attract(7)
+	var rocket := false
+	var habitat := false
+	for o in props:
+		var id := kind_id_of(int(o.kind))
+		var near: bool = o.pos.y > -5.0 and Vector2(o.pos.x, o.pos.z).length() < 12.0
+		if id == "layrocket" and near:
+			rocket = true
+		if id == "habitat" and near:
+			habitat = true
+	print("STILL menu rocket %s habitat %s" % [str(rocket), str(habitat)])
+	var ids := ["jpalm", "jpalmtall", "ppalm", "dpalm", "fernleaf", "fernwide", "jvine", "tree_small", "tree_large", "tree_simple", "hpine", "htree", "roundtree"]
+	var trunk_bad := 0
+	for id in ids:
+		if not kind_by_id.has(id):
+			trunk_bad += 1
+			print("TRUNK missing %s" % id)
+			continue
+		var mesh: Mesh = kind_meshes[int(kind_by_id[id])]
+		var radii := _bark_crown(mesh)
+		var ok := radii.x > 0.02 and radii.y > radii.x * 1.25
+		if not ok:
+			trunk_bad += 1
+		print("TRUNK %s crown %.3f bark %.3f %s" % [id, radii.x, radii.y, "ok" if ok else "FAIL"])
+	var ok_all := idle_ok and pause_ok and rocket and habitat and trunk_bad == 0
+	print("STILL_OK" if ok_all else "STILL_FAIL")
+	get_tree().quit(0 if ok_all else 1)
 
 func _preview_menu() -> void:
 	_enter_attract(7)
@@ -2590,7 +2834,7 @@ func _focus_canvas() -> void:
 	_steer_cb = JavaScriptBridge.create_callback(_on_web_steer)
 	var window := JavaScriptBridge.get_interface("window")
 	window.__holeSteerCb = _steer_cb
-	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var focus=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointerover',focus,true);var send=function(down,ax,ay,x,y){var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down,ax,ay,x,y,r.width,r.height);};window.addEventListener('pointerdown',function(e){if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;if(e.pointerType==='touch'||e.button!==0)return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch')return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if((e.buttons&1)===0){if(window.__holeAX!==undefined){send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;}return;}if(window.__holeAX===undefined){window.__holeAX=x;window.__holeAY=y;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e.pointerType==='touch')return;if(window.__holeAX===undefined)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);window.addEventListener('blur',function(){if(window.__holeAX===undefined)return;send(0,0,0,0,0);window.__holeAX=undefined;},true);c.addEventListener('pointerleave',function(e){if(e.pointerType==='touch'||(e.buttons&1)!==0||window.__holeAX===undefined)return;send(0,window.__holeAX,window.__holeAY,0,0);window.__holeAX=undefined;},true);var drop=function(){send(0,0,0,0,0);};c.addEventListener('touchend',drop,true);c.addEventListener('touchcancel',drop,true);window.addEventListener('touchend',drop,true);window.addEventListener('touchcancel',drop,true);focus();})();", true)
+	JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');if(!c||c.__holeSteer)return;c.__holeSteer=1;c.setAttribute('tabindex','0');var focus=function(){if(document.activeElement===c)return;try{c.focus({preventScroll:true});}catch(e){c.focus();}};c.addEventListener('pointerover',focus,true);var send=function(down,ax,ay,x,y){window.__holeDown=!!down;window.__holeDownAt=performance.now();var r=c.getBoundingClientRect();var cb=window.__holeSteerCb;if(!cb)return;cb(down,ax,ay,x,y,r.width,r.height);};window.addEventListener('pointerdown',function(e){if(e.target&&e.target.closest&&e.target.closest('#update-pill'))return;if(e.pointerType==='touch'||e.button!==0)return;var r=c.getBoundingClientRect();if(e.clientX<r.left||e.clientY<r.top||e.clientX>r.right||e.clientY>r.bottom)return;try{c.setPointerCapture(e.pointerId);}catch(err){}var x=e.clientX-r.left,y=e.clientY-r.top;window.__holeAX=x;window.__holeAY=y;send(1,x,y,x,y);},true);window.addEventListener('pointermove',function(e){if(e.pointerType==='touch')return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;if((e.buttons&1)===0){if(window.__holeAX!==undefined){send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;}return;}if(window.__holeAX===undefined){window.__holeAX=x;window.__holeAY=y;}send(1,window.__holeAX,window.__holeAY,x,y);},true);var up=function(e){if(e.pointerType==='touch')return;if(window.__holeAX===undefined)return;var r=c.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;send(0,window.__holeAX,window.__holeAY,x,y);window.__holeAX=undefined;};window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);window.addEventListener('blur',function(){if(window.__holeAX===undefined)return;send(0,0,0,0,0);window.__holeAX=undefined;},true);c.addEventListener('pointerleave',function(e){if(e.pointerType==='touch'||(e.buttons&1)!==0||window.__holeAX===undefined)return;send(0,window.__holeAX,window.__holeAY,0,0);window.__holeAX=undefined;},true);var drop=function(){send(0,0,0,0,0);};c.addEventListener('touchend',drop,true);c.addEventListener('touchcancel',drop,true);window.addEventListener('touchend',drop,true);window.addEventListener('touchcancel',drop,true);focus();})();", true)
 	web_steer = true
 
 func _css_to_view(p: Vector2, css: Vector2) -> Vector2:
@@ -2639,15 +2883,29 @@ func _on_web_steer(args: Array) -> void:
 			_begin_play()
 	_refresh_joystick()
 
+func _steer_button_down() -> bool:
+	# A touch finger steers only while that gesture is still held. A mouse
+	# steers only while the button is down. On web, a lost pointerup can leave
+	# window.__holeDown stuck; Godot reporting the button up overrides it,
+	# so a resting pointer does not keep the hole moving.
+	if joy_id >= 0 and joy_held:
+		return true
+	return Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+
+func _sim_frozen() -> bool:
+	return paused or get_tree().paused
+
 func _poll_pointer_steer() -> void:
 	# Web drags are delivered by _on_web_steer. Elsewhere, sample the cursor
 	# every frame so a held offset keeps moving even when events are sparse.
-	# A hovering pointer never steers. Releasing the button drops the stick.
-	if joy_id < 0 and joy_held and not web_steer and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		joy_held = false
-		joy_id = -1
-		velocity = Vector3.ZERO
-		_refresh_joystick()
+	# A hovering pointer never steers. Releasing the button drops the stick,
+	# including a stuck web flag while the real button is up.
+	if joy_id < 0 and not _steer_button_down():
+		if joy_held or velocity.length_squared() > 0.0:
+			joy_held = false
+			joy_id = -1
+			velocity = Vector3.ZERO
+			_refresh_joystick()
 	if web_steer:
 		return
 	if mode != "play" and mode != "attract":
@@ -3794,102 +4052,129 @@ func _register_scaled(id: String, info: Dictionary, target: float, role: String,
 
 func _register_glb(id: String, path: String, target: float, role: String, points: int) -> void:
 	var info := _load_model(path, true)
-	if id in ["jpalm", "jpalmtall", "ppalm", "dpalm"]:
-		info = _palm_trunk(info, target)
 	_register_scaled(id, info, target, role, points)
 
-func _palm_trunk(info: Dictionary, target: float) -> Dictionary:
-	# Kenney palms read as flat green shards from above. A thick warm trunk
-	# is added in mesh space so the top-down camera sees bark, not a sliver.
-	var mesh := info.mesh as ArrayMesh
-	if mesh == null or mesh.get_surface_count() < 1:
-		return info
-	var arrays: Array = mesh.surface_get_arrays(0)
-	var vert_var = arrays[Mesh.ARRAY_VERTEX]
-	if not (vert_var is PackedVector3Array):
-		return info
-	var verts: PackedVector3Array = vert_var
-	if verts.is_empty():
-		return info
-	var indices := PackedInt32Array()
-	var index_var = arrays[Mesh.ARRAY_INDEX]
-	if index_var is PackedInt32Array:
-		indices = index_var
-	if indices.is_empty():
-		indices.resize(verts.size())
-		for vi in verts.size():
-			indices[vi] = vi
-	var norms := PackedVector3Array()
-	var norm_var = arrays[Mesh.ARRAY_NORMAL]
-	if norm_var is PackedVector3Array:
-		norms = norm_var
-	var cols := PackedColorArray()
-	var col_var = arrays[Mesh.ARRAY_COLOR]
-	if col_var is PackedColorArray:
-		cols = col_var
-	var uvs := PackedVector2Array()
-	var uv_var = arrays[Mesh.ARRAY_TEX_UV]
-	if uv_var is PackedVector2Array:
-		uvs = uv_var
-	var tangents := PackedFloat32Array()
-	var tan_var = arrays[Mesh.ARRAY_TANGENT]
-	if tan_var is PackedFloat32Array:
-		tangents = tan_var
-	if cols.size() != verts.size():
-		cols = PackedColorArray()
-		cols.resize(verts.size())
-		cols.fill(Color(0.32, 0.52, 0.2, 1.0))
-	var has_n := norms.size() == verts.size()
-	var has_u := uvs.size() == verts.size()
-	var has_t := tangents.size() == verts.size() * 4
-	var size: Vector3 = info.size
-	var measured := maxf(float(info.base), 0.02)
-	var half_vis := maxf(size.x, size.z) * 0.42
-	var basis := maxf(measured, half_vis)
-	var scale := target / basis
-	if size.y * scale > 9.0:
-		scale = 9.0 / maxf(size.y, 0.05)
-	scale = maxf(scale, 0.05)
-	# Spread the crown in, then lean a thick trunk out so the overhead
-	# camera sees bark beside the fronds instead of only green blades.
-	var crown := size.y * 0.30
-	for vi in verts.size():
-		if verts[vi].y < crown:
+func _trunk_canopies() -> void:
+	# Trunks are added after registration so the eat footprint stays put.
+	# Shared meshes (fernwide clones fernleaf) are leaned once.
+	var skip := {"dcactus": true, "dtallcac": true, "cactusflower": true}
+	var done := {}
+	for id in kind_by_id.keys():
+		var sid := str(id)
+		if skip.has(sid):
 			continue
-		var leaf := verts[vi]
-		leaf.x *= 0.28
-		leaf.z *= 0.28
-		leaf.y = crown + (leaf.y - crown) * 0.52
-		verts[vi] = leaf
-	var radius := 1.15 / scale
-	var y0 := 0.0
-	var y1 := size.y * 0.72
-	var lean := Vector3(2.7, 0.0, 1.55) / scale
-	var foot := lean * 0.48
+		var ki := int(kind_by_id[sid])
+		if ki < 0 or ki >= prop_defs.size():
+			continue
+		var role := str(prop_defs[ki][5])
+		if role != "palm" and role != "tree":
+			continue
+		var mesh: Mesh = kind_meshes[ki]
+		if mesh == null:
+			continue
+		var mid := mesh.get_instance_id()
+		if done.has(mid):
+			kind_meshes[ki] = done[mid]
+			continue
+		var leaned := _lean_canopy(mesh)
+		done[mid] = leaned
+		kind_meshes[ki] = leaned
+
+func _lean_canopy(mesh: Mesh) -> Mesh:
+	# Pull every frond into a narrow column, then lean a brown trunk past
+	# that crown. The lean is in mesh space, so instance scale cannot
+	# fold it back into the leaves.
+	if mesh.get_surface_count() < 1:
+		return mesh
+	var src := PackedVector3Array()
+	var cols := PackedColorArray()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var cursor := 0
+	for s in mesh.get_surface_count():
+		var arrays: Array = mesh.surface_get_arrays(s)
+		var vert_var = arrays[Mesh.ARRAY_VERTEX]
+		if not (vert_var is PackedVector3Array):
+			continue
+		var verts: PackedVector3Array = vert_var
+		var idx := PackedInt32Array()
+		var index_var = arrays[Mesh.ARRAY_INDEX]
+		if index_var is PackedInt32Array and not (index_var as PackedInt32Array).is_empty():
+			idx = index_var
+		else:
+			idx.resize(verts.size())
+			for vi in verts.size():
+				idx[vi] = vi
+		var col := PackedColorArray()
+		var col_var = arrays[Mesh.ARRAY_COLOR]
+		if col_var is PackedColorArray and (col_var as PackedColorArray).size() == verts.size():
+			col = col_var
+		else:
+			col.resize(verts.size())
+			col.fill(Color(0.3, 0.52, 0.22, 1.0))
+		var nrm := PackedVector3Array()
+		var nrm_var = arrays[Mesh.ARRAY_NORMAL]
+		if nrm_var is PackedVector3Array and (nrm_var as PackedVector3Array).size() == verts.size():
+			nrm = nrm_var
+		var uv := PackedVector2Array()
+		var uv_var = arrays[Mesh.ARRAY_TEX_UV]
+		if uv_var is PackedVector2Array and (uv_var as PackedVector2Array).size() == verts.size():
+			uv = uv_var
+		for vi in verts.size():
+			src.append(verts[vi])
+			cols.append(col[vi])
+			if nrm.is_empty():
+				norms.append(Vector3.UP)
+			else:
+				norms.append(nrm[vi])
+			if uv.is_empty():
+				uvs.append(Vector2(0.5, 0.2))
+			else:
+				uvs.append(uv[vi])
+		for ii in idx.size():
+			indices.append(int(idx[ii]) + cursor)
+		cursor += verts.size()
+	if src.is_empty():
+		return mesh
+	var crown := 0.0
+	var height := 0.0
+	for v in src:
+		crown = maxf(crown, Vector2(v.x, v.z).length())
+		height = maxf(height, v.y)
+	if crown < 0.02:
+		return mesh
+	var column := maxf(crown * 0.12, 0.02)
+	for vi in src.size():
+		var leaf := src[vi]
+		if Vector2(leaf.x, leaf.z).length() > column:
+			leaf.x *= 0.38
+			leaf.z *= 0.38
+			src[vi] = leaf
+	var post := 0.02
+	for v2 in src:
+		post = maxf(post, Vector2(v2.x, v2.z).length())
+	var reach := post * 1.9
+	var aim := Vector3(2.7, 0.0, 1.55).normalized()
+	var lean := aim * reach
+	var foot := aim * reach * 0.2
+	var rad := maxf(post * 0.22, 0.05)
+	var y1 := maxf(height * 0.55, post * 0.8)
+	var bark_lo := Color(0.62, 0.32, 0.12, 1.0)
+	var bark_hi := Color(0.78, 0.46, 0.18, 1.0)
 	var sides := 8
-	var bark_lo := Color(0.55, 0.30, 0.12, 1.0)
-	var bark_hi := Color(0.68, 0.40, 0.16, 1.0)
-	var base_v := verts.size()
+	var base_v := src.size()
 	for i in sides:
 		var ang := TAU * float(i) / float(sides)
 		var dir := Vector3(cos(ang), 0.0, sin(ang))
-		verts.append(dir * radius * 1.85 + Vector3(0.0, y0, 0.0) + foot)
-		verts.append(dir * radius * 0.72 + Vector3(0.0, y1, 0.0) + lean)
-		if has_n:
-			norms.append(dir)
-			norms.append(dir)
+		src.append(dir * rad * 1.15 + foot)
+		src.append(dir * rad * 0.72 + Vector3(0.0, y1, 0.0) + lean)
+		norms.append(dir)
+		norms.append(dir)
 		cols.append(bark_lo)
 		cols.append(bark_hi)
-		if has_u:
-			var u := float(i) / float(sides)
-			uvs.append(Vector2(u, 0.02))
-			uvs.append(Vector2(u, 0.84))
-		if has_t:
-			for _n in 2:
-				tangents.append(dir.z)
-				tangents.append(0.0)
-				tangents.append(-dir.x)
-				tangents.append(1.0)
+		uvs.append(Vector2(float(i) / float(sides), 0.02))
+		uvs.append(Vector2(float(i) / float(sides), 0.9))
 	for i in sides:
 		var i0 := base_v + i * 2
 		var i1 := i0 + 1
@@ -3901,42 +4186,28 @@ func _palm_trunk(info: Dictionary, target: float) -> Dictionary:
 		indices.append(i1)
 		indices.append(j0)
 		indices.append(j1)
-	# A brown cap so the top-down camera sees trunk, not only fronds.
-	var cap_i := verts.size()
-	var cap_c := Vector3(0.0, y1, 0.0) + lean
-	verts.append(cap_c)
-	if has_n:
-		norms.append(Vector3.UP)
+	var cap_i := src.size()
+	src.append(Vector3(0.0, y1, 0.0) + lean)
+	norms.append(Vector3.UP)
 	cols.append(bark_hi)
-	if has_u:
-		uvs.append(Vector2(0.5, 0.9))
-	if has_t:
-		tangents.append(1.0)
-		tangents.append(0.0)
-		tangents.append(0.0)
-		tangents.append(1.0)
+	uvs.append(Vector2(0.5, 0.92))
 	for i in sides:
-		var i1c := base_v + i * 2 + 1
-		var j1c := base_v + ((i + 1) % sides) * 2 + 1
+		var top_a := base_v + i * 2 + 1
+		var top_b := base_v + ((i + 1) % sides) * 2 + 1
 		indices.append(cap_i)
-		indices.append(j1c)
-		indices.append(i1c)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_INDEX] = indices
-	arrays[Mesh.ARRAY_COLOR] = cols
-	if has_n:
-		arrays[Mesh.ARRAY_NORMAL] = norms
-	if has_u:
-		arrays[Mesh.ARRAY_TEX_UV] = uvs
-	if has_t:
-		arrays[Mesh.ARRAY_TANGENT] = tangents
+		indices.append(top_b)
+		indices.append(top_a)
+	var arrays_out := []
+	arrays_out.resize(Mesh.ARRAY_MAX)
+	arrays_out[Mesh.ARRAY_VERTEX] = src
+	arrays_out[Mesh.ARRAY_NORMAL] = norms
+	arrays_out[Mesh.ARRAY_COLOR] = cols
+	arrays_out[Mesh.ARRAY_TEX_UV] = uvs
+	arrays_out[Mesh.ARRAY_INDEX] = indices
 	var out := ArrayMesh.new()
-	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var aabb := out.get_aabb()
-	info.mesh = out
-	info.size = aabb.size
-	info.base = _contact_half(out)
-	return info
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays_out)
+	return out
+
 
 func _register_stack(id: String, paths: Array, target: float, role: String, points: int, lay_side: bool = false) -> void:
 	var st := SurfaceTool.new()
@@ -4107,6 +4378,7 @@ func _ensure_models() -> void:
 	_register_theme_models()
 	_clone_kind("raptord", "miniraptor", "small", 4, 0.46)
 	_clone_small_variants()
+	_trunk_canopies()
 	_normalize_footprints()
 	ground_meshes = [
 		_flat_ground(_load_model("res://assets/kenney/roads/road-straight.glb").mesh),
@@ -7409,6 +7681,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			if mode == "attract" and joy_finger.distance_to(joy_anchor) <= JOY_DEADZONE:
 				_begin_play()
 			joy_held = false
+			joy_id = -1
+			velocity = Vector3.ZERO
 		_refresh_joystick()
 	elif event is InputEventScreenDrag and joy_held and event.index == joy_id:
 		joy_finger = event.position
@@ -7596,22 +7870,28 @@ func _stick_velocity() -> Vector3:
 	return dir.normalized() * _move_speed() * power
 
 func _move_hole(delta: float) -> void:
+	if _sim_frozen():
+		velocity = Vector3.ZERO
+		return
 	if bot_drive:
 		velocity = _bot_velocity()
-	elif joy_held and joy_id < 0 and not web_steer and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		joy_held = false
+	elif not _steer_button_down():
+		# Zero input is zero velocity. Do not integrate a leftover stick.
+		if joy_id < 0:
+			joy_held = false
 		velocity = Vector3.ZERO
 		if playing:
 			steer_idle += delta
+		return
 	elif joy_held and joy_finger.distance_to(joy_anchor) > JOY_DEADZONE:
 		velocity = _stick_velocity()
 		steer_idle = 0.0
 	else:
-		# No finger, no drift. A released stick stops instead of coasting.
 		velocity = Vector3.ZERO
 		if playing:
 			steer_idle += delta
-	var step := velocity * delta
+		return
+	var step := velocity * minf(maxf(delta, 0.0), STEER_DT_MAX)
 	var nx := hole_pos.x + step.x
 	var nz := hole_pos.z + step.z
 	if _surf_f(nx, hole_pos.z) != SURF_WATER:
@@ -7647,6 +7927,8 @@ func _crit_damp(current: float, target: float, vel: float, smooth_time: float, d
 	return Vector2(target + (change + temp) * expf, vel)
 
 func _smooth_camera(delta: float) -> void:
+	if _sim_frozen():
+		return
 	var sprung := _crit_damp(shown_radius, hole_radius, shown_vel, 0.45, delta)
 	shown_radius = maxf(sprung.x, 0.05)
 	shown_vel = sprung.y
@@ -7760,6 +8042,8 @@ func _map_progress() -> float:
 	return _clear_ratio()
 
 func _tick_clear_bar(delta: float) -> void:
+	if _sim_frozen():
+		return
 	var goal := _clear_ratio()
 	clear_shown = lerpf(clear_shown, goal, 1.0 - exp(-5.5 * delta))
 	if absf(clear_shown - goal) < 0.002:
@@ -8016,7 +8300,7 @@ func _spawn_rivals() -> void:
 		})
 
 func _tick_rivals(delta: float) -> void:
-	if not playing:
+	if not playing or _sim_frozen():
 		return
 	for i in rivals.size():
 		var rival: Dictionary = rivals[i]
@@ -8209,9 +8493,13 @@ func _rival_aim(i: int) -> Vector3:
 	var flee_from := Vector3.ZERO
 	var fleeing := false
 	var flee_d := 999.0
-	if hole_radius > radius * flee_ratio:
+	# Flee only once the player can actually swallow this rival. A head start
+	# that begins before the eat line lets them stay out of reach forever.
+	var player_ring := _ring_radius(hole_radius, shown_radius)
+	var self_ring := _ring_radius(radius, float(rival.get("shown", radius)))
+	if _can_swallow(player_ring, self_ring):
 		var d := _xz_dist(pos, hole_pos)
-		if d < hole_radius + flee_extra and d < flee_d:
+		if d < flee_d:
 			flee_d = d
 			flee_from = hole_pos
 			fleeing = true
@@ -8231,7 +8519,11 @@ func _rival_aim(i: int) -> Vector3:
 		var away := pos - flee_from
 		if away.length_squared() < 0.01:
 			away = Vector3(1.0, 0.0, 0.0)
-		return _steer_blend(away, avoid, 0.35)
+		# Near the map edge, turn back inside instead of skating the wall.
+		var wall := _inward_from_wall(pos)
+		if wall.length_squared() > 0.0001:
+			away = away.normalized() + wall.normalized() * 1.65
+		return _steer_blend(away, avoid, 0.2)
 	if not grace:
 		var chase_at := Vector3.ZERO
 		var chasing := false
@@ -8269,15 +8561,43 @@ func _rival_aim(i: int) -> Vector3:
 	var wander := Vector3(cos(float(rival.wander)), 0.0, sin(float(rival.wander)))
 	return _steer_blend(wander, avoid, 0.6)
 
+func _rival_cue(rival: Dictionary) -> Color:
+	var base: Color = rival.color
+	if not playing or not bool(rival.get("alive", false)):
+		return base
+	var pr := _ring_radius(hole_radius, shown_radius)
+	var rr := _ring_radius(float(rival.radius), float(rival.get("shown", 0.0)))
+	if _can_swallow(pr, rr):
+		return Color(0.22, 0.95, 0.38)
+	if _can_swallow(rr, pr):
+		return Color(0.96, 0.24, 0.26)
+	return base
+
 func _ring_radius(logical: float, shown: float) -> float:
+	# The ring drawn on screen. Swallow and the green/red cue both use it,
+	# so a hole you can see overlapping is a hole you can eat.
 	var ring := shown if shown > 0.08 else logical
 	return maxf(ring, 0.12)
 
 func _can_swallow(eater_r: float, prey_r: float) -> bool:
 	return eater_r >= prey_r * EAT_RATIO - 0.0001
 
+func _inward_from_wall(pos: Vector3) -> Vector3:
+	var lim := CITY_HALF - 1.3
+	var margin := 9.0
+	var inward := Vector3.ZERO
+	if pos.x > lim - margin:
+		inward.x -= (pos.x - (lim - margin)) / margin
+	elif pos.x < -lim + margin:
+		inward.x += ((-lim + margin) - pos.x) / margin
+	if pos.z > lim - margin:
+		inward.z -= (pos.z - (lim - margin)) / margin
+	elif pos.z < -lim + margin:
+		inward.z += ((-lim + margin) - pos.z) / margin
+	return inward
+
 func _hole_is_idle() -> bool:
-	return playing and not joy_held and steer_idle > 0.75 and velocity.length() < 0.25
+	return playing and not paused and not _steer_button_down() and velocity.length() < 0.25
 
 func _separate_hole(pos: Vector3, radius: float, ignore: int) -> Vector3:
 	var out := pos
@@ -8307,12 +8627,10 @@ func _separate_hole(pos: Vector3, radius: float, ignore: int) -> Vector3:
 			out = other.pos + push2.normalized() * (need + 0.05)
 	return out
 
-func _swallow_reach(eater_r: float, prey_r: float) -> float:
-	# Same overlap both ways. 0.72 of the eater, or the prey center inside
-	# the eater by half the prey radius, whichever reaches farther.
-	var deep := eater_r - prey_r * 0.5
-	var inside := eater_r - minf(prey_r * 0.12, 0.4)
-	return maxf(eater_r * 0.72, maxf(deep, inside))
+func _swallow_reach(eater_r: float, _prey_r: float) -> float:
+	# The smaller hole is eaten once its center is inside the bigger hole's
+	# drawn ring. Both sides use that same test.
+	return eater_r
 
 func _resolve_player_threat() -> void:
 	if not playing or player_invuln > 0.0:
@@ -8432,32 +8750,13 @@ func _rival_band(rival: Dictionary) -> float:
 		return lerpf(0.65, 0.28, clampf((0.82 - ratio) / 0.28, 0.0, 1.0))
 	return 1.0
 
-func _rival_catchup(rival: Dictionary, delta: float) -> void:
-	# Pull a rival toward just under the eat line when the player pulls ahead.
-	# The rate lags, so a good run can still open an 18 percent lead.
-	var rr := maxf(float(rival.get("radius", 0.2)), 0.05)
-	# Early on, hold rivals just under the eat line. The hold relaxes so a
-	# steady player can open a lead in the first minute, sooner on later levels.
-	var guard_t := lerpf(32.0, 48.0, _rival_diff())
-	var lead := 1.10
-	if play_age > guard_t:
-		lead = lerpf(1.10, 1.24, clampf((play_age - guard_t) / 36.0, 0.0, 1.0))
-	var goal := hole_radius / lead
-	if rr >= goal:
-		return
-	var gap := (goal - rr) / goal
-	var rate := lerpf(10.0, 48.0, clampf(gap / 0.35, 0.0, 1.0))
-	var debt := float(rival.get("catch_debt", 0.0)) + rate * delta
-	var whole := int(floor(debt))
-	rival.catch_debt = debt - float(whole)
-	if whole <= 0:
-		return
-	rival.eaten = int(rival.get("eaten", 0)) + whole
-	rival.score = int(rival.score) + whole
-	_apply_rival_radius(rival)
+func _rival_catchup(_rival: Dictionary, _delta: float) -> void:
+	# No rubber band. Free bites used to pin every rival just under the eat
+	# line, so a real session never opened a 10% lead.
+	return
 
 func _credit_rival(rival: Dictionary, bites: int) -> void:
-	var gained := float(maxi(bites, 1)) * _rival_band(rival)
+	var gained := float(maxi(bites, 1))
 	var debt := float(rival.get("band_debt", 0.0)) + gained
 	var whole := int(floor(debt))
 	rival.band_debt = debt - float(whole)
@@ -8468,9 +8767,19 @@ func _credit_rival(rival: Dictionary, bites: int) -> void:
 	_apply_rival_radius(rival)
 
 func _apply_rival_radius(rival: Dictionary) -> void:
-	var start_r := float(rival.get("base_radius", 0.34))
-	var cap := minf(final_radius * RIVAL_CAP, maxf(start_r * GROW_MULTIPLE, start_r + 0.2))
-	var rad := _radius_for(start_r, _rival_progress(rival), cap)
+	var start_r := maxf(_start_radius(), 0.12)
+	var bites := float(int(rival.get("eaten", 0)))
+	var total := float(maxi(clear_total, 1))
+	var progress := clampf((bites * RIVAL_GROW_RATE) / (total * CLEAR_RATIO), 0.0, 1.0)
+	var grown := _radius_for(start_r, progress)
+	var gain := maxf(grown - start_r, 0.0)
+	var base := float(rival.get("base_radius", start_r))
+	var player_gain := maxf(hole_radius - start_r, 0.0)
+	# Own bites move them along the player curve at 65%, and that gain cannot
+	# outrun 65% of the radius the player has actually gained.
+	var paced := minf(base + gain, base + player_gain * RIVAL_GROW_RATE)
+	var cap := minf(final_radius * RIVAL_CAP, maxf(base * GROW_MULTIPLE, base + 0.2))
+	var rad := minf(paced, cap)
 	if rad > float(rival.radius) + 0.004:
 		rival.radius = rad
 		rival.pulse = 0.18
@@ -8574,7 +8883,8 @@ func _sync_rival_visuals() -> void:
 			s = float(rival.shown) * pulse
 		var xf := Transform3D(Basis().scaled(Vector3(s, 1.0, s)), rival.pos if s > 0.0 else Vector3(0, -30, 0))
 		rival_mm.set_instance_transform(i, xf)
-		rival_mm.set_instance_color(i, rival.color)
+		var cue := _rival_cue(rival)
+		rival_mm.set_instance_color(i, cue)
 		if i >= rival_labels.size():
 			continue
 		var tag: Label = rival_labels[i]
@@ -8583,6 +8893,8 @@ func _sync_rival_visuals() -> void:
 			tag.visible = false
 		else:
 			var placed: Dictionary = _place_rival_tag(tag, above, str(rival.name))
+			tag.modulate = cue
+			tag.add_theme_color_override("font_color", cue)
 			var at: Vector2 = placed.at
 			tag.position = at
 			var dist := cam.global_position.distance_squared_to(rival.pos)
@@ -8773,6 +9085,8 @@ func _process(delta: float) -> void:
 			call_deferred("_save_shot")
 	_watch_render()
 	_sync_pause_button()
+	if _sim_frozen():
+		return
 	var frame_delta := delta
 	if bot_drive:
 		if not bot_step_ready:
@@ -8782,7 +9096,7 @@ func _process(delta: float) -> void:
 		bot_clock += frame_delta
 	_tick_quality(frame_delta)
 	# Hole steering uses the real frame time. A 20fps cap made a slow machine crawl.
-	var steer_delta := frame_delta if bot_drive else minf(frame_delta, 0.5)
+	var steer_delta := frame_delta if bot_drive else minf(frame_delta, STEER_DT_MAX)
 	delta = frame_delta if bot_drive else minf(delta, 1.0 / 20.0)
 	if mode == "play" or mode == "attract":
 		_poll_pointer_steer()
@@ -9187,7 +9501,7 @@ func _advance_car(o: Dictionary, delta: float) -> void:
 	o.vel = dir * maxf(spd, 0.0)
 
 func _tick_movers(delta: float) -> void:
-	if latency_probe:
+	if latency_probe or _sim_frozen():
 		return
 	var hot := {}
 	for o in movers:
@@ -9302,12 +9616,18 @@ func _tuck_menu_clutter() -> void:
 			continue
 		if float(o.get("height", 0.0)) < 1.6:
 			continue
+		if _menu_backdrop_hero(o):
+			continue
 		var top: Vector3 = o.pos + Vector3(0.0, float(o.height) * 0.55, 0.0)
 		if cam.is_position_behind(top):
 			continue
 		var s := cam.unproject_position(top)
 		if s.y < band and absf(s.x - cx) < half:
 			_park_instance(o)
+
+func _menu_backdrop_hero(o: Dictionary) -> bool:
+	var id := kind_id_of(int(o.kind))
+	return id in ["layrocket", "habitat", "stackrocket"]
 
 func _tick_treats() -> void:
 	if treats.is_empty():
@@ -9366,6 +9686,8 @@ func _save_shot() -> void:
 	get_tree().quit()
 
 func _physics_process(delta: float) -> void:
+	if _sim_frozen():
+		return
 	if bot_drive:
 		bot_step_ready = true
 	_sync_rim()
@@ -9444,7 +9766,7 @@ func _bucket_move(o: Dictionary) -> void:
 	_bucket_add(o)
 
 func _activate_nearby() -> void:
-	if edge_probe:
+	if edge_probe or _sim_frozen():
 		return
 	if not pool_free.is_empty():
 		var centers: Array = [hole_pos]
@@ -9486,7 +9808,7 @@ func _take_covered(sp: Vector3, rad: float, sink: int) -> void:
 			continue
 		if bool(o.get("opening_treat", false)) and _xz_dist(o.pos, sp) > rad * 0.92:
 			continue
-		if sink < 0 and _hole_is_idle() and int(o.get("mover", 0)) != 0:
+		if sink < 0 and _hole_is_idle():
 			continue
 		var base := float(o.base)
 		if not _fits_r(base, rad):
@@ -9513,7 +9835,7 @@ func _take_partials(centers: Array, radii: Array, sinks: Array) -> void:
 					continue
 				if bool(o.get("opening_treat", false)) and _xz_dist(o.pos, sp) > rad * 0.92:
 					continue
-				if int(sinks[s]) < 0 and _hole_is_idle() and int(o.get("mover", 0)) != 0:
+				if int(sinks[s]) < 0 and _hole_is_idle():
 					continue
 				seen[uid] = true
 				var base := float(o.base)
@@ -9727,7 +10049,7 @@ func _handoff_tumble(o: Dictionary, b: RigidBody3D, hole: Vector3, omega: float)
 	_push_prop_visual(o, xf)
 
 func _commit_fall(o: Dictionary, b: RigidBody3D) -> void:
-	if bool(o.get("pit", false)):
+	if _sim_frozen() or bool(o.get("pit", false)):
 		return
 	o.perch = false
 	o.pit = true
@@ -9787,6 +10109,8 @@ func _pool_body(b: RigidBody3D) -> void:
 	pool_free.append(b)
 
 func _drive_body(o: Dictionary) -> void:
+	if _sim_frozen():
+		return
 	var b: RigidBody3D = o.body
 	if b == null:
 		return
@@ -9863,6 +10187,8 @@ func _burst(at: Vector3, points: int, tint: Color, caption: String = "") -> void
 			return
 
 func _swallow_done(o: Dictionary) -> void:
+	if _sim_frozen():
+		return
 	var at := hole_pos
 	if o.body != null:
 		var b: RigidBody3D = o.body
@@ -10095,6 +10421,8 @@ func _clear_city() -> void:
 	city_root = null
 
 func start_round(index: int) -> void:
+	get_tree().paused = false
+	paused = false
 	_clear_city()
 	map_index = clampi(index, 0, CatalogScript.maps().size() - 1)
 	Save.practice = _practice_level(map_index)
@@ -10159,6 +10487,8 @@ func start_round(index: int) -> void:
 	_arm_drag_hint()
 
 func _enter_attract(index: int) -> void:
+	get_tree().paused = false
+	paused = false
 	_clear_city()
 	Save.practice = false
 	map_index = clampi(index, 0, CatalogScript.maps().size() - 1)
@@ -10272,6 +10602,7 @@ func _build_pause() -> void:
 	pause_layer = CanvasLayer.new()
 	pause_layer.layer = 30
 	pause_layer.visible = false
+	pause_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(pause_layer)
 	var dim := ColorRect.new()
 	dim.color = Color(0.11, 0.16, 0.29, 0.62)
@@ -10327,7 +10658,10 @@ func _open_pause() -> void:
 	paused = true
 	playing = false
 	joy_held = false
+	joy_id = -1
+	velocity = Vector3.ZERO
 	_refresh_joystick()
+	get_tree().paused = true
 	if name_lbl:
 		name_lbl.visible = false
 	_sync_pause_button()
@@ -10337,20 +10671,24 @@ func _open_pause() -> void:
 func _resume_pause() -> void:
 	if not paused or mode != "play":
 		return
+	get_tree().paused = false
 	paused = false
 	playing = true
 	joy_held = false
+	velocity = Vector3.ZERO
 	if pause_layer:
 		pause_layer.visible = false
 	_sync_pause_button()
 
 func _restart_pause() -> void:
+	get_tree().paused = false
 	paused = false
 	if pause_layer:
 		pause_layer.visible = false
 	_request_round(map_index)
 
 func _exit_pause() -> void:
+	get_tree().paused = false
 	paused = false
 	if pause_layer:
 		pause_layer.visible = false
@@ -11286,6 +11624,7 @@ func _round_style(bg: Color) -> StyleBoxFlat:
 func _build_menu_layer() -> void:
 	menu_layer = CanvasLayer.new()
 	menu_layer.layer = 4
+	menu_layer.process_mode = Node.PROCESS_MODE_ALWAYS
 	add_child(menu_layer)
 
 func _light_preview() -> bool:
