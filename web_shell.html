@@ -669,7 +669,9 @@ window.__holeSyncFS = function () {
 	}
 
 	function hideLoader() {
-		if (!initializing) return;
+		// A level build sets this before it blocks the thread. Hiding here
+		// uncovered the navy clear color for the whole build.
+		if (window.__holeBuilding) return;
 		initializing = false;
 		statusOverlay.style.visibility = 'hidden';
 		statusOverlay.style.pointerEvents = 'none';
@@ -678,11 +680,37 @@ window.__holeSyncFS = function () {
 
 	// The engine promise can stall after the files hit 100%. Reveal anyway.
 	window.__holeReveal = function () { hideLoader(); };
+	window.__holeHoldLoader = function (on, title, bg) {
+		window.__holeBuilding = !!on;
+		if (!on) return;
+		statusOverlay.style.visibility = 'visible';
+		statusOverlay.style.pointerEvents = 'auto';
+		if (title && bootTitle) bootTitle.textContent = title;
+		if (bg) {
+			statusOverlay.style.background = bg;
+			var lum = 0.7;
+			var hex = /^#([0-9a-f]{6})$/i.exec(bg);
+			if (hex) {
+				var n = parseInt(hex[1], 16);
+				var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+				lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+			}
+			var ink = lum > 0.62 ? '#1c2740' : '#f7f3ea';
+			statusOverlay.style.color = ink;
+			if (bootTitle) bootTitle.style.color = ink;
+			var kicker = document.getElementById('boot-kicker');
+			if (kicker) kicker.style.color = ink;
+			if (bootPct) bootPct.style.color = ink;
+		}
+		if (bootFill) bootFill.classList.add('indeterminate');
+		if (bootPct) bootPct.textContent = '';
+	};
 	setInterval(function () {
-		if (!initializing) return;
+		if (!initializing || window.__holeBuilding) return;
 		var now = Date.now();
+		if (window.__holeEngineStarted) return;
 		if (progressFullAt && now - progressFullAt > 6000) hideLoader();
-		else if (now - bootStarted > 14000) hideLoader();
+		else if (now - bootStarted > 20000) hideLoader();
 	}, 400);
 
 	function showFailure(message) {

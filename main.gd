@@ -33,6 +33,12 @@ const FIT_RATIO := 0.84
 const OPEN_FIT := 0.97
 # One hole must be this much larger before it can swallow the other.
 const EAT_RATIO := 1.18
+# Bigger holes are a little faster. The bonus caps near +30% so a large hole
+# catches a smaller one slowly instead of racing away.
+const SIZE_SPEED_K := 0.14
+const SIZE_SPEED_CAP := 0.30
+# Spawn and revive only. Tester mode and level select use the same window.
+const SPAWN_GRACE := 2.6
 const GROW_MULTIPLE := 10.0
 const SCREEN_FRAC_START := 0.18
 const SCREEN_FRAC_END := 0.36
@@ -924,6 +930,11 @@ var clear_shown := 0.0
 var player_eaten := 0
 var rival_radius_bonus := 0.0
 var round_cover: ColorRect
+var load_title: Label
+var load_spin: Control
+var load_spin_t := 0.0
+var level_loading := false
+var treat_force := false
 var reveal_size := Vector2.ZERO
 var reveal_stable := 0
 var reveal_since := 0
@@ -1028,11 +1039,10 @@ func _ready() -> void:
 	var start_idx := mini(Save.unlocked_level, CatalogScript.maps().size() - 1)
 	var preview := _query_preview()
 	if preview == "":
-		# Let the page hide "Loading 100%" before the city build blocks the thread.
-		_ensure_cover()
-		round_cover.visible = true
-		reveal_since = Time.get_ticks_msec()
-		call_deferred("start_round", start_idx)
+		# Paint a themed loader, then build. A sync build otherwise stays on navy.
+		if OS.has_feature("web"):
+			JavaScriptBridge.eval("window.__holeBuilding=true;window.__holeEngineStarted=true;", true)
+		call_deferred("_request_round", start_idx)
 	else:
 		_enter_attract(start_idx)
 	if preview == "levels":
@@ -1114,6 +1124,10 @@ func _ready() -> void:
 		call_deferred("_preview_spaced")
 	elif preview == "lanes":
 		call_deferred("_preview_lanes")
+	elif preview == "speed":
+		call_deferred("_preview_speed")
+	elif preview == "treats":
+		call_deferred("_preview_treats")
 	elif preview.begins_with("road"):
 		var road_rest := preview.substr(4)
 		var road_idx := 0
@@ -1194,6 +1208,120 @@ func _preview_lanes() -> void:
 			_tick_movers(1.0 / 30.0)
 		_report_lane("%s-3s" % str(map.get("layout", "")))
 	print("LANE DONE")
+
+func _preview_speed() -> void:
+	start_round(0)
+	var start_r := hole_radius
+	hole_radius = start_r
+	shown_radius = start_r
+	var mul1 := _size_speed_mul(start_r)
+	var spd1 := _move_speed()
+	hole_radius = start_r * 1.5
+	shown_radius = start_r * 1.5
+	var mul15 := _size_speed_mul(shown_radius)
+	var spd15 := _move_speed()
+	var mul_max := _size_speed_mul(maxf(final_radius, start_r * GROW_MULTIPLE))
+	var small := {"radius": start_r, "speed": 2.22, "fleeing": true}
+	var big := {"radius": start_r * 1.5, "speed": 2.22, "fleeing": true}
+	var flee_s := _rival_move_speed(small)
+	var flee_b := _rival_move_speed(big)
+	var player_now := _move_speed()
+	var spd_ratio := spd15 / maxf(spd1, 0.001)
+	print("SPEED x1 mul %.4f spd %.4f | x1.5 mul %.4f spd %.4f | spd_ratio %.4f | max_mul %.4f | flee_small %.4f flee_big %.4f player %.4f" % [mul1, spd1, mul15, spd15, spd_ratio, mul_max, flee_s, flee_b, player_now])
+	var modest := mul15 > mul1 and mul15 <= 1.20 and mul_max >= 1.25 and mul_max <= 1.35
+	modest = modest and spd15 > spd1 and spd_ratio < 1.45
+	modest = modest and flee_s < player_now and flee_s < flee_b
+	modest = modest and absf(flee_b - player_now) / maxf(player_now, 0.001) < 0.04
+	tester_on = true
+	start_round(3)
+	var grace_set := absf(player_invuln - SPAWN_GRACE) < 0.001 and playing and mode == "play"
+	print("EAT_PATH tester %s invuln %.3f playing %s mode %s" % [str(grace_set), player_invuln, str(playing), mode])
+	var base_r := hole_radius
+	for rival in rivals:
+		rival.alive = false
+	var foe: Dictionary = rivals[0]
+	var rr := base_r * 1.40
+	var old_line := rr * 0.72
+	var reach := _swallow_reach(rr, base_r)
+	var dist := (old_line + reach) * 0.5
+	foe.alive = true
+	foe.radius = rr
+	foe.shown = rr
+	foe.grace = 0.0
+	foe.pos = Vector3(dist, 0.0, 0.0)
+	hole_radius = base_r
+	shown_radius = base_r
+	hole_pos = Vector3.ZERO
+	velocity = Vector3.ZERO
+	player_invuln = SPAWN_GRACE
+	playing = true
+	mode = "play"
+	round_eaten = ""
+	# physics_frame fires before _physics_process, so wait two ticks to see one step.
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var blocked := mode == "play" and round_eaten == "" and playing and player_invuln > 2.0 and player_invuln < SPAWN_GRACE
+	print("EAT_GRACE blocked %s mode %s eaten '%s' invuln %.3f dist %.3f old %.3f reach %.3f" % [str(blocked), mode, round_eaten, player_invuln, dist, old_line, reach])
+	player_invuln = 0.0
+	playing = true
+	mode = "play"
+	round_eaten = ""
+	foe.alive = true
+	foe.pos = Vector3(dist, 0.0, 0.0)
+	hole_pos = Vector3.ZERO
+	await get_tree().physics_frame
+	var eaten := mode == "results" and round_eaten != "" and not playing
+	print("EAT_TOUCH eaten %s mode %s by '%s'" % [str(eaten), mode, round_eaten])
+	var past_old := dist > old_line and dist < reach and dist < rr
+	var ok := modest and grace_set and blocked and eaten and past_old
+	print("SPEED_OK" if ok else "SPEED_FAIL")
+	get_tree().quit(0 if ok else 1)
+
+func _preview_treats() -> void:
+	var bad := 0
+	for idx in CatalogScript.maps().size():
+		start_round(idx)
+		var opening: Dictionary = {}
+		for o in treats:
+			if bool(o.get("opening_treat", false)):
+				opening = o
+				break
+		if opening.is_empty():
+			bad += 1
+			print("TREAT FAIL %s missing" % str(map.get("layout", "")))
+			continue
+		await get_tree().physics_frame
+		await get_tree().physics_frame
+		var ground: Vector3 = opening.get("ground", opening.pos)
+		var dist := Vector2(ground.x - hole_pos.x, ground.z - hole_pos.z).length()
+		var radii := dist / maxf(hole_radius, 0.01)
+		var alive := bool(opening.alive) and not bool(opening.in_body)
+		var band := radii >= 1.95 and radii <= 3.05
+		var screen_ok := true
+		if cam != null:
+			var hole_s := cam.unproject_position(hole_pos)
+			var treat_s := cam.unproject_position(Vector3(ground.x, 0.6, ground.z))
+			screen_ok = treat_s.y < hole_s.y - 4.0
+		if not alive or not band or not screen_ok:
+			bad += 1
+			print("TREAT FAIL %s alive %s radii %.2f screen %s" % [str(map.get("layout", "")), str(alive), radii, str(screen_ok)])
+		else:
+			print("TREAT OK %s radii %.2f" % [str(map.get("layout", "")), radii])
+		if str(map.get("layout", "")) == "space":
+			var rocket := Vector3.ZERO
+			var saw := false
+			for o in props:
+				if kind_id_of(int(o.kind)) == "stackrocket" and absf(o.pos.z) < 12.0:
+					rocket = o.pos
+					saw = true
+					break
+			if not saw or rocket.x < -2.2:
+				bad += 1
+				print("ROCKET FAIL at %.2f %.2f" % [rocket.x, rocket.z])
+			else:
+				print("ROCKET OK at %.2f %.2f" % [rocket.x, rocket.z])
+	print("TREAT_OK" if bad == 0 else "TREAT_FAIL")
+	get_tree().quit(0 if bad == 0 else 1)
 
 func _report_lane(tag: String) -> void:
 	var cars: Array = []
@@ -2373,11 +2501,86 @@ func _ensure_cover() -> void:
 	layer.layer = 40
 	add_child(layer)
 	round_cover = ColorRect.new()
-	round_cover.color = Color(0.11, 0.16, 0.29, 1)
+	round_cover.color = Color(0.16, 0.34, 0.28, 1)
 	round_cover.set_anchors_preset(Control.PRESET_FULL_RECT)
 	round_cover.mouse_filter = Control.MOUSE_FILTER_STOP
 	layer.add_child(round_cover)
+	load_title = Label.new()
+	load_title.text = "Loading"
+	load_title.set_anchors_preset(Control.PRESET_CENTER)
+	load_title.offset_left = -320
+	load_title.offset_right = 320
+	load_title.offset_top = -36
+	load_title.offset_bottom = 48
+	load_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	load_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_style(load_title, 48)
+	round_cover.add_child(load_title)
+	load_spin = Control.new()
+	load_spin.set_anchors_preset(Control.PRESET_CENTER)
+	load_spin.offset_left = -48
+	load_spin.offset_right = 48
+	load_spin.offset_top = -140
+	load_spin.offset_bottom = -44
+	load_spin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	load_spin.draw.connect(_draw_load_spin)
+	round_cover.add_child(load_spin)
 	round_cover.visible = false
+
+func _draw_load_spin() -> void:
+	if load_spin == null:
+		return
+	var c := load_spin.size * 0.5
+	var n := 8
+	for i in n:
+		var ang := load_spin_t * 5.5 + TAU * float(i) / float(n)
+		var dot := c + Vector2(cos(ang), sin(ang)) * 26.0
+		var a := 0.28 + 0.72 * float(i) / float(n)
+		load_spin.draw_circle(dot, 5.5, Color(1.0, 0.97, 0.88, a))
+
+func _present_level_load(index: int) -> void:
+	var maps: Array = CatalogScript.maps()
+	var idx := clampi(index, 0, maps.size() - 1)
+	var entry: Dictionary = maps[idx]
+	var bg: Color = entry.get("ground", Color(0.16, 0.34, 0.22))
+	bg = bg.lerp(entry.get("horizon", bg), 0.35)
+	_ensure_cover()
+	round_cover.color = bg
+	round_cover.visible = true
+	if load_title:
+		load_title.text = "Loading %s" % str(entry.get("name", "level"))
+		load_title.add_theme_color_override("font_color", entry.get("sun", Color(1, 0.97, 0.9)))
+	if load_spin:
+		load_spin.queue_redraw()
+	reveal_size = Vector2.ZERO
+	reveal_stable = 0
+	reveal_since = Time.get_ticks_msec()
+	if OS.has_feature("web"):
+		var hex := "#" + bg.to_html(false)
+		var title := "Loading %s" % str(entry.get("name", "level"))
+		JavaScriptBridge.eval("window.__holeBuilding=true;if(window.__holeHoldLoader)window.__holeHoldLoader(true,%s,%s);" % [JSON.stringify(title), JSON.stringify(hex)], true)
+
+func _request_round(index: int) -> void:
+	if DisplayServer.get_name() == "headless":
+		start_round(index)
+		return
+	level_loading = true
+	_present_level_load(index)
+	# Draw the loader, then let the browser paint it, before the build blocks.
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	if OS.has_feature("web"):
+		# Two frames: the first paints the loader, the second runs after that paint.
+		JavaScriptBridge.eval("window.__holeLoaderPainted=false;requestAnimationFrame(function(){requestAnimationFrame(function(){window.__holeLoaderPainted=true;});});", true)
+		var guard := 0
+		while guard < 8:
+			var painted = JavaScriptBridge.eval("window.__holeLoaderPainted===true", true)
+			if bool(painted):
+				break
+			await get_tree().process_frame
+			guard += 1
+	start_round(index)
+	level_loading = false
 
 func _warm_view() -> void:
 	# The city is drawn on the following frames. Forcing those draws here
@@ -2398,13 +2601,17 @@ func _hold_for_reveal() -> void:
 func _hide_boot_loader() -> void:
 	if not OS.has_feature("web"):
 		return
-	JavaScriptBridge.eval("if(window.__holeReveal)window.__holeReveal();", true)
+	JavaScriptBridge.eval("window.__holeBuilding=false;if(window.__holeReveal)window.__holeReveal();", true)
 
 func _tick_reveal() -> void:
 	if boot_frames < 3:
 		boot_frames += 1
-		if boot_frames == 1:
-			_hide_boot_loader()
+	if round_cover != null and round_cover.visible and load_spin != null:
+		load_spin_t += 0.08
+		load_spin.queue_redraw()
+	# The city build blocks the main thread. Leave the painted card up until it returns.
+	if level_loading:
+		return
 	if round_cover == null or not round_cover.visible:
 		return
 	var sz := get_viewport().get_visible_rect().size
@@ -3327,7 +3534,7 @@ func _register_scaled(id: String, info: Dictionary, target: float, role: String,
 
 func _register_glb(id: String, path: String, target: float, role: String, points: int) -> void:
 	var info := _load_model(path, true)
-	if id == "jpalm" or id == "jpalmtall":
+	if id in ["jpalm", "jpalmtall", "ppalm", "dpalm"]:
 		info = _palm_trunk(info, target)
 	_register_scaled(id, info, target, role, points)
 
@@ -3383,10 +3590,11 @@ func _palm_trunk(info: Dictionary, target: float) -> Dictionary:
 	if size.y * scale > 9.0:
 		scale = 9.0 / maxf(size.y, 0.05)
 	scale = maxf(scale, 0.05)
-	var radius := 0.52 / scale
+	# Thick enough that a short palm still shows bark under the crown.
+	var radius := 0.88 / scale
 	var y0 := minf(0.04, size.y * 0.04)
-	var y1 := size.y * 0.76
-	var lean := Vector3(0.72, 0.0, 0.38) / scale
+	var y1 := size.y * 0.9
+	var lean := Vector3(0.55, 0.0, 0.28) / scale
 	var sides := 8
 	var bark_lo := Color(0.55, 0.30, 0.12, 1.0)
 	var bark_hi := Color(0.68, 0.40, 0.16, 1.0)
@@ -3422,6 +3630,26 @@ func _palm_trunk(info: Dictionary, target: float) -> Dictionary:
 		indices.append(i1)
 		indices.append(j0)
 		indices.append(j1)
+	# A brown cap so the top-down camera sees trunk, not only fronds.
+	var cap_i := verts.size()
+	var cap_c := Vector3(0.0, y1, 0.0) + lean
+	verts.append(cap_c)
+	if has_n:
+		norms.append(Vector3.UP)
+	cols.append(bark_hi)
+	if has_u:
+		uvs.append(Vector2(0.5, 0.9))
+	if has_t:
+		tangents.append(1.0)
+		tangents.append(0.0)
+		tangents.append(0.0)
+		tangents.append(1.0)
+	for i in sides:
+		var i1c := base_v + i * 2 + 1
+		var j1c := base_v + ((i + 1) % sides) * 2 + 1
+		indices.append(cap_i)
+		indices.append(j1c)
+		indices.append(i1c)
 	arrays[Mesh.ARRAY_VERTEX] = verts
 	arrays[Mesh.ARRAY_INDEX] = indices
 	arrays[Mesh.ARRAY_COLOR] = cols
@@ -4316,37 +4544,101 @@ func _treat_id(layout: String) -> String:
 		_:
 			return "applegold"
 
+func _opening_treat_dist() -> float:
+	var hole_r := maxf(_start_radius(), 0.45)
+	return clampf(hole_r * 2.5, hole_r * 2.0, hole_r * 3.0)
+
+func _treat_ground_ok(p: Vector3) -> bool:
+	var surf := _surf_f(p.x, p.z)
+	if surf == SURF_WATER or surf == SURF_ROAD or surf == SURF_TRACK:
+		return false
+	if not _clear_of_road(p, 0.55):
+		return false
+	if _overlaps(p, 0.5):
+		return false
+	return true
+
+func _opening_treat_spot() -> Vector3:
+	# Camera sits on +Z, so -Z is up the screen, away from the hint pill.
+	var dist := _opening_treat_dist()
+	var hole_r := maxf(_start_radius(), 0.45)
+	for extra in [0.0, 0.35, -0.28, 0.55]:
+		var d := clampf(dist + hole_r * extra, hole_r * 2.0, hole_r * 3.0)
+		for ox in [0.0, 0.42, -0.42, 0.8, -0.8]:
+			var p := Vector3(ox, 0.0, -d)
+			if _treat_ground_ok(p):
+				return p
+	return Vector3(0.0, 0.0, -dist)
+
+func _mark_treat(o: Dictionary, p: Vector3, opening: bool) -> void:
+	o["treat"] = true
+	o["opening_treat"] = opening
+	o["ground"] = Vector3(p.x, 0.0, p.z)
+	var lifted := Vector3(p.x, 0.72 if opening else 0.4, p.z)
+	o.pos = lifted
+	o.xform = Transform3D(Basis(Vector3.UP, float(o.yaw)).scaled(o.scale), lifted)
+	if opening:
+		o.color = Color(1.0, 0.78, 0.08)
+	treats.append(o)
+
+func _spawn_one_treat(id: String, p: Vector3, grow: float, opening: bool) -> bool:
+	if not kind_by_id.has(id):
+		print("TREAT MISS %s missing %s" % [str(map.get("layout", "")), id])
+		return false
+	treat_force = opening
+	var ok := _place_id(id, p, Vector3.ZERO, 0.6, grow, Color(1.0, 0.82, 0.12), -1, -1, [], true)
+	treat_force = false
+	if not ok:
+		print("TREAT MISS %s %s at %.2f %.2f" % [str(map.get("layout", "")), id, p.x, p.z])
+		return false
+	var o: Dictionary = props[props.size() - 1]
+	_mark_treat(o, p, opening)
+	print("TREAT SPAWN %s %s at %.2f %.2f grow %.2f opening %s dist %.2f" % [str(map.get("layout", "")), id, p.x, p.z, grow, str(opening), p.length()])
+	return true
+
 func _place_treats(layout: String) -> void:
 	var id := _treat_id(layout)
-	# First spot is up-screen of the hole, in open ground. Positive Z sits
-	# under the "Drag to move" hint, so the opening treat stays on -Z.
-	var spots: Array = [Vector3(0.22, 0, -1.72), Vector3(-1.55, 0, -2.15), Vector3(1.7, 0, -2.05), Vector3(0.4, 0, -2.6), Vector3(16.0, 0, 14.0), Vector3(-20.0, 0, -24.0), Vector3(28.0, 0, -18.0)]
+	# Always one opening treat. No random roll, and inside the 1.6 m place gate.
+	var spot := _opening_treat_spot()
+	if not _spawn_one_treat(id, spot, 2.7, true):
+		treat_force = true
+		_spawn_one_treat(id, Vector3(0.0, 0.0, -_opening_treat_dist()), 2.7, true)
+		treat_force = false
+	var far: Array = [Vector3(16.0, 0, 14.0), Vector3(-20.0, 0, -24.0), Vector3(28.0, 0, -18.0), Vector3(-14.0, 0, 22.0)]
 	var made := 0
-	var tries := 0
-	while made < 4 and tries < spots.size() + 24 and props.size() < PROP_CAP:
-		tries += 1
-		var p := Vector3(randf_range(-36.0, 36.0), 0.0, randf_range(-36.0, 36.0))
-		if tries <= spots.size():
-			p = spots[tries - 1]
-		if p.length() < 1.65:
+	for p in far:
+		if made >= 3 or props.size() >= PROP_CAP:
+			break
+		var at: Vector3 = p
+		if not _treat_ground_ok(at):
 			continue
-		if tries > 1 and p.length() < 2.25:
-			continue
-		if tries > 4 and p.length() < 4.2:
-			continue
-		if _surf_f(p.x, p.z) == SURF_WATER or _surf_f(p.x, p.z) == SURF_ROAD:
-			continue
-		var near := made == 0
-		var grow := 1.55 if near else 1.0
-		if _place_id(id, p, Vector3.ZERO, randf() * TAU, grow, Color.WHITE, -1, -1, [], near):
-			var o: Dictionary = props[props.size() - 1]
-			o["treat"] = true
-			o["ground"] = Vector3(p.x, 0.0, p.z)
-			var lifted := Vector3(p.x, 0.4, p.z)
-			o.pos = lifted
-			o.xform = Transform3D(Basis(Vector3.UP, float(o.yaw)).scaled(o.scale), lifted)
-			treats.append(o)
+		if _spawn_one_treat(id, at, 1.15, false):
 			made += 1
+
+func _seat_opening_treat() -> void:
+	if cam == null:
+		return
+	var hole_s := cam.unproject_position(hole_pos + Vector3(0, 0.4, 0))
+	for o in treats:
+		if not bool(o.get("opening_treat", false)) or not bool(o.get("alive", true)):
+			continue
+		var ground: Vector3 = o.get("ground", Vector3(o.pos.x, 0.0, o.pos.z))
+		var screen := cam.unproject_position(Vector3(ground.x, 0.4, ground.z))
+		# Smaller screen y is above the hole. Flip Z if this side fell under the hint.
+		if screen.y > hole_s.y - 4.0:
+			ground.z = -ground.z
+			var lift := 0.72
+			o["ground"] = ground
+			o.pos = Vector3(ground.x, lift, ground.z)
+			o.xform = Transform3D(Basis(Vector3.UP, float(o.yaw)).scaled(o.scale), o.pos)
+			var mm := _mm_of(o)
+			if mm != null:
+				mm.set_instance_transform(int(o.index), o.xform)
+			_bucket_move(o)
+			screen = cam.unproject_position(Vector3(ground.x, 0.4, ground.z))
+		var dist := Vector2(ground.x - hole_pos.x, ground.z - hole_pos.z).length()
+		var above := screen.y < hole_s.y - 4.0
+		print("TREAT SCREEN %s world %.2f %.2f dist %.2f radii %.2f hole_px %.0f %.0f treat_px %.0f %.0f above %s alive %s" % [str(map.get("layout", "")), ground.x, ground.z, dist, dist / maxf(hole_radius, 0.01), hole_s.x, hole_s.y, screen.x, screen.y, str(above), str(bool(o.alive) and not bool(o.in_body))])
 
 func _block_house(layout: String) -> String:
 	match layout:
@@ -5254,7 +5546,9 @@ func _dress_opening(layout: String) -> void:
 			_vista_spot("blossom", Vector3(0.9, 0, 1.8))
 		"space":
 			var pad := [SURF_SAND, SURF_CONCRETE, SURF_DIRT]
-			_place_id("stackrocket", Vector3(-3.5, 0, -4.3), Vector3.ZERO, 0.2, 1.0, Color.WHITE, -1, -1, [], true)
+			# Centered and a little further up-screen so the wide rocket stays
+			# inside the opening and clear of the astronauts.
+			_place_id("stackrocket", Vector3(0.0, 0, -6.2), Vector3.ZERO, 0.2, 1.0, Color.WHITE, -1, -1, [], true)
 			_place_id("habitat", Vector3(3.5, 0, -4.1), Vector3.ZERO, 0.5, 1.0, Color.WHITE, -1, -1, [], true)
 			if _place_id("astro", Vector3(1.45, 0, -2.45), Vector3(0.2, 0, 1.0), -1.0, 1.0, Color.WHITE, -1, 1, pad, true):
 				props[props.size() - 1]["walk"] = pad
@@ -5457,7 +5751,9 @@ func _tint_animals() -> void:
 		var coat := _coat_for(kind_id_of(int(o.kind)))
 		if coat != Color.WHITE:
 			o.color = coat
-		if bool(o.get("treat", false)):
+		if bool(o.get("opening_treat", false)):
+			o.color = Color(1.0, 0.78, 0.08)
+		elif bool(o.get("treat", false)):
 			o.color = Color(1.08, 0.94, 0.46)
 
 func _swallow_bucket(id: String) -> String:
@@ -5817,9 +6113,9 @@ func _spawn_ok(id: String, p: Vector3, grow: float) -> bool:
 func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float = -1.0, grow: float = 1.0, tint: Color = Color.WHITE, points: int = -1, mover: int = -1, allow: Array = [], opening: bool = false) -> bool:
 	if props.size() >= PROP_CAP or not kind_by_id.has(id):
 		return false
-	if p.length() < (1.6 if opening else 2.15):
+	if not treat_force and p.length() < (1.6 if opening else 2.15):
 		return false
-	if not opening and not _spawn_ok(id, p, grow):
+	if not opening and not treat_force and not _spawn_ok(id, p, grow):
 		return false
 	if absf(p.x) > CITY_HALF - 0.45 or absf(p.z) > CITY_HALF - 0.45:
 		return false
@@ -5843,10 +6139,10 @@ func _place_id(id: String, p: Vector3, dir: Vector3 = Vector3.ZERO, yaw: float =
 	if mover >= 0:
 		spec[6] = mover
 	var foot := _overlap_foot(ki, float(spec[2]))
-	if not _road_drive(mover, allow):
+	if not treat_force and not _road_drive(mover, allow):
 		if surf == SURF_ROAD or not _clear_of_road(p, foot):
 			return false
-	if _overlaps(p, foot):
+	if not treat_force and _overlaps(p, foot):
 		return false
 	var use_yaw := yaw if yaw >= 0.0 else randf() * TAU
 	_add_prop(ki, p, dir, use_yaw, spec)
@@ -6876,14 +7172,24 @@ func _screen_vector_to_world(screen: Vector2) -> Vector3:
 func _start_radius() -> float:
 	return Save.start_radius() + float(Save.time_rank) * 0.04
 
+func _screen_speed_factor(radius: float) -> float:
+	# Stick speed stays on the 56 degree framing distance. Pulling the camera
+	# back for the narrower lens must not make a full drag race across the map.
+	var dist := _stick_dist_for_frac(maxf(radius, 0.12), _cam_frac_for(radius))
+	var wide := maxf(_view_aspect() / (720.0 / 1280.0), 1.0)
+	return pow(maxf(dist, 0.001) / STICK_REF_DIST, SPEED_SCREEN) * wide
+
+func _size_ratio(radius: float) -> float:
+	return maxf(radius, 0.12) / maxf(_start_radius(), 0.12)
+
+func _size_speed_mul(radius: float) -> float:
+	var bonus := SIZE_SPEED_K * (_size_ratio(radius) - 1.0)
+	return 1.0 + clampf(bonus, -0.08, SIZE_SPEED_CAP)
+
 func _move_speed() -> float:
 	# Follow the eased radius so a size-up does not kick the stick ahead of the zoom.
-	# Speed stays on the 56 degree framing distance. Pulling the camera back for
-	# the narrower lens must not make a full drag race across the map.
-	var dist := _stick_dist_for_frac(maxf(shown_radius, 0.12), _cam_frac_for(shown_radius))
-	var wide := maxf(_view_aspect() / (720.0 / 1280.0), 1.0)
-	var factor := pow(maxf(dist, 0.001) / STICK_REF_DIST, SPEED_SCREEN) * wide
-	return BASE_SPEED * speed_scale * Save.speed_mul() * factor
+	# The size term is a small extra on that framing speed, shared with rivals.
+	return BASE_SPEED * speed_scale * Save.speed_mul() * _screen_speed_factor(shown_radius) * _size_speed_mul(shown_radius)
 
 func _bot_food_fits(o: Dictionary) -> bool:
 	if o.is_empty() or not bool(o.get("alive", false)):
@@ -7485,18 +7791,15 @@ func _rival_threatened(rival: Dictionary) -> bool:
 	return _xz_dist(rival.pos, hole_pos) < hole_radius + lerpf(16.0, 22.0, _rival_diff())
 
 func _rival_move_speed(rival: Dictionary) -> float:
-	var pace := clampf(float(rival.get("speed", 2.2)) / 2.22, 0.88, 1.05)
-	if bool(rival.get("fleeing", false)):
-		# Full speed while fleeing, a hair under the player so a chase can still close.
-		return _move_speed() * lerpf(0.93, 0.99, _rival_diff())
-	var cap := BASE_SPEED * lerpf(0.70, 0.88, _rival_diff()) * pace
-	cap = minf(cap, BASE_SPEED * 0.90)
-	var band := _rival_band(rival)
-	if band > 1.2:
-		cap *= lerpf(1.0, 1.28, clampf((band - 1.2) / 1.1, 0.0, 1.0))
-	elif band < 0.7:
-		cap *= 0.82
-	return cap
+	# Same size curve as the player, on this rival's radius. The screen factor
+	# stays the player's, so a small hole is not several times slower just
+	# because the camera has pulled back. Pace and cruise stay within a few
+	# percent. Size is what lets a bigger hole catch a smaller one.
+	var pace := lerpf(0.98, 1.02, clampf((float(rival.get("speed", 2.2)) - 2.05) / 0.40, 0.0, 1.0))
+	var speed := BASE_SPEED * speed_scale * Save.speed_mul() * _screen_speed_factor(shown_radius) * _size_speed_mul(float(rival.radius)) * pace
+	if not bool(rival.get("fleeing", false)):
+		speed *= lerpf(0.97, 0.99, _rival_diff())
+	return speed
 
 func _rival_avoid(i: int) -> Vector3:
 	var rival: Dictionary = rivals[i]
@@ -7671,7 +7974,35 @@ func _separate_hole(pos: Vector3, radius: float, ignore: int) -> Vector3:
 			out = other.pos + push2.normalized() * (need + 0.05)
 	return out
 
+func _swallow_reach(eater_r: float, prey_r: float) -> float:
+	# The player swallows a rival at 0.72 of the eater radius. A rival swallows
+	# the player on that same depth, or once the player's center is inside the
+	# rival by half the player radius, whichever reaches farther. A small lip
+	# still counts a center that has crossed into the rival hole.
+	var deep := eater_r - prey_r * 0.5
+	var inside := eater_r - minf(prey_r * 0.12, 0.4)
+	return maxf(eater_r * 0.72, maxf(deep, inside))
+
+func _resolve_player_threat() -> void:
+	if not playing or player_invuln > 0.0:
+		return
+	for rival in rivals:
+		if not playing:
+			return
+		if not bool(rival.alive):
+			continue
+		var rr := float(rival.radius)
+		if rr < hole_radius * EAT_RATIO:
+			continue
+		var dist := _xz_dist(hole_pos, rival.pos)
+		if dist < _swallow_reach(rr, hole_radius):
+			_rival_eats_player(rival)
+			return
+
 func _resolve_eats() -> void:
+	if not playing:
+		return
+	_resolve_player_threat()
 	if not playing:
 		return
 	var i := 0
@@ -7681,8 +8012,6 @@ func _resolve_eats() -> void:
 			var dist := _xz_dist(hole_pos, rival.pos)
 			if hole_radius > float(rival.radius) * EAT_RATIO and dist < hole_radius * 0.72:
 				_player_eats_rival(rival)
-			elif player_invuln <= 0.0 and float(rival.radius) > hole_radius * EAT_RATIO and dist < float(rival.radius) * 0.72:
-				_rival_eats_player(rival)
 		i += 1
 	for a in rivals.size():
 		if not playing:
@@ -8104,8 +8433,6 @@ func _process(delta: float) -> void:
 		elif clear_total > 0 and _clear_ratio() >= CLEAR_RATIO:
 			_finish_round(true)
 		else:
-			if player_invuln > 0.0:
-				player_invuln = maxf(0.0, player_invuln - delta)
 			if latency_probe:
 				if lat_arm:
 					lat_arm = false
@@ -8556,15 +8883,21 @@ func _tick_treats() -> void:
 			continue
 		var phase := float(o.get("phase", 0.0))
 		var ground: Vector3 = o.get("ground", Vector3(o.pos.x, 0.0, o.pos.z))
-		var bob := Vector3(ground.x, 0.38 + 0.14 * sin(t * 2.4 + phase), ground.z)
+		var opening := bool(o.get("opening_treat", false))
+		var bob_y := (0.78 + 0.32 * sin(t * 2.6 + phase)) if opening else (0.38 + 0.14 * sin(t * 2.4 + phase))
+		var bob := Vector3(ground.x, bob_y, ground.z)
 		o.pos = bob
-		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(o.scale)
+		var pulse := 0.5 + 0.5 * sin(t * 5.2 + phase)
+		var scl: Vector3 = o.scale
+		if opening:
+			var pop := 1.0 + pulse * 0.12
+			scl = Vector3(scl.x * pop, scl.y * pop, scl.z * pop)
+		var basis := Basis(Vector3.UP, float(o.yaw)).scaled(scl)
 		var xform := Transform3D(basis, bob)
 		o.xform = xform
 		mm.set_instance_transform(int(o.index), xform)
-		var pulse := 0.5 + 0.5 * sin(t * 5.2 + phase)
 		var base: Color = o.color
-		var hot := base.lerp(Color(1.0, 0.98, 0.72), 0.4 + pulse * 0.6)
+		var hot := base.lerp(Color(1.0, 0.98, 0.55), 0.35 + pulse * 0.65) if opening else base.lerp(Color(1.0, 0.98, 0.72), 0.4 + pulse * 0.6)
 		mm.set_instance_color(int(o.index), hot)
 
 func _update_debug(delta: float) -> void:
@@ -8590,11 +8923,15 @@ func _save_shot() -> void:
 	print("SHOT %s load %d mem %d video %d draws %d fps %d props %d dist %.1f" % [shot_path, city_load_ms, city_mem, video, draws, fps, props.size(), cam_distance])
 	get_tree().quit()
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if bot_drive:
 		bot_step_ready = true
 	_sync_rim()
 	if playing:
+		if player_invuln > 0.0:
+			player_invuln = maxf(0.0, player_invuln - delta)
+		# Every physics tick, including tester mode and a level picked from the menu.
+		_resolve_player_threat()
 		_activate_nearby()
 	var i := active.size() - 1
 	while i >= 0:
@@ -8705,6 +9042,8 @@ func _take_covered(sp: Vector3, rad: float, sink: int) -> void:
 			return
 		if bool(o.in_body) or not bool(o.alive):
 			continue
+		if bool(o.get("opening_treat", false)) and _xz_dist(o.pos, sp) > rad * 0.92:
+			continue
 		var base := float(o.base)
 		if not _fits_r(base, rad):
 			continue
@@ -8727,6 +9066,8 @@ func _take_partials(centers: Array, radii: Array, sinks: Array) -> void:
 			for o in _scan_buckets(sp, rad + maxf(1.4, rad * 0.35)):
 				var uid := int(o.get("uid", -1))
 				if seen.has(uid) or bool(o.in_body) or not bool(o.alive):
+					continue
+				if bool(o.get("opening_treat", false)) and _xz_dist(o.pos, sp) > rad * 0.92:
 					continue
 				seen[uid] = true
 				var base := float(o.base)
@@ -9337,7 +9678,7 @@ func start_round(index: int) -> void:
 	_spawn_rivals()
 	_tally_clear()
 	_sync_level()
-	player_invuln = 2.8
+	player_invuln = SPAWN_GRACE
 	continue_used = false
 	rivals_bitten = {}
 	round_eaten = ""
@@ -9348,6 +9689,7 @@ func start_round(index: int) -> void:
 	hole_mesh.visible = true
 	hole_mesh.position = hole_pos
 	_snap_camera()
+	_seat_opening_treat()
 	_warm_view()
 	_hold_for_reveal()
 	over_panel.visible = false
@@ -9444,7 +9786,7 @@ func _begin_play() -> void:
 	shown_radius = hole_radius
 	hole_open = hole_radius
 	round_settled = false
-	player_invuln = 2.8
+	player_invuln = SPAWN_GRACE
 	continue_used = false
 	rivals_bitten = {}
 	round_eaten = ""
@@ -9555,7 +9897,7 @@ func _restart_pause() -> void:
 	paused = false
 	if pause_layer:
 		pause_layer.visible = false
-	start_round(map_index)
+	_request_round(map_index)
 
 func _exit_pause() -> void:
 	paused = false
@@ -9934,7 +10276,7 @@ func _on_results_retry() -> void:
 	if _between_ad_due():
 		_show_interstitial("retry", true)
 	else:
-		start_round(map_index)
+		_request_round(map_index)
 
 func _on_next_level() -> void:
 	if not _level_open(map_index + 1):
@@ -9942,7 +10284,7 @@ func _on_next_level() -> void:
 	if _between_ad_due():
 		_show_interstitial("next", true)
 	else:
-		start_round(map_index + 1)
+		_request_round(map_index + 1)
 
 func _on_continue() -> void:
 	if mode == "results" and not round_settled:
@@ -9962,12 +10304,12 @@ func _after_ad() -> void:
 			playing = true
 		return
 	if intent == "retry":
-		start_round(map_index)
+		_request_round(map_index)
 		return
 	if intent == "next":
 		var nxt := map_index + 1
 		if _level_open(nxt):
-			start_round(nxt)
+			_request_round(nxt)
 			return
 	var home := mini(Save.unlocked_level, CatalogScript.maps().size() - 1)
 	_enter_attract(home)
@@ -10078,7 +10420,7 @@ func _on_retry() -> void:
 	if _between_ad_due():
 		_show_interstitial("retry", true)
 	else:
-		start_round(map_index)
+		_request_round(map_index)
 
 func _on_game_home() -> void:
 	_close_continue_layer()
@@ -10102,7 +10444,7 @@ func _resume_after_eaten() -> void:
 	var kicked: Vector3 = src + away.normalized() * (hole_radius + 2.4)
 	var lim := CITY_HALF - 1.2
 	hole_pos = Vector3(clampf(kicked.x, -lim, lim), 0.0, clampf(kicked.z, -lim, lim))
-	player_invuln = 2.6
+	player_invuln = SPAWN_GRACE
 	kept_pulse = true
 	if kept_lbl:
 		kept_lbl.text = "Kept going!"
@@ -10673,7 +11015,7 @@ func _pick_level(index: int, lock: Control = null) -> void:
 	if not _level_open(index):
 		_deny_locked_level(lock)
 		return
-	start_round(index)
+	_request_round(index)
 
 func _deny_locked_level(lock: Control) -> void:
 	var need := Save.unlocked_level + 1
@@ -10698,7 +11040,7 @@ func _on_play() -> void:
 	var i := map_index
 	if not _level_open(i):
 		i = mini(Save.unlocked_level, CatalogScript.maps().size() - 1)
-	start_round(i)
+	_request_round(i)
 
 func _screen_levels() -> void:
 	_screen_header("Levels")
