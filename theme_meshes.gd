@@ -14,6 +14,8 @@ static func defs() -> Array:
 		_def("scare", "small", 6, 0.70, _scare()),
 		_def("farmtractor", "ride", 16, 0.78, _tractor()),
 		_def("pickup", "ride", 14, 0.92, _pickup()),
+		_def("safarijeep", "car", 14, 0.88, _safarijeep(), 2),
+		_def("safaritruck", "car", 18, 1.05, _safaritruck(), 2),
 		_def("grainsilo", "barn", 28, 1.15, _silo()),
 		_def("redbarn", "barn", 48, 1.85, _barn()),
 		_def("raptord", "ride", 14, 0.95, _raptor()),
@@ -365,6 +367,49 @@ static func _pickup() -> ArrayMesh:
 	_wheel(st, Vector3(0.42, 0.24, 0.45), 0.22, 0.12, dark)
 	_wheel(st, Vector3(-0.42, 0.24, -0.45), 0.22, 0.12, dark)
 	_wheel(st, Vector3(0.42, 0.24, -0.45), 0.22, 0.12, dark)
+	return _commit(st)
+
+static func _safarijeep() -> ArrayMesh:
+	var st := _begin()
+	var olive := Color(0.34, 0.42, 0.2)
+	var tan := Color(0.74, 0.6, 0.34)
+	var dark := Color(0.12, 0.12, 0.1)
+	var glass := Color(0.62, 0.78, 0.72)
+	_box(st, Vector3(0, 0.46, 0.05), Vector3(0.92, 0.34, 1.65), olive)
+	_box(st, Vector3(0, 0.56, 0.72), Vector3(0.84, 0.14, 0.5), olive)
+	_box(st, Vector3(0, 0.84, 0.36), Vector3(0.78, 0.28, 0.06), glass)
+	_box(st, Vector3(-0.38, 0.92, -0.12), Vector3(0.06, 0.4, 0.06), dark)
+	_box(st, Vector3(0.38, 0.92, -0.12), Vector3(0.06, 0.4, 0.06), dark)
+	_box(st, Vector3(0, 1.1, -0.12), Vector3(0.82, 0.06, 0.06), dark)
+	_box(st, Vector3(0, 1.05, -0.42), Vector3(0.84, 0.05, 0.62), tan)
+	_box(st, Vector3(-0.18, 0.68, -0.02), Vector3(0.28, 0.14, 0.28), tan)
+	_box(st, Vector3(0.18, 0.68, -0.02), Vector3(0.28, 0.14, 0.28), tan)
+	_wheel(st, Vector3(0, 0.58, -0.86), 0.16, 0.08, dark)
+	_wheel(st, Vector3(-0.48, 0.24, 0.52), 0.24, 0.14, dark)
+	_wheel(st, Vector3(0.48, 0.24, 0.52), 0.24, 0.14, dark)
+	_wheel(st, Vector3(-0.48, 0.24, -0.48), 0.24, 0.14, dark)
+	_wheel(st, Vector3(0.48, 0.24, -0.48), 0.24, 0.14, dark)
+	return _commit(st)
+
+static func _safaritruck() -> ArrayMesh:
+	var st := _begin()
+	var olive := Color(0.3, 0.38, 0.18)
+	var tan := Color(0.7, 0.56, 0.3)
+	var dark := Color(0.1, 0.11, 0.09)
+	var glass := Color(0.58, 0.74, 0.7)
+	_box(st, Vector3(0, 0.58, 0.82), Vector3(0.9, 0.52, 0.68), olive)
+	_box(st, Vector3(0, 0.74, 0.92), Vector3(0.74, 0.26, 0.36), glass)
+	_box(st, Vector3(0, 0.46, -0.32), Vector3(0.96, 0.26, 1.3), tan)
+	_box(st, Vector3(-0.44, 0.82, -0.32), Vector3(0.05, 0.48, 1.15), dark)
+	_box(st, Vector3(0.44, 0.82, -0.32), Vector3(0.05, 0.48, 1.15), dark)
+	_box(st, Vector3(0, 1.04, -0.32), Vector3(0.9, 0.05, 1.2), tan)
+	_box(st, Vector3(0, 0.72, -0.95), Vector3(0.9, 0.42, 0.05), dark)
+	_wheel(st, Vector3(-0.5, 0.26, 0.7), 0.26, 0.16, dark)
+	_wheel(st, Vector3(0.5, 0.26, 0.7), 0.26, 0.16, dark)
+	_wheel(st, Vector3(-0.5, 0.26, -0.15), 0.26, 0.16, dark)
+	_wheel(st, Vector3(0.5, 0.26, -0.15), 0.26, 0.16, dark)
+	_wheel(st, Vector3(-0.5, 0.26, -0.72), 0.26, 0.16, dark)
+	_wheel(st, Vector3(0.5, 0.26, -0.72), 0.26, 0.16, dark)
 	return _commit(st)
 
 static func _silo() -> ArrayMesh:
