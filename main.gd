@@ -1837,11 +1837,10 @@ func _preview_still() -> void:
 	var shown0 := clear_shown
 	var score1 := score
 	_open_pause()
-	var clock_paused := float(RenderingServer.global_shader_parameter_get("game_time"))
+	var clock_paused := game_time
 	var nub := Node3D.new()
 	add_child(nub)
 	var tw := create_tween()
-	tw.pause_mode = Tween.TWEEN_PAUSE_BOUND
 	tw.tween_property(nub, "position", Vector3(6.0, 0.0, 0.0), 0.05)
 	var host := Node3D.new()
 	add_child(host)
@@ -1864,16 +1863,16 @@ func _preview_still() -> void:
 	_halt_world_playback()
 	var anim_at := ap.current_animation_position
 	await get_tree().create_timer(0.25).timeout
-	var clock_held := float(RenderingServer.global_shader_parameter_get("game_time"))
-	var freeze_ok := clock_paused > 1.0 and absf(clock_held - clock_paused) < 0.001 and nub.position.length() < 0.01 and absf(ap.current_animation_position - anim_at) < 0.02 and stray.process_mode == Node.PROCESS_MODE_PAUSABLE and pause_layer.process_mode == Node.PROCESS_MODE_ALWAYS and menu_layer.process_mode == Node.PROCESS_MODE_ALWAYS
-	var shaders_ok := LIFE_SHADER.find("TIME") < 0 and VEG_SHADER.find("TIME") < 0 and HOLE_SHADER.find("TIME") < 0 and GROUND_SHADER.find("TIME") < 0 and LIFE_SHADER.find("game_time") >= 0
-	print("STILL freeze clock %.3f -> %.3f tween %.3f anim %.3f shaders %s" % [clock_paused, clock_held, nub.position.length(), ap.current_animation_position, str(shaders_ok)])
 	for _step in 30:
 		_process(1.0)
 		_physics_process(1.0)
 		_tick_clear_bar(1.0)
 		if took:
 			_drive_body(victim)
+	var clock_held := game_time
+	var freeze_ok := clock_paused > 1.0 and absf(clock_held - clock_paused) < 0.001 and nub.position.length() < 0.01 and absf(ap.current_animation_position - anim_at) < 0.02 and stray.process_mode == Node.PROCESS_MODE_PAUSABLE and pause_layer.process_mode == Node.PROCESS_MODE_ALWAYS and menu_layer.process_mode == Node.PROCESS_MODE_ALWAYS
+	var shaders_ok := LIFE_SHADER.find("TIME") < 0 and VEG_SHADER.find("TIME") < 0 and HOLE_SHADER.find("TIME") < 0 and GROUND_SHADER.find("TIME") < 0 and LIFE_SHADER.find("game_time") >= 0
+	print("STILL freeze clock %.3f -> %.3f tween %.3f anim %.3f shaders %s" % [clock_paused, clock_held, nub.position.length(), ap.current_animation_position, str(shaders_ok)])
 	var pause_ok := took and get_tree().paused and score == score1 and clear_eaten == clear0 and absf(hole_radius - radius0) < 0.0001 and absf(clear_shown - shown0) < 0.0001
 	if took:
 		pause_ok = pause_ok and bool(victim.alive) and victim.body != null
@@ -3415,6 +3414,12 @@ func _register_game_clock() -> void:
 func _advance_game_time(delta: float) -> void:
 	game_time += maxf(delta, 0.0)
 	RenderingServer.global_shader_parameter_set("game_time", game_time)
+
+func _publish_live_stick() -> void:
+	if not OS.has_feature("web"):
+		return
+	var held := 1 if _steer_button_down() else 0
+	JavaScriptBridge.eval("window.__holeLive={x:%.3f,z:%.3f,held:%d,score:%d,gt:%.3f,size:%d};" % [hole_pos.x, hole_pos.z, held, score, game_time, level + 1], true)
 
 func _css_to_view(p: Vector2, css: Vector2) -> Vector2:
 	var vp := get_viewport().get_visible_rect().size
@@ -9990,6 +9995,7 @@ func _process(delta: float) -> void:
 	# Shader TIME ignores the scene-tree pause. This clock does not, so a
 	# paused or settings frame keeps animals, plants, water, and the hole still.
 	_advance_game_time(delta)
+	_publish_live_stick()
 	var frame_delta := delta
 	if bot_drive:
 		if not bot_step_ready:
@@ -11591,6 +11597,7 @@ func _open_pause() -> void:
 	_refresh_joystick()
 	get_tree().paused = true
 	_halt_world_playback()
+	_publish_freeze_marker()
 	if name_lbl:
 		name_lbl.visible = false
 	_sync_pause_button()
@@ -12673,6 +12680,12 @@ func _freeze_for_settings() -> void:
 	velocity = Vector3.ZERO
 	get_tree().paused = true
 	_halt_world_playback()
+	_publish_freeze_marker()
+
+func _publish_freeze_marker() -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("window.__holeFreeze={gt:%.4f,paused:1};" % game_time, true)
 
 func _show_screen(which: String) -> void:
 	if which == "menu" or which == "attract":
