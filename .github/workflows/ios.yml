@@ -1,0 +1,72 @@
+name: iOS unsigned archive
+
+# Manual only. macOS minutes are billed. Do not run this on a push.
+# The archive is unsigned. Signing needs an Apple Developer account. See store/IOS.md.
+# Codemagic is the documented alternative if GitHub macOS minutes are not wanted.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Godot 4.3
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot/releases/download/4.3-stable"
+          curl -fsSL -o /tmp/godot.zip "${base}/Godot_v4.3-stable_macos.universal.zip"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          sudo mkdir -p /Applications
+          sudo rm -rf /Applications/Godot.app
+          sudo mv /tmp/godot/Godot.app /Applications/Godot.app
+          curl -fsSL -o /tmp/templates.tpz "${base}/Godot_v4.3-stable_export_templates.tpz"
+          dest="${HOME}/Library/Application Support/Godot/export_templates/4.3.stable"
+          mkdir -p "${dest}"
+          unzip -q /tmp/templates.tpz -d /tmp/godot-templates
+          mv /tmp/godot-templates/templates/* "${dest}/"
+          /Applications/Godot.app/Contents/MacOS/Godot --headless --version
+
+      - name: Export the Xcode project
+        run: |
+          set -euo pipefail
+          sed -i '' 's/const STORE_BUILD := false/const STORE_BUILD := true/' mobile_ids.gd
+          grep -q 'const STORE_BUILD := true' mobile_ids.gd
+          sed -i '' '/^driver\/driver=/d' project.godot
+          mkdir -p build/ios
+          /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --export-release "iOS" build/ios/HoleArcade.ipa
+          python3 tools/inject_ios_plist.py build/ios ios/skadnetwork_ids.txt
+          find build/ios -name Info.plist -print
+          find build/ios -name '*.xcodeproj' -print
+
+      - name: Build an unsigned archive
+        run: |
+          set -euo pipefail
+          proj=$(find build/ios -name '*.xcodeproj' | head -n 1)
+          test -n "${proj}"
+          scheme=$(xcodebuild -project "${proj}" -list | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag{print;exit}' | awk '{$1=$1;print}')
+          test -n "${scheme}"
+          echo "scheme ${scheme}"
+          xcodebuild \
+            -project "${proj}" \
+            -scheme "${scheme}" \
+            -configuration Release \
+            -archivePath build/ios/HoleArcade.xcarchive \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
+          test -d build/ios/HoleArcade.xcarchive
+
+      - name: Upload the unsigned archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: hole-arcade-ios-unsigned
+          path: build/ios/HoleArcade.xcarchive
+          if-no-files-found: error

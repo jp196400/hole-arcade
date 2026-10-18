@@ -2,8 +2,14 @@ config_version=5
 
 [application]
 config/name="Hole Arcade"
+config/version="1.0.0"
+config/icon="res://icons/icon.png"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
+boot_splash/bg_color=Color(0.11, 0.16, 0.29, 1)
+boot_splash/image="res://icons/splash.png"
+boot_splash/fullsize=false
+boot_splash/use_filter=true
 
 [autoload]
 Save="*res://save_game.gd"
@@ -40,8 +46,8 @@ renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.11, 0.16, 0.29, 1)
 textures/vram_compression/import_etc2_astc=true
 scaling_3d/mode=0
-scaling_3d/scale=1.5
-anti_aliasing/quality/msaa_3d=2
+scaling_3d/scale=1.0
+anti_aliasing/quality/msaa_3d=0
 textures/default_filters/anisotropic_filtering_level=4
 lights_and_shadows/directional_shadow/size=1024
 lights_and_shadows/directional_shadow/soft_shadow_filter_quality=0

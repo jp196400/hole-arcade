@@ -1,0 +1,128 @@
+name: Android signed AAB
+
+# Manual only. A push to main must not spend a gradle build or fail Pages.
+# This job fails until the upload-key secrets exist. See store/ANDROID.md.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  aab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Require upload keystore secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "Missing GitHub secret ${name}. Add it before dispatching. See store/ANDROID.md"
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK 36
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget unzip
+          sdk="${HOME}/android-sdk"
+          mkdir -p "${sdk}/cmdline-tools"
+          # Pinned from the September 2026 command-line tools package.
+          wget -q -O /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip
+          unzip -q /tmp/cmdline-tools.zip -d "${sdk}/cmdline-tools"
+          mv "${sdk}/cmdline-tools/cmdline-tools" "${sdk}/cmdline-tools/latest"
+          export ANDROID_HOME="${sdk}"
+          yes | "${sdk}/cmdline-tools/latest/bin/sdkmanager" --sdk_root="${sdk}" --licenses >/dev/null || true
+          "${sdk}/cmdline-tools/latest/bin/sdkmanager" --sdk_root="${sdk}" --install "platforms;android-36" "build-tools;36.0.0" "ndk;23.2.8568313"
+          test -d "${sdk}/platforms/android-36"
+          echo "ANDROID_HOME=${sdk}" >> "$GITHUB_ENV"
+
+      - name: Install Godot 4.3
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot/releases/download/4.3-stable"
+          curl -fsSL -o /tmp/godot.zip "${base}/Godot_v4.3-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          sudo install -m 755 /tmp/godot/Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
+          curl -fsSL -o /tmp/templates.tpz "${base}/Godot_v4.3-stable_export_templates.tpz"
+          mkdir -p "${HOME}/.local/share/godot/export_templates/4.3.stable"
+          unzip -q /tmp/templates.tpz -d /tmp/godot-templates
+          mv /tmp/godot-templates/templates/* "${HOME}/.local/share/godot/export_templates/4.3.stable/"
+          godot --headless --version
+
+      - name: Patch the Android template for API 36
+        run: |
+          set -euo pipefail
+          python3 tools/patch_android_sdk.py \
+            "${HOME}/.local/share/godot/export_templates/4.3.stable/android_source.zip" \
+            "${RUNNER_TEMP}/android_source_36.zip"
+          echo "ANDROID_SOURCE_TEMPLATE=${RUNNER_TEMP}/android_source_36.zip" >> "$GITHUB_ENV"
+
+      - name: Decode the upload keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "${RUNNER_TEMP}/upload.keystore"
+          test -s "${RUNNER_TEMP}/upload.keystore"
+          echo "ANDROID_KEYSTORE_PATH=${RUNNER_TEMP}/upload.keystore" >> "$GITHUB_ENV"
+          # Passwords stay in the step environment via the next step's env block.
+          python3 - << 'PY'
+          import os
+          path = os.environ["HOME"] + "/.config/godot"
+          os.makedirs(path, exist_ok=True)
+          sdk = os.environ["ANDROID_HOME"]
+          java = os.environ["JAVA_HOME"]
+          text = """[gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "%s"
+          export/android/java_sdk_path = "%s"
+          """ % (sdk, java)
+          open(path + "/editor_settings-4.3.tres", "w", encoding="utf-8").write(text)
+          print("editor settings written")
+          PY
+
+      - name: Mark the store build and export the AAB
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sed -i 's/const STORE_BUILD := false/const STORE_BUILD := true/' mobile_ids.gd
+          grep -q 'const STORE_BUILD := true' mobile_ids.gd
+          # Let the Android export use the platform audio driver. Pages keeps Dummy.
+          sed -i '/^driver\/driver=/d' project.godot
+          python3 tools/fill_android_secrets.py export_presets.cfg
+          mkdir -p build/android
+          godot --headless --path . --export-release "Android" build/android/hole-arcade.aab
+          test -s build/android/hole-arcade.aab
+
+      - name: Upload the AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: hole-arcade-aab
+          path: build/android/hole-arcade.aab
+          if-no-files-found: error

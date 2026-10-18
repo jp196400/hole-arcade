@@ -41,6 +41,7 @@ jobs:
           # Packed into the game so the on-screen label matches this commit even if HTML is cached.
           sed -i "s/__BUILD_SHA__/${GITHUB_SHA}/g" main.gd
           grep -q "${GITHUB_SHA}" main.gd
+          grep -q 'const STORE_BUILD := false' mobile_ids.gd
           mkdir -p build/web
           godot --headless --path . --export-release "Web" build/web/index.html
           test -s build/web/index.html
@@ -77,6 +78,10 @@ jobs:
           grep -q 'unregister' build/web/index.service.worker.js
           printf '{"sha":"%s"}\n' "${GITHUB_SHA}" > build/web/version.json
           grep -q "\"sha\":\"${GITHUB_SHA}\"" build/web/version.json
+          mkdir -p build/web/privacy
+          cp privacy/index.html build/web/privacy/index.html
+          test -s build/web/privacy/index.html
+          grep -q 'AdMob' build/web/privacy/index.html
           # Godot only copies user:// to IndexedDB on quit. Expose a queued sync so the game can flush after each save.
           python3 tools/patch_web_sync.py build/web/index.js
           grep -q 'syncPersistentFS' build/web/index.js

@@ -1,9 +1,12 @@
 extends Node
 
-## Placeholder ads only. There is no ad SDK and no ad account in this build.
-## Swap point for a later AdMob build: replace show_interstitial and show_rewarded.
-## No banner API. Do not show a banner during gameplay.
+const MobileIds = preload("res://mobile_ids.gd")
+
+## Web builds show a placeholder card. There is no ad SDK in the Pages test build.
+## Android and iOS call an AdMob plugin singleton when one is installed.
+## Test unit ids live in mobile_ids.gd. No banner API. Do not show a banner during gameplay.
 ## no_ads turns off interstitials only. Rewarded ads stay available.
+## A store build with no plugin does not show the fake card and does not grant a reward.
 ## SKIP_AFTER_SECONDS is the placeholder interstitial skip delay.
 ## A real AdMob interstitial's skip timing is controlled by the ad network, not this constant.
 
@@ -19,15 +22,77 @@ var _left := 0.0
 var _finished := false
 var _skip: Button
 var _status: Label
+var _plugin: Object = null
+
+func _ready() -> void:
+	_plugin = _ad_plugin()
+	if _plugin == null:
+		_request_att()
+		return
+	var app_id := MobileIds.app_id()
+	if _plugin.has_method("initialize"):
+		_plugin.initialize(app_id)
+	elif _plugin.has_method("init"):
+		_plugin.init(app_id)
+	_request_att()
+
+func _ad_plugin() -> Object:
+	for name in ["AdMob", "PoingGodotAdMob"]:
+		if Engine.has_singleton(name):
+			return Engine.get_singleton(name)
+	return null
+
+func _request_att() -> void:
+	if not OS.has_feature("ios"):
+		return
+	for name in ["AppTrackingTransparency", "ATT", "AdMob", "PoingGodotAdMob"]:
+		if not Engine.has_singleton(name):
+			continue
+		var plugin := Engine.get_singleton(name)
+		if plugin.has_method("request_tracking_authorization"):
+			plugin.request_tracking_authorization()
+			return
+		if plugin.has_method("requestTrackingAuthorization"):
+			plugin.requestTrackingAuthorization()
+			return
 
 func show_interstitial() -> void:
 	if IapService.no_ads:
 		call_deferred("_emit_interstitial")
 		return
+	if _show_native("interstitial", MobileIds.interstitial_id()):
+		return
+	if MobileIds.STORE_BUILD:
+		call_deferred("_emit_interstitial")
+		return
 	_open("interstitial")
 
 func show_rewarded() -> void:
+	if _show_native("rewarded", MobileIds.rewarded_id()):
+		return
+	if MobileIds.STORE_BUILD:
+		call_deferred("_deny_reward")
+		return
 	_open("rewarded")
+
+func _show_native(kind: String, unit_id: String) -> bool:
+	if _plugin == null:
+		return false
+	var pairs := []
+	if kind == "interstitial":
+		pairs = [["load_interstitial", "show_interstitial"], ["loadInterstitial", "showInterstitial"]]
+	else:
+		pairs = [["load_rewarded", "show_rewarded"], ["loadRewarded", "showRewarded"], ["load_rewarded_ad", "show_rewarded_ad"]]
+	for pair in pairs:
+		if _plugin.has_method(pair[0]):
+			_plugin.call(pair[0], unit_id)
+		if _plugin.has_method(pair[1]):
+			_plugin.call(pair[1])
+			return true
+	return false
+
+func _deny_reward() -> void:
+	rewarded_done.emit(false)
 
 func _emit_interstitial() -> void:
 	interstitial_closed.emit()

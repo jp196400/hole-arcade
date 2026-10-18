@@ -1,5 +1,7 @@
 extends Node3D
 
+const MobileIds = preload("res://mobile_ids.gd")
+
 const CITY_HALF := 77.8
 const GRID_MIN := -77
 const GRID_MAX := 77
@@ -24,8 +26,9 @@ const CAM_FOV := 40.0
 const STICK_FOV := 56.0
 # A real horizon does not fit in this lens. The hint is a thin screen gradient.
 const HAZE_FRAC := 0.05
-# Store builds set this false. It is the only switch for ?test=1 and the
-# Settings build-hash tap. Tester mode never writes unlocks or skin progress.
+# Pages keeps this true so ?test=1 and the Settings build-hash tap work.
+# Store exports force tester mode off through MobileIds.STORE_BUILD.
+# Tester mode never writes unlocks or skin progress.
 const ALLOW_TESTER := true
 const CAM_BASE := 7.2
 const CAM_PER_RADIUS := 2.15
@@ -906,9 +909,9 @@ var cam_pitch := CAM_PITCH_DEG
 var cam_dist_mul := 1.0
 var cam_look_lift := 0.0
 var skirt_mat: StandardMaterial3D
-var quality_scale := 1.5
-var quality_render := 1.5
-var quality_msaa := 2
+var quality_scale := 1.0
+var quality_render := 1.0
+var quality_msaa := 0
 var quality_fxaa := false
 var quality_phase := 0
 var quality_warmup := 0.0
@@ -916,7 +919,7 @@ var quality_timer := 0.0
 var quality_acc := 0.0
 var quality_n := 0
 var quality_tries := 0
-var quality_ceiling := 2.05
+var quality_ceiling := 1.26
 var quality_locked := false
 var score_lbl: Label
 var level_lbl: Label
@@ -993,7 +996,8 @@ var city_load_ms := 0
 var city_mem := 0
 var city_tiles := 0
 var shot_path := ""
-var shot_wait := 0
+var shot_wait := 0.0
+var shot_drive := 0.0
 var cam_hold := false
 var mode := "menu"
 var round_cleared := false
@@ -1045,7 +1049,8 @@ func _ready() -> void:
 	# a scene-tree pause freezes them; the pause card opts back in.
 	process_mode = Node.PROCESS_MODE_PAUSABLE
 	randomize()
-	debug_on = _query_debug()
+	debug_on = _query_debug() and not MobileIds.STORE_BUILD
+	_prepare_shot()
 	speed_scale = _query_speed()
 	if _query_unlockall():
 		Save.unlock_all()
@@ -1160,6 +1165,10 @@ func _ready() -> void:
 		call_deferred("_preview_idle")
 	elif preview == "still":
 		call_deferred("_preview_still")
+	elif preview == "save":
+		call_deferred("_preview_save")
+	elif preview == "iap":
+		call_deferred("_preview_iap")
 	elif preview == "chase":
 		call_deferred("_preview_chase")
 	elif preview == "menu":
@@ -2883,6 +2892,14 @@ func _on_web_steer(args: Array) -> void:
 			_begin_play()
 	_refresh_joystick()
 
+func _apply_shot_stick() -> void:
+	if shot_path == "" or shot_drive <= 0.0:
+		return
+	joy_id = 1
+	joy_held = true
+	joy_anchor = Vector2(360, 980)
+	joy_finger = joy_anchor + Vector2(46, -36)
+
 func _steer_button_down() -> bool:
 	# A touch finger steers only while that gesture is still held. A mouse
 	# steers only while the button is down. On web, a lost pointerup can leave
@@ -2963,10 +2980,71 @@ func _web_search() -> String:
 	return extra if extra.begins_with("?") else "?" + extra
 
 func _query_debug() -> bool:
+	if MobileIds.STORE_BUILD:
+		return false
 	return _web_search().find("debug=1") != -1
 
 func _query_unlockall() -> bool:
+	if MobileIds.STORE_BUILD:
+		return false
 	return _web_search().find("unlockall=1") != -1
+
+func _phone_like() -> bool:
+	if OS.get_environment("HOLE_FORCE_PHONE") == "1":
+		return true
+	return OS.has_feature("web") or OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")
+
+func _prepare_shot() -> void:
+	shot_path = OS.get_environment("HOLE_SHOT")
+	if shot_path == "":
+		return
+	shot_wait = -1.0
+	var w := int(OS.get_environment("HOLE_SHOT_W"))
+	var h := int(OS.get_environment("HOLE_SHOT_H"))
+	if w >= 320 and h >= 320:
+		DisplayServer.window_set_size(Vector2i(w, h))
+
+func _preview_save() -> void:
+	Save.coins = 4242
+	Save.unlocked_level = 3
+	Save.maps_cleared[0] = 1
+	Save.stars[0] = 2
+	Save.set_music(false)
+	Save.set_sfx(false)
+	var on_disk := FileAccess.file_exists("user://hole_save.cfg")
+	Save.coins = 0
+	Save.unlocked_level = 0
+	Save.music_on = true
+	Save.sfx_on = true
+	Save.maps_cleared[0] = 0
+	Save.stars[0] = 0
+	Save.load_game()
+	var shown := "Version %s (build %d)" % [MobileIds.APP_VERSION, MobileIds.APP_BUILD]
+	var phone := _phone_like()
+	var quality_ok := false
+	if phone:
+		quality_ok = is_equal_approx(quality_scale, 1.0) and quality_msaa == 0
+	else:
+		quality_ok = is_equal_approx(quality_scale, 1.25) and quality_msaa == int(Viewport.MSAA_2X)
+	var ok := on_disk and Save.coins == 4242 and Save.unlocked_level == 3 and not Save.music_on and not Save.sfx_on and int(Save.maps_cleared[0]) == 1 and int(Save.stars[0]) == 2 and shown == "Version 1.0.0 (build 1)" and not MobileIds.STORE_BUILD and quality_ok
+	print("SAVE coins %d level %d music %s sfx %d map0 %d star0 %d file %s" % [Save.coins, Save.unlocked_level, str(Save.music_on), 1 if Save.sfx_on else 0, int(Save.maps_cleared[0]), int(Save.stars[0]), str(on_disk)])
+	print("VERSION %s" % shown)
+	print("QUALITY scale %.2f msaa %d phone %s" % [quality_scale, quality_msaa, str(phone)])
+	print("SAVE_OK" if ok else "SAVE_FAIL")
+	get_tree().quit()
+
+func _preview_iap() -> void:
+	Save.set_no_ads(false)
+	IapService.no_ads = false
+	IapService.purchase_remove_ads()
+	var granted := Save.no_ads
+	if MobileIds.STORE_BUILD:
+		print("IAP_STORE granted %s" % str(granted))
+		print("IAP_STORE_OK" if not granted else "IAP_STORE_FAIL")
+	else:
+		print("IAP_WEB granted %s" % str(granted))
+		print("IAP_WEB_OK" if granted else "IAP_WEB_FAIL")
+	get_tree().quit()
 
 func _query_preview() -> String:
 	var search := _web_search()
@@ -3847,9 +3925,21 @@ func _textured_shader(code: String, src_mat: Material) -> ShaderMaterial:
 
 func _boot_quality() -> void:
 	var preview := _query_preview()
+	if OS.get_environment("HOLE_SHOT") != "":
+		quality_locked = true
+		_apply_quality(1.0, Viewport.MSAA_DISABLED, false)
+		return
 	if preview in ["hole", "street", "facade"]:
 		quality_locked = true
-	_apply_quality(1.5, Viewport.MSAA_4X, false)
+		_apply_quality(1.5, Viewport.MSAA_4X, false)
+		return
+	# Phones and the web player start light and climb only while frame time holds.
+	# A desktop window starts one step higher, still without 4x MSAA.
+	quality_ceiling = 1.26
+	if _phone_like():
+		_apply_quality(1.0, Viewport.MSAA_DISABLED, false)
+	else:
+		_apply_quality(1.25, Viewport.MSAA_2X, false)
 
 func _pixel_ratio() -> float:
 	if not OS.has_feature("web"):
@@ -3892,7 +3982,9 @@ func _tick_quality(delta: float) -> void:
 		return
 	var fps := float(quality_n) / maxf(quality_acc, 0.001)
 	quality_tries += 1
-	var steps: Array = [1.0, 1.25, 1.5, 2.0]
+	var phone := _phone_like()
+	var steps: Array = [1.0, 1.25]
+	var msaa := Viewport.MSAA_DISABLED if phone else Viewport.MSAA_2X
 	var idx := 0
 	var best := 99.0
 	for i in steps.size():
@@ -3903,12 +3995,12 @@ func _tick_quality(delta: float) -> void:
 	if fps < 55.0:
 		if idx > 0:
 			quality_ceiling = float(steps[idx])
-			_apply_quality(float(steps[idx - 1]), Viewport.MSAA_4X, false)
+			_apply_quality(float(steps[idx - 1]), msaa, false)
 		else:
-			_apply_quality(1.0, Viewport.MSAA_2X, true)
+			_apply_quality(1.0, Viewport.MSAA_DISABLED, true)
 			quality_locked = true
 	elif fps > 58.0 and idx + 1 < steps.size() and float(steps[idx + 1]) < quality_ceiling and quality_tries < 4:
-		_apply_quality(float(steps[idx + 1]), Viewport.MSAA_4X, false)
+		_apply_quality(float(steps[idx + 1]), msaa, false)
 	else:
 		quality_locked = true
 	quality_timer = 0.0
@@ -7418,9 +7510,6 @@ func _build_ui() -> void:
 	ui.add_child(drag_hint)
 	_refresh_hud()
 	_build_unlock_popup()
-	shot_path = OS.get_environment("HOLE_SHOT")
-	if shot_path != "":
-		shot_wait = 24
 
 func _draw_guide() -> void:
 	if guide_ui == null or not guide_on or cam == null:
@@ -9079,10 +9168,31 @@ func _process(delta: float) -> void:
 	_tick_reveal()
 	if ui_swallow_frames > 0:
 		ui_swallow_frames -= 1
-	if shot_wait > 0:
-		shot_wait -= 1
-		if shot_wait == 0 and shot_path != "":
-			call_deferred("_save_shot")
+	if shot_path != "":
+		if shot_wait < 0.0 and props.size() > 40 and mode == "play" and playing:
+			shot_wait = 7.0
+			shot_drive = 3.2
+			joy_id = 1
+			joy_held = true
+			joy_anchor = Vector2(360, 980)
+			joy_finger = joy_anchor + Vector2(46, -36)
+		elif shot_wait > 0.0:
+			if shot_drive > 0.0:
+				shot_drive -= delta
+				joy_id = 1
+				joy_held = true
+				if shot_drive <= 0.0:
+					shot_drive = 0.0
+					joy_held = false
+					joy_id = -1
+					velocity = Vector3.ZERO
+			shot_wait -= delta
+			if shot_wait <= 0.0:
+				shot_wait = 0.0
+				joy_held = false
+				joy_id = -1
+				velocity = Vector3.ZERO
+				call_deferred("_save_shot")
 	_watch_render()
 	_sync_pause_button()
 	if _sim_frozen():
@@ -9100,7 +9210,10 @@ func _process(delta: float) -> void:
 	delta = frame_delta if bot_drive else minf(delta, 1.0 / 20.0)
 	if mode == "play" or mode == "attract":
 		_poll_pointer_steer()
+	_apply_shot_stick()
 	_tick_drag_hint(frame_delta)
+	if shot_path != "" and shot_wait >= 0.0:
+		_hide_drag_hint()
 	if mode != "play" and mode != "results" and mode != "attract":
 		if debug_on:
 			_update_debug(frame_delta)
@@ -9682,7 +9795,7 @@ func _save_shot() -> void:
 	var video := int(Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED))
 	var draws := int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
 	var fps := Engine.get_frames_per_second()
-	print("SHOT %s load %d mem %d video %d draws %d fps %d props %d dist %.1f" % [shot_path, city_load_ms, city_mem, video, draws, fps, props.size(), cam_distance])
+	print("SHOT %s %dx%d load %d mem %d video %d draws %d fps %d props %d dist %.1f pos %.1f %.1f score %d" % [shot_path, img.get_width(), img.get_height(), city_load_ms, city_mem, video, draws, fps, props.size(), cam_distance, hole_pos.x, hole_pos.z, score])
 	get_tree().quit()
 
 func _physics_process(delta: float) -> void:
@@ -11732,7 +11845,12 @@ func _show_screen(which: String) -> void:
 	if which == "shop":
 		sheet_bottom = MENU_HEADER_Y + 96.0 + 700.0
 	elif which == "settings":
-		sheet_bottom = MENU_HEADER_Y + (720.0 if _tester_active() else 584.0)
+		var settings_span := 820.0
+		if not MobileIds.STORE_BUILD:
+			settings_span += 70.0
+		if _tester_active():
+			settings_span += 120.0
+		sheet_bottom = MENU_HEADER_Y + settings_span
 	_mount_menu_column(sheet_bottom)
 	if which == "levels":
 		_screen_levels()
@@ -11746,6 +11864,8 @@ func _show_screen(which: String) -> void:
 		_screen_daily()
 
 func _tester_active() -> bool:
+	if MobileIds.STORE_BUILD:
+		return false
 	return ALLOW_TESTER and tester_on
 
 func _level_open(index: int) -> bool:
@@ -11760,7 +11880,7 @@ func _practice_level(index: int) -> bool:
 
 func _boot_tester() -> void:
 	tester_on = false
-	if not ALLOW_TESTER:
+	if MobileIds.STORE_BUILD or not ALLOW_TESTER:
 		return
 	var from_url := _web_search().find("test=1") != -1
 	if OS.has_feature("web"):
@@ -11785,7 +11905,7 @@ func _turn_tester_off() -> void:
 		_show_screen("settings")
 
 func _tap_build_hash() -> void:
-	if not ALLOW_TESTER:
+	if MobileIds.STORE_BUILD or not ALLOW_TESTER:
 		return
 	var now := Time.get_ticks_msec()
 	if now - hash_tap_ms > 2500:
@@ -11994,7 +12114,10 @@ func _screen_shop() -> void:
 	ads_btn.disabled = IapService.no_ads
 	ads_btn.pressed.connect(_confirm_remove_ads)
 	_menu_add(ads_btn)
-	var test := _menu_label("Test purchase. Removes interstitials only.", Vector2(40, body + 608.0), 26)
+	var test_line := "Removes interstitials only. Rewarded ads stay optional."
+	if not MobileIds.STORE_BUILD:
+		test_line = "Test purchase. Removes interstitials only."
+	var test := _menu_label(test_line, Vector2(40, body + 608.0), 26)
 	test.size = Vector2(640, 36)
 	_menu_add(test)
 
@@ -12030,7 +12153,10 @@ func _buy_upgrade(which: String) -> void:
 func _confirm_remove_ads() -> void:
 	_mount_menu_column()
 	mode = "shop"
-	var msg := _menu_label("Remove ads for %s?\nTest purchase. No charge.\nInterstitials stop. Rewarded ads stay optional." % IapService.price_text(), Vector2(48, 220), 34)
+	var charge := "The store will confirm the charge."
+	if not MobileIds.STORE_BUILD:
+		charge = "Test purchase. No charge."
+	var msg := _menu_label("Remove ads for %s?\n%s\nInterstitials stop. Rewarded ads stay optional." % [IapService.price_text(), charge], Vector2(48, 220), 34)
 	msg.size = Vector2(624, 180)
 	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -12053,6 +12179,9 @@ func _open_settings_from_pause() -> void:
 	if pause_layer:
 		pause_layer.visible = false
 	_show_screen("settings")
+
+func _open_privacy() -> void:
+	OS.shell_open(MobileIds.PRIVACY_URL)
 
 func _settings_back() -> void:
 	joy_held = false
@@ -12106,22 +12235,31 @@ func _screen_settings() -> void:
 	note.size = Vector2(624, 64)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_menu_add(note)
-	var build := Button.new()
-	build.text = "Build %s" % _short_sha()
-	build.flat = true
-	build.position = Vector2(48, body + 400.0)
-	build.size = Vector2(624, 44)
-	build.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	if ui_font:
-		build.add_theme_font_override("font", ui_font)
-	build.add_theme_font_size_override("font_size", 22)
-	build.add_theme_color_override("font_color", Color(0.32, 0.4, 0.5))
-	build.add_theme_color_override("font_hover_color", Color(0.32, 0.4, 0.5))
-	build.add_theme_color_override("font_pressed_color", Color(0.2, 0.28, 0.38))
-	build.pressed.connect(_tap_build_hash)
-	_menu_add(build)
+	var version := _menu_label("Version %s (build %d)" % [MobileIds.APP_VERSION, MobileIds.APP_BUILD], Vector2(48, body + 404.0), 26)
+	version.size = Vector2(624, 40)
+	_menu_add(version)
+	var privacy := _make_button("Privacy policy", Vector2(48, body + 456.0), Vector2(624, 84), BRAND_INK, 32)
+	privacy.pressed.connect(_open_privacy)
+	_menu_add(privacy)
+	var next_y := body + 560.0
+	if not MobileIds.STORE_BUILD:
+		var build := Button.new()
+		build.text = "Build %s" % _short_sha()
+		build.flat = true
+		build.position = Vector2(48, next_y)
+		build.size = Vector2(624, 44)
+		build.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		if ui_font:
+			build.add_theme_font_override("font", ui_font)
+		build.add_theme_font_size_override("font_size", 22)
+		build.add_theme_color_override("font_color", Color(0.32, 0.4, 0.5))
+		build.add_theme_color_override("font_hover_color", Color(0.32, 0.4, 0.5))
+		build.add_theme_color_override("font_pressed_color", Color(0.2, 0.28, 0.38))
+		build.pressed.connect(_tap_build_hash)
+		_menu_add(build)
+		next_y += 64.0
 	if _tester_active():
-		var off := _make_button("Turn tester mode off", Vector2(48, body + 468.0), Vector2(624, 84), Color(0.9, 0.42, 0.14), 32)
+		var off := _make_button("Turn tester mode off", Vector2(48, next_y), Vector2(624, 84), Color(0.9, 0.42, 0.14), 32)
 		off.pressed.connect(_turn_tester_off)
 		_menu_add(off)
 
