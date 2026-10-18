@@ -1917,15 +1917,15 @@ func _preview_goals() -> void:
 	var fresh_line := next_lbl.text if next_lbl else ""
 	var fresh := _tally_snap()
 	var people_need := int(Save.progress_for("people:5000").need)
+	var min_spawn := 999.0
+	for rival in rivals:
+		min_spawn = minf(min_spawn, _xz_dist(rival.pos, Vector3.ZERO))
 	var score0 := score
 	for _tick in 180:
 		_physics_process(1.0 / 60.0)
 		_process(1.0 / 60.0)
 	var after_idle := _tally_snap()
 	var idle_same := after_idle == fresh and score == score0 and playing and round_eaten == ""
-	var min_spawn := 999.0
-	for rival in rivals:
-		min_spawn = minf(min_spawn, _xz_dist(rival.pos, Vector3.ZERO))
 	var spawn_ok := min_spawn >= RIVAL_MIN_SPAWN - 0.05
 	var grace_ok := player_invuln > 6.0 and hunt_lock > 11.0
 	var kept_alive: Array = []
